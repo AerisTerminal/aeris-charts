@@ -1844,6 +1844,751 @@ impl ChartEngine {
                         }
                     });
                 }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::Violin => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let side = series.stats().violin_side;
+                    let overlay = series.stats().violin_overlay;
+                    let stroke_width = (series.line_width() * hpr.min(vpr)).round().max(1.0) as i32;
+                    let polyline_width = (series.line_width() * hpr.min(vpr)).max(1.0) as f32;
+                    self.visit_general_violins(series, |geometry| {
+                        let category = geometry.category;
+                        let color = dataset.row_color(category.row).unwrap_or(color);
+                        let fill = Color::rgba(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            opacity_alpha(series.fill_opacity()),
+                        );
+                        let curve = &category.curve;
+                        let count = curve.grid.len();
+                        if count < 2 {
+                            return;
+                        }
+                        let mut edge_ys: [f64; 256] = [0.0; 256];
+                        let mut edges_ok = true;
+                        for (index, &value) in curve.grid.iter().enumerate() {
+                            if index >= edge_ys.len() {
+                                edges_ok = false;
+                                break;
+                            }
+                            let Some(y) = geometry.y(value) else {
+                                edges_ok = false;
+                                break;
+                            };
+                            edge_ys[index] = y;
+                        }
+                        if !edges_ok {
+                            return;
+                        }
+                        let edge_ys = &edge_ys[..count];
+                        let left_first = points.len() as u32;
+                        for (index, &y) in edge_ys.iter().enumerate() {
+                            let hw = geometry.half_width(curve.density[index]);
+                            points
+                                .push([((geometry.center_x - hw) * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        let right_first = points.len() as u32;
+                        for (index, &y) in edge_ys.iter().enumerate() {
+                            let hw = geometry.half_width(curve.density[index]);
+                            points
+                                .push([((geometry.center_x + hw) * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        let center_first = points.len() as u32;
+                        for &y in edge_ys {
+                            points.push([(geometry.center_x * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        let point_count = count as u32;
+                        let (upper_first, lower_first) = match side {
+                            crate::GeneralViolinSide::Full => (left_first, right_first),
+                            crate::GeneralViolinSide::Left => (center_first, left_first),
+                            crate::GeneralViolinSide::Right => (right_first, center_first),
+                        };
+                        out.push(Prim::BandFill {
+                            upper_first,
+                            lower_first,
+                            point_count,
+                            line_type: LineType::Simple,
+                            fill,
+                        });
+                        let strokes: &[(u32, LineStyle)] = match side {
+                            crate::GeneralViolinSide::Full => &[
+                                (left_first, LineStyle::Solid),
+                                (right_first, LineStyle::Solid),
+                            ],
+                            crate::GeneralViolinSide::Left => &[
+                                (left_first, LineStyle::Solid),
+                                (center_first, LineStyle::Solid),
+                            ],
+                            crate::GeneralViolinSide::Right => &[
+                                (right_first, LineStyle::Solid),
+                                (center_first, LineStyle::Solid),
+                            ],
+                        };
+                        for &(first_point, style) in strokes {
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count,
+                                width: polyline_width,
+                                style,
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                        }
+                        let (Some(min_y), Some(q1_y), Some(median_y), Some(q3_y), Some(max_y)) = (
+                            geometry.y(category.min),
+                            geometry.y(category.q1),
+                            geometry.y(category.median),
+                            geometry.y(category.q3),
+                            geometry.y(category.max),
+                        ) else {
+                            return;
+                        };
+                        let span = |half_width: f64| -> (i32, i32) {
+                            let (from, to) = match side {
+                                crate::GeneralViolinSide::Full => (
+                                    geometry.center_x - half_width,
+                                    geometry.center_x + half_width,
+                                ),
+                                crate::GeneralViolinSide::Left => {
+                                    (geometry.center_x - half_width, geometry.center_x)
+                                }
+                                crate::GeneralViolinSide::Right => {
+                                    (geometry.center_x, geometry.center_x + half_width)
+                                }
+                            };
+                            ((from * hpr).round() as i32, (to * hpr).round() as i32)
+                        };
+                        let center_px = (geometry.center_x * hpr).round() as i32;
+                        match overlay {
+                            crate::GeneralViolinOverlay::None => {}
+                            crate::GeneralViolinOverlay::Quartiles => {
+                                for (value, y) in [
+                                    (category.q1, q1_y),
+                                    (category.median, median_y),
+                                    (category.q3, q3_y),
+                                ] {
+                                    let (x0, x1) = span(geometry.half_width_at(value).max(2.0));
+                                    out.push(Prim::HLine {
+                                        y: (y * vpr).round() as i32,
+                                        x0,
+                                        x1,
+                                        width: stroke_width,
+                                        style: LineStyle::Solid,
+                                        color,
+                                    });
+                                }
+                                out.push(Prim::VLine {
+                                    x: center_px,
+                                    y0: (min_y.min(max_y) * vpr).round() as i32,
+                                    y1: (min_y.max(max_y) * vpr).round() as i32,
+                                    width: 1.max(stroke_width / 2),
+                                    style: LineStyle::Solid,
+                                    color,
+                                });
+                            }
+                            crate::GeneralViolinOverlay::Box => {
+                                let box_half = (geometry.slot_right - geometry.slot_left) * 0.25;
+                                let (bx0, bx1) = span(box_half);
+                                let top = (q1_y.min(q3_y) * vpr).round() as i32;
+                                let bottom = (q1_y.max(q3_y) * vpr).round() as i32;
+                                out.push(Prim::Rect {
+                                    rect: IRect {
+                                        x: bx0.min(bx1),
+                                        y: top,
+                                        w: (bx1 - bx0).abs().max(1),
+                                        h: (bottom - top).max(1),
+                                    },
+                                    color: fill,
+                                });
+                                out.push(Prim::RectFrame {
+                                    rect: IRect {
+                                        x: bx0.min(bx1),
+                                        y: top,
+                                        w: (bx1 - bx0).abs().max(1),
+                                        h: (bottom - top).max(1),
+                                    },
+                                    border: stroke_width,
+                                    color,
+                                });
+                                let (mx0, mx1) = span(box_half);
+                                out.push(Prim::HLine {
+                                    y: (median_y * vpr).round() as i32,
+                                    x0: mx0,
+                                    x1: mx1,
+                                    width: stroke_width,
+                                    style: LineStyle::Solid,
+                                    color,
+                                });
+                                out.push(Prim::VLine {
+                                    x: center_px,
+                                    y0: (min_y.min(max_y) * vpr).round() as i32,
+                                    y1: (min_y.max(max_y) * vpr).round() as i32,
+                                    width: 1.max(stroke_width / 2),
+                                    style: LineStyle::Solid,
+                                    color,
+                                });
+                            }
+                        }
+                        let (hovered, selected, slot) =
+                            self.general_row_interaction(series.id(), geometry.position);
+                        if hovered || selected {
+                            interaction[slot] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: (geometry.slot_left * hpr).round() as i32,
+                                    y: (min_y.min(max_y) * vpr).round() as i32,
+                                    w: ((geometry.slot_right - geometry.slot_left) * hpr)
+                                        .round()
+                                        .max(1.0) as i32,
+                                    h: ((min_y.max(max_y) - min_y.min(max_y)) * vpr)
+                                        .round()
+                                        .max(1.0) as i32,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::DensityCurve => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some(geometry) = self.general_density_geometry(series) {
+                        let first_point = points.len() as u32;
+                        for &(x, y) in &geometry.points {
+                            points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        let point_count = geometry.points.len() as u32;
+                        if point_count >= 2 {
+                            if series.stats().area {
+                                let gradient = fill_gradient.unwrap_or_else(|| {
+                                    let fill = Color::rgba(
+                                        color.r(),
+                                        color.g(),
+                                        color.b(),
+                                        opacity_alpha(series.fill_opacity()),
+                                    );
+                                    Gradient {
+                                        top: fill,
+                                        bottom: fill,
+                                    }
+                                });
+                                out.push(Prim::AreaFill {
+                                    first_point,
+                                    point_count,
+                                    base_y: (geometry.baseline_y * vpr) as f32,
+                                    line_type: LineType::Simple,
+                                    gradient,
+                                });
+                            }
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count,
+                                width: (series.line_width() * vpr).max(1.0) as f32,
+                                style: series.line_style().render_style(),
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                        }
+                        for (row, &(x, y)) in geometry.points.iter().enumerate() {
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), row);
+                            if hovered || selected {
+                                interaction[slot] = Some(Prim::Circle {
+                                    cx: (x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius: (5.0 * hpr.min(vpr)) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.5 } * hpr.min(vpr))
+                                        as f32,
+                                    stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::Ridgeline => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some(geometry) = self.general_ridgeline_geometry(series) {
+                        for band in &geometry.bands {
+                            let category = &geometry.model.categories[band.position];
+                            let count = category.curve.grid.len();
+                            if count < 2 {
+                                continue;
+                            }
+                            let mut projected: Vec<(f32, f32)> = Vec::with_capacity(count);
+                            let mut ok = true;
+                            for index in 0..count {
+                                let Some((x, y)) = geometry.point(band, index) else {
+                                    ok = false;
+                                    break;
+                                };
+                                projected.push(((x * hpr) as f32, (y * vpr) as f32));
+                            }
+                            if !ok {
+                                continue;
+                            }
+                            let row_color = dataset.row_color(category.row);
+                            let color = row_color.unwrap_or(color);
+                            let fill = Color::rgba(
+                                color.r(),
+                                color.g(),
+                                color.b(),
+                                opacity_alpha(series.fill_opacity()),
+                            );
+                            let curve_first = points.len() as u32;
+                            points.extend(projected.iter().map(|&(x, y)| [x, y]));
+                            let base_first = points.len() as u32;
+                            let base_y = (band.base_y * vpr) as f32;
+                            points.extend(projected.iter().map(|&(x, _)| [x, base_y]));
+                            let point_count = count as u32;
+                            out.push(Prim::BandFill {
+                                upper_first: curve_first,
+                                lower_first: base_first,
+                                point_count,
+                                line_type: LineType::Simple,
+                                fill,
+                            });
+                            out.push(Prim::Polyline {
+                                first_point: curve_first,
+                                point_count,
+                                width: (series.line_width() * vpr).max(1.0) as f32,
+                                style: LineStyle::Solid,
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), band.position);
+                            if hovered || selected {
+                                let (Some(min_x), Some(max_x)) = (
+                                    geometry.x_scale.coordinate(category.curve.min),
+                                    geometry.x_scale.coordinate(category.curve.max),
+                                ) else {
+                                    continue;
+                                };
+                                interaction[slot] = Some(Prim::RectFrame {
+                                    rect: IRect {
+                                        x: (min_x.min(max_x) * hpr).round() as i32,
+                                        y: ((band.base_y - band.height) * vpr).round() as i32,
+                                        w: ((max_x - min_x).abs() * hpr).round().max(1.0) as i32,
+                                        h: (band.height * vpr).round().max(1.0) as i32,
+                                    },
+                                    border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                        .round()
+                                        .max(1.0)
+                                        as i32,
+                                    color: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::StripPlot
+                | GeneralSeriesKind::Beeswarm
+                | GeneralSeriesKind::DotPlot => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let radius = (series.point_radius() * hpr.min(vpr)) as f32;
+                    self.visit_general_stats_points(series, |point| {
+                        let fill = dataset.row_color(point.row).unwrap_or(color);
+                        let cx = (point.x * hpr) as f32;
+                        let cy = (point.y * vpr) as f32;
+                        out.push(Prim::Circle {
+                            cx,
+                            cy,
+                            radius,
+                            fill,
+                            stroke_width: 0.0,
+                            stroke: fill,
+                        });
+                        let (hovered, selected, slot) =
+                            self.general_row_interaction(series.id(), point.row);
+                        if hovered || selected {
+                            interaction[slot] = Some(Prim::Circle {
+                                cx,
+                                cy,
+                                radius: radius + (2.0 * hpr.min(vpr)) as f32,
+                                fill: Color::rgba(0, 0, 0, 0),
+                                stroke_width: (if selected { 2.0 } else { 1.5 } * hpr.min(vpr))
+                                    as f32,
+                                stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::Ecdf => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some((path, count)) = self.general_ecdf_path(series) {
+                        let first_point = points.len() as u32;
+                        for &(x, y) in &path {
+                            points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                        }
+                        if path.len() >= 2 {
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count: path.len() as u32,
+                                width: (series.line_width() * vpr).max(1.0) as f32,
+                                style: series.line_style().render_style(),
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                        }
+                        for row in 0..count {
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), row);
+                            if hovered || selected {
+                                let index = (1 + row * 2).min(path.len().saturating_sub(1));
+                                let (x, y) = path[index];
+                                interaction[slot] = Some(Prim::Circle {
+                                    cx: (x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius: (5.0 * hpr.min(vpr)) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.5 } * hpr.min(vpr))
+                                        as f32,
+                                    stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::QqPlot => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some((qq_points, line)) = self.general_qq_geometry(series) {
+                        let radius = (series.point_radius() * hpr.min(vpr)) as f32;
+                        if let Some([(x0, y0), (x1, y1)]) = line {
+                            let first_point = points.len() as u32;
+                            points.extend([
+                                [(x0 * hpr) as f32, (y0 * vpr) as f32],
+                                [(x1 * hpr) as f32, (y1 * vpr) as f32],
+                            ]);
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count: 2,
+                                width: (1.0 * vpr).max(0.75) as f32,
+                                style: LineStyle::Dashed,
+                                line_type: LineType::Simple,
+                                color: Color::rgba(color.r(), color.g(), color.b(), 160),
+                            });
+                        }
+                        for (row, x, y) in &qq_points {
+                            let cx = (*x * hpr) as f32;
+                            let cy = (*y * vpr) as f32;
+                            out.push(Prim::Circle {
+                                cx,
+                                cy,
+                                radius,
+                                fill: color,
+                                stroke_width: 0.0,
+                                stroke: color,
+                            });
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), *row);
+                            if hovered || selected {
+                                interaction[slot] = Some(Prim::Circle {
+                                    cx,
+                                    cy,
+                                    radius: radius + (2.0 * hpr.min(vpr)) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.5 } * hpr.min(vpr))
+                                        as f32,
+                                    stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::Hexbin => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let low = Color::rgba(color.r(), color.g(), color.b(), opacity_alpha(0.15));
+                    self.visit_general_hexbins(series, |bin| {
+                        let fill = interpolate_color(low, color, bin.share);
+                        let corners =
+                            crate::general_stats::hexbin_polygon(bin.x, bin.y, bin.radius);
+                        let push_hexagon = |points: &mut Vec<[f32; 2]>| -> u32 {
+                            let first_point = points.len() as u32;
+                            let center = [(bin.x * hpr) as f32, (bin.y * vpr) as f32];
+                            for index in 0..6 {
+                                let a = corners[index];
+                                let b = corners[(index + 1) % 6];
+                                points.extend([
+                                    center,
+                                    [(a[0] * hpr) as f32, (a[1] * vpr) as f32],
+                                    [(b[0] * hpr) as f32, (b[1] * vpr) as f32],
+                                ]);
+                            }
+                            first_point
+                        };
+                        let first_point = push_hexagon(points);
+                        out.push(Prim::MeshFill {
+                            first_point,
+                            point_count: 18,
+                            color: fill,
+                        });
+                        let (hovered, selected, slot) =
+                            self.general_row_interaction(series.id(), bin.index);
+                        if hovered || selected {
+                            let first_point = push_hexagon(points);
+                            interaction[slot] = Some(Prim::MeshFill {
+                                first_point,
+                                point_count: 18,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::Contour => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some(geometry) = self.general_contour_geometry(series) {
+                        if series.stats().contour_fill {
+                            let band_count = geometry.model.bands.len();
+                            let low =
+                                Color::rgba(color.r(), color.g(), color.b(), opacity_alpha(0.12));
+                            for (index, band) in geometry.model.bands.iter().enumerate() {
+                                let t = if band_count > 1 {
+                                    index as f64 / (band_count - 1) as f64
+                                } else {
+                                    1.0
+                                };
+                                let fill = interpolate_color(low, color, t);
+                                let first_point = points.len() as u32;
+                                let mut pushed = 0_u32;
+                                for triangle in band.triangles.as_chunks::<3>().0 {
+                                    let mut projected = [[0.0_f32; 2]; 3];
+                                    let mut ok = true;
+                                    for (corner, target) in
+                                        triangle.iter().zip(projected.iter_mut())
+                                    {
+                                        let Some((x, y)) = geometry.project(*corner) else {
+                                            ok = false;
+                                            break;
+                                        };
+                                        *target = [(x * hpr) as f32, (y * vpr) as f32];
+                                    }
+                                    if ok {
+                                        points.extend(projected);
+                                        pushed += 3;
+                                    }
+                                }
+                                if pushed > 0 {
+                                    out.push(Prim::MeshFill {
+                                        first_point,
+                                        point_count: pushed,
+                                        color: fill,
+                                    });
+                                } else {
+                                    points.truncate(first_point as usize);
+                                }
+                            }
+                        }
+                        if series.stats().contour_lines {
+                            let line_color =
+                                Color::rgba(color.r(), color.g(), color.b(), opacity_alpha(0.85));
+                            for line in &geometry.model.lines {
+                                for path in &line.paths {
+                                    let first_point = points.len() as u32;
+                                    let mut pushed = 0_u32;
+                                    for point in path {
+                                        let Some((x, y)) = geometry.project(*point) else {
+                                            continue;
+                                        };
+                                        points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                                        pushed += 1;
+                                    }
+                                    if pushed >= 2 {
+                                        out.push(Prim::Polyline {
+                                            first_point,
+                                            point_count: pushed,
+                                            width: (1.0 * vpr).max(0.75) as f32,
+                                            style: LineStyle::Solid,
+                                            line_type: LineType::Simple,
+                                            color: line_color,
+                                        });
+                                    } else {
+                                        points.truncate(first_point as usize);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::ParallelCoordinates => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some(geometry) = self.general_parallel_geometry(series) {
+                        let axis_color =
+                            Color::rgba(label_color.r(), label_color.g(), label_color.b(), 96);
+                        let name_size = (label_size * vpr).max(6.0) as f32;
+                        let extent_size = (label_size * 0.85 * vpr).max(6.0) as f32;
+                        for (field, &slot_x) in geometry.slots.iter().enumerate() {
+                            out.push(Prim::VLine {
+                                x: (slot_x * hpr).round() as i32,
+                                y0: (geometry.top * vpr).round() as i32,
+                                y1: ((geometry.top + geometry.height) * vpr).round() as i32,
+                                width: hpr.min(vpr).round().max(1.0) as i32,
+                                style: LineStyle::Solid,
+                                color: axis_color,
+                            });
+                            out.push(Prim::Text {
+                                x: (slot_x * hpr) as f32,
+                                y: ((geometry.top + label_size * 0.6) * vpr) as f32,
+                                text: geometry.model.fields[field].clone(),
+                                color: label_color,
+                                size: name_size,
+                                family: layout.font_family.clone(),
+                                align: TextAlign::Center,
+                                weight: 600,
+                                italic: false,
+                            });
+                            let (min, max) = geometry.model.extents[field];
+                            out.push(Prim::Text {
+                                x: (slot_x * hpr) as f32,
+                                y: ((geometry.top + geometry.height) * vpr
+                                    - f64::from(extent_size) * 0.6)
+                                    as f32,
+                                text: format!("{min}..{max}"),
+                                color: axis_color,
+                                size: extent_size,
+                                family: layout.font_family.clone(),
+                                align: TextAlign::Center,
+                                weight: 400,
+                                italic: false,
+                            });
+                        }
+                        let row_color =
+                            Color::rgba(color.r(), color.g(), color.b(), opacity_alpha(0.45));
+                        for (row, row_points) in &geometry.rows {
+                            let first_point = points.len() as u32;
+                            for &(x, y) in row_points {
+                                points.push([(x * hpr) as f32, (y * vpr) as f32]);
+                            }
+                            let point_count = row_points.len() as u32;
+                            let line_color = dataset
+                                .row_color(*row)
+                                .map(|c| Color::rgba(c.r(), c.g(), c.b(), opacity_alpha(0.7)))
+                                .unwrap_or(row_color);
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count,
+                                width: (1.0 * vpr).max(0.75) as f32,
+                                style: LineStyle::Solid,
+                                line_type: LineType::Simple,
+                                color: line_color,
+                            });
+                            let (hovered, selected, slot) =
+                                self.general_row_interaction(series.id(), *row);
+                            if hovered || selected {
+                                interaction[slot] = Some(Prim::Polyline {
+                                    first_point,
+                                    point_count,
+                                    width: (2.0 * vpr).max(1.5) as f32,
+                                    style: LineStyle::Solid,
+                                    line_type: LineType::Simple,
+                                    color: if selected { PRIMARY } else { GENERAL_HOVER },
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(feature = "complete")]
+                GeneralSeriesKind::ScatterMatrix => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    if let Some(geometry) = self.general_scatter_matrix_geometry(series) {
+                        let border =
+                            Color::rgba(label_color.r(), label_color.g(), label_color.b(), 40);
+                        let radius = ((series.point_radius() * 0.5).max(1.0) * hpr.min(vpr)) as f32;
+                        for cell in &geometry.cells {
+                            out.push(Prim::RectFrame {
+                                rect: IRect {
+                                    x: (cell.left * hpr).round() as i32,
+                                    y: (cell.top * vpr).round() as i32,
+                                    w: (cell.width * hpr).round().max(1.0) as i32,
+                                    h: (cell.height * vpr).round().max(1.0) as i32,
+                                },
+                                border: hpr.min(vpr).round().max(1.0) as i32,
+                                color: border,
+                            });
+                            if cell.x_field == cell.y_field {
+                                out.push(Prim::Text {
+                                    x: ((cell.left + cell.width * 0.5) * hpr) as f32,
+                                    y: ((cell.top + cell.height * 0.5) * vpr) as f32,
+                                    text: geometry.model.fields[cell.x_field].clone(),
+                                    color: label_color,
+                                    size: (label_size * vpr).max(6.0) as f32,
+                                    family: layout.font_family.clone(),
+                                    align: TextAlign::Center,
+                                    weight: 600,
+                                    italic: false,
+                                });
+                                continue;
+                            }
+                            for row in (0..geometry.rows).step_by(geometry.stride) {
+                                let Some((x, y)) = geometry.point(dataset, cell, row) else {
+                                    continue;
+                                };
+                                let fill = dataset.row_color(row).unwrap_or(color);
+                                out.push(Prim::Circle {
+                                    cx: (x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius,
+                                    fill,
+                                    stroke_width: 0.0,
+                                    stroke: fill,
+                                });
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(feature = "complete"))]
+                GeneralSeriesKind::Violin
+                | GeneralSeriesKind::DensityCurve
+                | GeneralSeriesKind::Ridgeline
+                | GeneralSeriesKind::StripPlot
+                | GeneralSeriesKind::Beeswarm
+                | GeneralSeriesKind::DotPlot
+                | GeneralSeriesKind::Ecdf
+                | GeneralSeriesKind::QqPlot
+                | GeneralSeriesKind::Hexbin
+                | GeneralSeriesKind::Contour
+                | GeneralSeriesKind::ParallelCoordinates
+                | GeneralSeriesKind::ScatterMatrix => {}
                 GeneralSeriesKind::HeatmapGrid => {
                     let base_color = series.color().and_then(Color::parse_css);
                     let low = series

@@ -134,6 +134,26 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage)
                 crate::text::TOOLTIP_RANK.text(language)
             ));
         }
+        #[cfg(feature = "complete")]
+        Some(GeneralRowDetail::Stats { count, min, max }) => {
+            if count > 0 {
+                parts.push(crate::text::samples_count(language, count));
+            }
+            if min.is_finite() {
+                parts.push(format!(
+                    "{} {}",
+                    crate::text::TOOLTIP_FROM.text(language),
+                    format_value(min)
+                ));
+            }
+            if max.is_finite() {
+                parts.push(format!(
+                    "{} {}",
+                    crate::text::TOOLTIP_TO.text(language),
+                    format_value(max)
+                ));
+            }
+        }
         None => {}
     }
     if parts.is_empty() {
@@ -485,6 +505,34 @@ impl ChartEngine {
                         .and_then(|vertex| polygon.vertex(vertex));
                 });
             }
+            #[cfg(feature = "complete")]
+            GeneralSeriesKind::Violin
+            | GeneralSeriesKind::DensityCurve
+            | GeneralSeriesKind::Ridgeline
+            | GeneralSeriesKind::StripPlot
+            | GeneralSeriesKind::Beeswarm
+            | GeneralSeriesKind::DotPlot
+            | GeneralSeriesKind::Ecdf
+            | GeneralSeriesKind::QqPlot
+            | GeneralSeriesKind::Hexbin
+            | GeneralSeriesKind::Contour
+            | GeneralSeriesKind::ParallelCoordinates
+            | GeneralSeriesKind::ScatterMatrix => {
+                found = self.general_stats_mark_anchor(series, row);
+            }
+            #[cfg(not(feature = "complete"))]
+            GeneralSeriesKind::Violin
+            | GeneralSeriesKind::DensityCurve
+            | GeneralSeriesKind::Ridgeline
+            | GeneralSeriesKind::StripPlot
+            | GeneralSeriesKind::Beeswarm
+            | GeneralSeriesKind::DotPlot
+            | GeneralSeriesKind::Ecdf
+            | GeneralSeriesKind::QqPlot
+            | GeneralSeriesKind::Hexbin
+            | GeneralSeriesKind::Contour
+            | GeneralSeriesKind::ParallelCoordinates
+            | GeneralSeriesKind::ScatterMatrix => {}
         }
         found
     }

@@ -159,6 +159,71 @@ pub enum GeneralSeriesKind {
     PolarArea,
     Waterfall,
     Bullet,
+    /// KDE distribution silhouette per category (complete build).
+    Violin,
+    /// KDE density curve over one sample column (complete build).
+    DensityCurve,
+    /// Per-category KDE ridges on a band Y axis over a shared value axis (complete build).
+    Ridgeline,
+    /// One jittered point per sample within its category slot (complete build).
+    StripPlot,
+    /// Deterministic non-overlapping point swarm per category (complete build).
+    Beeswarm,
+    /// Wilkinson dot plot: samples binned to dot diameters and stacked (complete build).
+    DotPlot,
+    /// Empirical cumulative distribution step plot (complete build).
+    Ecdf,
+    /// Normal Q-Q plot with a robust quartile reference line (complete build).
+    QqPlot,
+    /// Hexagonal binning of numeric X/Y samples with a count color scale (complete build).
+    Hexbin,
+    /// 2D density contours: filled bands plus iso-lines (complete build).
+    Contour,
+    /// Parallel coordinates over a matrix dataset, one slot per field (complete build).
+    ParallelCoordinates,
+    /// Scatter-plot matrix over a matrix dataset (complete build).
+    ScatterMatrix,
+}
+
+impl GeneralSeriesKind {
+    /// Statistics families that exist only in the complete build; the standard build rejects
+    /// them with `unsupported_operation` at series creation.
+    pub fn requires_complete_build(self) -> bool {
+        matches!(
+            self,
+            Self::Violin
+                | Self::DensityCurve
+                | Self::Ridgeline
+                | Self::StripPlot
+                | Self::Beeswarm
+                | Self::DotPlot
+                | Self::Ecdf
+                | Self::QqPlot
+                | Self::Hexbin
+                | Self::Contour
+                | Self::ParallelCoordinates
+                | Self::ScatterMatrix
+        )
+    }
+
+    /// Kind string used by the host boundary and persistence.
+    pub fn stats_kind_name(self) -> Option<&'static str> {
+        match self {
+            Self::Violin => Some("violin"),
+            Self::DensityCurve => Some("density_curve"),
+            Self::Ridgeline => Some("ridgeline"),
+            Self::StripPlot => Some("strip_plot"),
+            Self::Beeswarm => Some("beeswarm"),
+            Self::DotPlot => Some("dot_plot"),
+            Self::Ecdf => Some("ecdf"),
+            Self::QqPlot => Some("qq_plot"),
+            Self::Hexbin => Some("hexbin"),
+            Self::Contour => Some("contour"),
+            Self::ParallelCoordinates => Some("parallel_coordinates"),
+            Self::ScatterMatrix => Some("scatter_matrix"),
+            _ => None,
+        }
+    }
 }
 
 /// Recharts `PolarChart` default `outerRadius="80%"` of the polar plot radius.
@@ -220,6 +285,123 @@ pub struct GeneralHistogramOptions {
     /// Accumulate bins from the left. Count and percent heights become running totals, and
     /// density becomes the empirical cumulative distribution ending at one.
     pub cumulative: bool,
+}
+
+/// KDE kernel of the statistics families.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralStatsKernel {
+    /// Truncated at 3 bandwidths for 2D rasterization; exact for 1D evaluation.
+    #[default]
+    Gaussian,
+    /// Exact 1-bandwidth support.
+    Epanechnikov,
+}
+
+/// KDE bandwidth rule of the statistics families.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralStatsBandwidth {
+    /// `sigma * n^-1/5` with the sample standard deviation.
+    #[default]
+    Scott,
+    /// `0.9 * min(sigma, IQR / 1.34) * n^-1/5`.
+    Silverman,
+    /// Explicit bandwidth in sample-axis units; must be finite and positive.
+    Explicit(f64),
+}
+
+/// Central overlay drawn inside a violin silhouette.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralViolinOverlay {
+    /// Silhouette only.
+    None,
+    /// Quartile lines (q1, median, q3) across the silhouette.
+    #[default]
+    Quartiles,
+    /// A box-plot-style box with whiskers inside the silhouette.
+    Box,
+}
+
+/// Which half of the slot a violin occupies. Two violin series that share a category axis
+/// with `Left`/`Right` sides form a split violin.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralViolinSide {
+    #[default]
+    Full,
+    Left,
+    Right,
+}
+
+/// Theoretical distribution of a Q-Q plot. Only the normal distribution is supported.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralQqDistribution {
+    #[default]
+    Normal,
+}
+
+/// Options of the complete-build statistics families. Fields apply per kind as documented;
+/// the rest are ignored. Non-default values on a non-statistics series are rejected.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GeneralStatsOptions {
+    /// KDE kernel (violin, density curve, ridgeline, contour smoothing).
+    pub kernel: GeneralStatsKernel,
+    /// KDE bandwidth rule (same kinds).
+    pub bandwidth: GeneralStatsBandwidth,
+    /// KDE grid resolution: curve points per series or category, contour nodes per axis.
+    /// `0` uses the default of 64; otherwise 8..=256 (contour clamps to 96).
+    pub grid: usize,
+    /// Violin center overlay.
+    pub violin_overlay: GeneralViolinOverlay,
+    /// Violin slot half; two series with left/right sides form a split violin.
+    pub violin_side: GeneralViolinSide,
+    /// Density curve: fill the area under the curve (default) or draw the line only.
+    pub area: bool,
+    /// Ridgeline ridge height as a multiple of the band height, 0.25..=8; values above 1
+    /// overlap the ridge above.
+    pub overlap: f64,
+    /// Strip-plot jitter extent as a fraction of the slot, 0..=1.
+    pub jitter: f64,
+    /// Q-Q theoretical distribution (normal only).
+    pub qq_distribution: GeneralQqDistribution,
+    /// Contour band count; `0` picks 8 automatic levels of the grid maximum.
+    pub thresholds: usize,
+    /// Contour: paint filled bands (default on).
+    pub contour_fill: bool,
+    /// Contour: paint iso-lines (default on).
+    pub contour_lines: bool,
+    /// Contour: smooth counts with a 2D KDE (default) or use raw 2D bin counts.
+    pub smooth: bool,
+    /// Hexbin hexagon circumradius in CSS px; `0` picks an automatic radius that keeps the
+    /// grid within 64 columns. Explicit values must be 4..=128.
+    pub hexbin_radius: f64,
+}
+
+#[cfg(feature = "complete")]
+impl Default for GeneralStatsOptions {
+    fn default() -> Self {
+        Self {
+            kernel: GeneralStatsKernel::Gaussian,
+            bandwidth: GeneralStatsBandwidth::Scott,
+            grid: 0,
+            violin_overlay: GeneralViolinOverlay::Quartiles,
+            violin_side: GeneralViolinSide::Full,
+            area: true,
+            overlap: 1.0,
+            jitter: 0.8,
+            qq_distribution: GeneralQqDistribution::Normal,
+            thresholds: 0,
+            contour_fill: true,
+            contour_lines: true,
+            smooth: true,
+            hexbin_radius: 0.0,
+        }
+    }
 }
 
 #[derive(
@@ -389,6 +571,11 @@ pub enum GeneralRowDetail {
     },
     /// The rank a ranked xy_line row plots at.
     Rank(u32),
+    /// A statistics-family row (complete build): the sample count behind the mark plus an
+    /// optional secondary range (NaN when unused) such as a hexbin's maximum bin count or a
+    /// contour band's next level.
+    #[cfg(feature = "complete")]
+    Stats { count: u32, min: f64, max: f64 },
 }
 
 impl GeneralInterpolation {
@@ -468,6 +655,9 @@ pub struct GeneralSeriesOptions {
     pub end_labels: GeneralEndLabels,
     /// Rank transform of an xy_line (bump charts); `None` plots raw values.
     pub rank: Option<GeneralRankTies>,
+    /// Statistics-family options; non-default values require a statistics series kind.
+    #[cfg(feature = "complete")]
+    pub stats: GeneralStatsOptions,
 }
 
 impl GeneralSeriesOptions {
@@ -515,6 +705,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -562,6 +754,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -609,6 +803,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -667,6 +863,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -714,6 +912,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -761,6 +961,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -808,6 +1010,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -868,6 +1072,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -915,6 +1121,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -962,6 +1170,8 @@ impl GeneralSeriesOptions {
             waterfall: GeneralWaterfallOptions::default(),
             end_labels: GeneralEndLabels::None,
             rank: None,
+            #[cfg(feature = "complete")]
+            stats: GeneralStatsOptions::default(),
         }
     }
 
@@ -1037,6 +1247,150 @@ impl GeneralSeriesOptions {
         options.kind = GeneralSeriesKind::Bullet;
         options
     }
+
+    /// Violin silhouette per category over sample rows (complete build).
+    pub fn violin(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Violin;
+        options
+    }
+
+    /// KDE density curve over one sample column (complete build).
+    pub fn density_curve(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::histogram(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::DensityCurve;
+        options
+    }
+
+    /// Per-category density ridges on a band Y axis (complete build).
+    pub fn ridgeline(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::horizontal_bar(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Ridgeline;
+        options
+    }
+
+    /// Jittered sample points per category (complete build).
+    pub fn strip_plot(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::StripPlot;
+        options
+    }
+
+    /// Deterministic beeswarm of sample points per category (complete build).
+    pub fn beeswarm(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Beeswarm;
+        options
+    }
+
+    /// Wilkinson dot plot of sample points per category (complete build).
+    pub fn dot_plot(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::column(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::DotPlot;
+        options
+    }
+
+    /// Empirical cumulative distribution step plot (complete build).
+    pub fn ecdf(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::histogram(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Ecdf;
+        options
+    }
+
+    /// Normal Q-Q plot with a quartile reference line (complete build).
+    pub fn qq_plot(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::histogram(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::QqPlot;
+        options
+    }
+
+    /// Hexagonal binning of numeric X/Y samples (complete build).
+    pub fn hexbin(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::scatter(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Hexbin;
+        options
+    }
+
+    /// 2D density contours of numeric X/Y samples (complete build).
+    pub fn contour(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::scatter(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::Contour;
+        options
+    }
+
+    /// Parallel coordinates over a matrix dataset (complete build).
+    pub fn parallel_coordinates(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::scatter(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::ParallelCoordinates;
+        options
+    }
+
+    /// Scatter-plot matrix over a matrix dataset (complete build).
+    pub fn scatter_matrix(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::scatter(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::ScatterMatrix;
+        options
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1079,6 +1433,8 @@ pub struct GeneralSeries {
     waterfall: GeneralWaterfallOptions,
     end_labels: GeneralEndLabels,
     rank: Option<GeneralRankTies>,
+    #[cfg(feature = "complete")]
+    stats: GeneralStatsOptions,
     composition_key: Option<String>,
 }
 
@@ -2238,6 +2594,11 @@ impl GeneralSeries {
         self.rank
     }
 
+    #[cfg(feature = "complete")]
+    pub fn stats(&self) -> &GeneralStatsOptions {
+        &self.stats
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
@@ -2273,6 +2634,9 @@ pub(crate) struct GeneralSeriesRegistry {
     pie_contexts: RefCell<HashMap<GeneralSeriesId, GeneralPieContext>>,
     axis_scans: RefCell<HashMap<GeneralSeriesId, Vec<AxisScanEntry>>>,
     histogram_bins: RefCell<HashMap<GeneralSeriesId, GeneralHistogramCacheEntry>>,
+    #[cfg(feature = "complete")]
+    pub(crate) stats_models:
+        RefCell<HashMap<GeneralSeriesId, crate::general_stats::GeneralStatsCacheEntry>>,
     hovered: Option<GeneralInteractionTarget>,
     /// `hovered` is the anchor of an index-axis hover rather than an exact mark hit.
     hover_axis: bool,
@@ -2293,6 +2657,8 @@ impl GeneralSeriesRegistry {
             pie_contexts: RefCell::new(HashMap::new()),
             axis_scans: RefCell::new(HashMap::new()),
             histogram_bins: RefCell::new(HashMap::new()),
+            #[cfg(feature = "complete")]
+            stats_models: RefCell::new(HashMap::new()),
             hovered: None,
             hover_axis: false,
             selected: None,
@@ -2508,6 +2874,8 @@ impl GeneralSeriesRegistry {
             waterfall: options.waterfall,
             end_labels: options.end_labels,
             rank: options.rank,
+            #[cfg(feature = "complete")]
+            stats: options.stats,
             composition_key: None,
         });
         self.next_id = next_id;
@@ -2791,6 +3159,10 @@ fn apply_composed_series_options(
     series.waterfall = options.waterfall;
     series.end_labels = options.end_labels;
     series.rank = options.rank;
+    #[cfg(feature = "complete")]
+    {
+        series.stats = options.stats;
+    }
 }
 
 impl ChartEngine {
@@ -2808,6 +3180,8 @@ impl ChartEngine {
             registry.pie_contexts.borrow_mut().remove(&series.id);
             registry.axis_scans.borrow_mut().remove(&series.id);
             registry.histogram_bins.borrow_mut().remove(&series.id);
+            #[cfg(feature = "complete")]
+            registry.stats_models.borrow_mut().remove(&series.id);
         }
     }
     /// Validate a complete proposed general pane without changing live state.
@@ -3360,6 +3734,9 @@ impl ChartEngine {
         &mut self,
         options: GeneralSeriesOptions,
     ) -> Result<GeneralSeriesId, ChartError> {
+        if options.kind.requires_complete_build() && !Self::build_includes_complete_families() {
+            return Err(crate::complete_build_required("statistics series families"));
+        }
         let pane_id = self
             .pane_stable_id(options.pane)
             .ok_or_else(|| invalid("general series references a stale pane"))?;
@@ -3398,6 +3775,11 @@ impl ChartEngine {
         validate_dataset_for_series(options.kind, dataset, x_axis.scale(), y_axis.scale())?;
         validate_presentation(&options)?;
         validate_histogram_dataset(&options, dataset)?;
+        #[cfg(feature = "complete")]
+        {
+            crate::general_stats::validate_stats_options(&options)?;
+            crate::general_stats::validate_stats_dataset(&options, dataset)?;
+        }
         self.validate_layout_compatibility(pane_id, &options, None)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.insert(pane_id, options)?
@@ -3527,6 +3909,11 @@ impl ChartEngine {
         validate_presentation(&options)?;
         if let Some(dataset) = self.general_dataset(current.dataset) {
             validate_histogram_dataset(&options, dataset)?;
+            #[cfg(feature = "complete")]
+            {
+                crate::general_stats::validate_stats_options(&options)?;
+                crate::general_stats::validate_stats_dataset(&options, dataset)?;
+            }
         }
         self.validate_layout_compatibility(target_pane_id, &options, Some(id))?;
 
@@ -3576,6 +3963,10 @@ impl ChartEngine {
         series.waterfall = options.waterfall;
         series.end_labels = options.end_labels;
         series.rank = options.rank;
+        #[cfg(feature = "complete")]
+        {
+            series.stats = options.stats;
+        }
         if geometry_binding_changed {
             registry.scatter_spatial.get_mut().remove(&id);
         }
@@ -5865,7 +6256,7 @@ impl ChartEngine {
                 continue;
             };
             let x = match dataset.x_kind() {
-                GeneralXKind::Values => None,
+                GeneralXKind::Values | GeneralXKind::Matrix => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -6051,7 +6442,7 @@ impl ChartEngine {
                 continue;
             };
             let x = match dataset.x_kind() {
-                GeneralXKind::Values => None,
+                GeneralXKind::Values | GeneralXKind::Matrix => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -6813,7 +7204,7 @@ impl ChartEngine {
         let mut y_centers = Vec::with_capacity(dataset.len());
         for row in 0..dataset.len() {
             let x = match dataset.x_kind() {
-                GeneralXKind::Values => None,
+                GeneralXKind::Values | GeneralXKind::Matrix => None,
                 GeneralXKind::Numeric => dataset
                     .numeric_x()
                     .and_then(|values| values.get(row))
@@ -8066,6 +8457,23 @@ impl ChartEngine {
             let Some(dataset) = self.general_dataset(series.dataset) else {
                 continue;
             };
+            // Statistics families resolve their own marks (synthetic rows included).
+            #[cfg(feature = "complete")]
+            if series.kind.requires_complete_build() {
+                if let Some(hit) =
+                    self.general_stats_hit(series, dataset, x_css, y_css, max_distance)
+                    && best
+                        .as_ref()
+                        .is_none_or(|current| hit.distance < current.distance)
+                {
+                    best = Some(hit);
+                }
+                continue;
+            }
+            #[cfg(not(feature = "complete"))]
+            if series.kind.requires_complete_build() {
+                continue;
+            }
             if series.kind == GeneralSeriesKind::Histogram {
                 self.visit_general_histogram_bins(series, |geometry| {
                     let distance = distance_to_bar(x_css, y_css, geometry, series, self, false);
@@ -8525,6 +8933,19 @@ impl ChartEngine {
                     });
                 }
                 GeneralSeriesKind::Histogram => {}
+                // Statistics families hit-test in the pre-match block above.
+                GeneralSeriesKind::Violin
+                | GeneralSeriesKind::DensityCurve
+                | GeneralSeriesKind::Ridgeline
+                | GeneralSeriesKind::StripPlot
+                | GeneralSeriesKind::Beeswarm
+                | GeneralSeriesKind::DotPlot
+                | GeneralSeriesKind::Ecdf
+                | GeneralSeriesKind::QqPlot
+                | GeneralSeriesKind::Hexbin
+                | GeneralSeriesKind::Contour
+                | GeneralSeriesKind::ParallelCoordinates
+                | GeneralSeriesKind::ScatterMatrix => {}
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     let distance = if series.bar_mark == GeneralBarMark::Lollipop {
                         distance_to_bar_stem(x_css, y_css, geometry, false, series, dataset)
@@ -9464,6 +9885,18 @@ impl ChartEngine {
                 )
             })
             .collect();
+        // Statistics synthetic rows (violin categories, bins, grid points, ...) likewise
+        // survive a data change while their index still exists.
+        #[cfg(feature = "complete")]
+        let stats_rows: HashMap<GeneralSeriesId, usize> = registry
+            .series
+            .iter()
+            .filter(|series| series.dataset == dataset_id && series.kind.requires_complete_build())
+            .filter_map(|series| {
+                self.general_stats_row_count(series)
+                    .map(|count| (series.id, count))
+            })
+            .collect();
         let previous_hovered = registry.hovered.clone();
         let previous_selected = registry.selected.clone();
         let previous_accessibility_focused = registry.accessibility_focused.clone();
@@ -9474,6 +9907,10 @@ impl ChartEngine {
             let mut current = target?;
             if let Some(&bins) = histogram_bins.get(&current.series) {
                 return (current.row < bins).then_some(current);
+            }
+            #[cfg(feature = "complete")]
+            if let Some(&rows) = stats_rows.get(&current.series) {
+                return (current.row < rows).then_some(current);
             }
             if dataset_series.contains(&current.series) {
                 let shifted = current.row.checked_sub(removed_front);
@@ -9543,6 +9980,11 @@ impl ChartEngine {
             return (row < self.general_histogram_bins(series)?.len())
                 .then(|| histogram_bin_identity(row));
         }
+        #[cfg(feature = "complete")]
+        if let Some(count) = self.general_stats_row_count(series) {
+            return (row < count)
+                .then(|| crate::general_stats_geometry::stats_row_identity(series.kind, row));
+        }
         self.general_dataset(series.dataset)?
             .row_identity(row)
             .cloned()
@@ -9589,6 +10031,10 @@ impl ChartEngine {
         let series = self.general_series(series_id)?;
         if series.kind == GeneralSeriesKind::Histogram {
             return self.general_histogram_tooltip_snapshot(series, row);
+        }
+        #[cfg(feature = "complete")]
+        if self.general_stats_row_count(series).is_some() {
+            return self.general_stats_tooltip_snapshot(series, row);
         }
         let dataset = self.general_dataset(series.dataset)?;
         let row_id = dataset.row_identity(row)?.clone();
@@ -9711,6 +10157,16 @@ impl ChartEngine {
                 anchor_series: series_id,
                 anchor_row: row,
                 items: vec![self.general_histogram_tooltip_snapshot(anchor_series, row)?],
+            });
+        }
+        // Synthetic statistics rows share no row datum with any other series either.
+        #[cfg(feature = "complete")]
+        if self.general_stats_row_count(anchor_series).is_some() {
+            return Some(GeneralSharedTooltipSnapshot {
+                pane,
+                anchor_series: series_id,
+                anchor_row: row,
+                items: vec![self.general_stats_tooltip_snapshot(anchor_series, row)?],
             });
         }
         let anchor_dataset = self.general_dataset(anchor_series.dataset)?;
@@ -9855,6 +10311,10 @@ impl ChartEngine {
                 offset,
                 items,
             });
+        }
+        #[cfg(feature = "complete")]
+        if self.general_stats_row_count(series).is_some() {
+            return self.general_stats_accessibility_snapshot(series, offset, limit);
         }
         let dataset = self.general_dataset(series.dataset)?;
         let total_rows = dataset.len();
@@ -10256,7 +10716,7 @@ fn general_stack_x_key(dataset: &crate::GeneralDataset, row: usize) -> Option<Ge
                 .cloned()
                 .map(GeneralStackXKey::Category)
         }
-        GeneralXKind::Values => None,
+        GeneralXKind::Values | GeneralXKind::Matrix => None,
     }
 }
 
@@ -10843,6 +11303,13 @@ fn general_x_label(dataset: &crate::GeneralDataset, row: usize) -> Option<String
     if let Some(values) = dataset.temporal_x_epoch_ms() {
         return values.get(row).map(ToString::to_string);
     }
+    #[cfg(feature = "complete")]
+    if let Some(fields) = dataset.matrix_fields() {
+        // Matrix rows label by their first field's value.
+        return dataset
+            .matrix_value(0, row)
+            .map(|value| format!("{}: {value}", fields[0]));
+    }
     let category_index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
     dataset.categories()?.get(category_index).cloned()
 }
@@ -10883,6 +11350,7 @@ fn general_rows_share_horizontal_datum(
             )
             .is_some_and(|(left, right)| left == right),
         GeneralXKind::Values => false,
+        GeneralXKind::Matrix => false,
     }
 }
 
@@ -11213,7 +11681,7 @@ fn validate_general_series_axis_compatibility(
                         )
                         && heatmap_y_numeric
                 }
-                GeneralXKind::Values => false,
+                GeneralXKind::Values | GeneralXKind::Matrix => false,
             };
             if !compatible {
                 return Err(invalid(
@@ -11282,6 +11750,110 @@ fn validate_general_series_axis_compatibility(
                 ));
             }
         }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Violin => {
+            if pane_domain
+                != (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Band
+                || y_scale != GeneralScaleType::Linear
+            {
+                return Err(invalid(
+                    "violin requires a category-band pane, category data, a band X axis, and a linear Y axis",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::StripPlot | GeneralSeriesKind::Beeswarm | GeneralSeriesKind::DotPlot => {
+            if pane_domain
+                != (HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Band
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "strip_plot/beeswarm/dot_plot require a category-band pane, category data, a band X axis, and a numeric Y axis",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Ridgeline => {
+            if pane_domain
+                != (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                || dataset_kind != GeneralXKind::Category
+                || x_scale != GeneralScaleType::Linear
+                || y_scale != GeneralScaleType::Band
+            {
+                return Err(invalid(
+                    "ridgeline requires a continuous-linear pane, category data, a linear X value axis, and a band Y category axis",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DensityCurve | GeneralSeriesKind::Ecdf | GeneralSeriesKind::QqPlot => {
+            if pane_domain
+                != (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                || dataset_kind != GeneralXKind::Values
+                || x_scale != GeneralScaleType::Linear
+                || y_scale != GeneralScaleType::Linear
+            {
+                return Err(invalid(
+                    "density_curve/ecdf/qq_plot require a continuous-linear pane, sample values data, and linear X/Y axes",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Hexbin | GeneralSeriesKind::Contour => {
+            if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
+                || dataset_kind != GeneralXKind::Numeric
+                || !matches!(
+                    x_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+                || !matches!(
+                    y_scale,
+                    GeneralScaleType::Linear
+                        | GeneralScaleType::Logarithmic
+                        | GeneralScaleType::SymmetricLog
+                )
+            {
+                return Err(invalid(
+                    "hexbin/contour require a continuous pane, numeric X/Y data, and numeric X/Y axes",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ParallelCoordinates | GeneralSeriesKind::ScatterMatrix => {
+            if pane_domain
+                != (HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                })
+                || dataset_kind != GeneralXKind::Matrix
+                || x_scale != GeneralScaleType::Linear
+                || y_scale != GeneralScaleType::Linear
+            {
+                return Err(invalid(
+                    "parallel_coordinates/scatter_matrix require a continuous-linear pane, matrix data, and linear X/Y axes",
+                ));
+            }
+        }
+        #[cfg(not(feature = "complete"))]
+        _ => return Err(crate::complete_build_required("statistics series families")),
     }
     Ok(())
 }
@@ -11435,7 +12007,7 @@ fn validate_dataset_for_series(
                         .x_high()
                         .ok_or_else(|| invalid("temporal error bars require an X-high channel"))?;
                 }
-                GeneralXKind::Values => {
+                GeneralXKind::Values | GeneralXKind::Matrix => {
                     return Err(invalid("error bars require X coordinates"));
                 }
             }
@@ -11481,7 +12053,7 @@ fn validate_dataset_for_series(
             }
         }
         GeneralSeriesKind::HeatmapGrid => match dataset.x_kind() {
-            GeneralXKind::Values => {
+            GeneralXKind::Values | GeneralXKind::Matrix => {
                 return Err(invalid("heatmap_grid requires X coordinates"));
             }
             GeneralXKind::Category => {
@@ -11545,6 +12117,40 @@ fn validate_dataset_for_series(
                 .size()
                 .ok_or_else(|| invalid("bubble series require a size channel"))?;
         }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Violin
+        | GeneralSeriesKind::Ridgeline
+        | GeneralSeriesKind::StripPlot
+        | GeneralSeriesKind::Beeswarm
+        | GeneralSeriesKind::DotPlot => {
+            if dataset.x_kind() != GeneralXKind::Category {
+                return Err(invalid(
+                    "statistics category series require category/value data",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DensityCurve | GeneralSeriesKind::Ecdf | GeneralSeriesKind::QqPlot => {
+            if dataset.x_kind() != GeneralXKind::Values {
+                return Err(invalid("density/ecdf/qq series require sample values data"));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Hexbin | GeneralSeriesKind::Contour => {
+            if dataset.x_kind() != GeneralXKind::Numeric {
+                return Err(invalid("hexbin/contour series require numeric X/Y data"));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ParallelCoordinates | GeneralSeriesKind::ScatterMatrix => {
+            if dataset.x_kind() != GeneralXKind::Matrix {
+                return Err(invalid(
+                    "parallel_coordinates/scatter_matrix series require matrix data",
+                ));
+            }
+        }
+        #[cfg(not(feature = "complete"))]
+        _ => return Err(crate::complete_build_required("statistics series families")),
     }
     Ok(())
 }
@@ -11861,6 +12467,57 @@ fn validate_input_for_series(
                 ));
             }
         }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Violin
+        | GeneralSeriesKind::Ridgeline
+        | GeneralSeriesKind::StripPlot
+        | GeneralSeriesKind::Beeswarm
+        | GeneralSeriesKind::DotPlot => {
+            if input.x_kind() != GeneralXKind::Category {
+                return Err(invalid(
+                    "a dataset bound to a statistics category series must remain category/value data",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DensityCurve | GeneralSeriesKind::Ecdf | GeneralSeriesKind::QqPlot => {
+            if input.x_kind() != GeneralXKind::Values {
+                return Err(invalid(
+                    "a dataset bound to a density/ecdf/qq series must remain sample values data",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Hexbin | GeneralSeriesKind::Contour => {
+            if input.x_kind() != GeneralXKind::Numeric {
+                return Err(invalid(
+                    "a dataset bound to a hexbin/contour series must remain numeric X/Y data",
+                ));
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ParallelCoordinates | GeneralSeriesKind::ScatterMatrix => {
+            if input.x_kind() != GeneralXKind::Matrix {
+                return Err(invalid(
+                    "a dataset bound to a matrix series must remain matrix data",
+                ));
+            }
+        }
+        #[cfg(not(feature = "complete"))]
+        GeneralSeriesKind::Violin
+        | GeneralSeriesKind::Ridgeline
+        | GeneralSeriesKind::StripPlot
+        | GeneralSeriesKind::Beeswarm
+        | GeneralSeriesKind::DotPlot
+        | GeneralSeriesKind::DensityCurve
+        | GeneralSeriesKind::Ecdf
+        | GeneralSeriesKind::QqPlot
+        | GeneralSeriesKind::Hexbin
+        | GeneralSeriesKind::Contour
+        | GeneralSeriesKind::ParallelCoordinates
+        | GeneralSeriesKind::ScatterMatrix => {
+            return Err(crate::complete_build_required("statistics series families"));
+        }
         GeneralSeriesKind::Waterfall => {
             if !matches!(input, GeneralXyInput::WaterfallCategory { .. }) {
                 return Err(invalid(
@@ -12147,6 +12804,10 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         validate_histogram_options(&options.histogram)?;
     } else if options.histogram != GeneralHistogramOptions::default() {
         return Err(invalid("histogram options require a histogram series"));
+    }
+    #[cfg(feature = "complete")]
+    if !options.kind.requires_complete_build() && options.stats != GeneralStatsOptions::default() {
+        return Err(invalid("statistics options require a statistics series"));
     }
     if let Some(colors) = options.fill_gradient.as_ref() {
         if !matches!(

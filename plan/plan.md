@@ -40,7 +40,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
 | G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
 | G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
-| G11 | R11 | Statistics (complete build) | **Planned** | — | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
+| G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
 | G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
 | G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
@@ -943,6 +943,73 @@ demo-shell card-count assertion for the four new transform cards, updated, with 
 Known limits: one independent non-time source per chart; percent Kagi reversals must stay
 below 100%; a chart with no complete Renko/P&F box yet projects zero bars.
 
+### G11 — Statistics (2026-11-01)
+
+**Shared statistics** live in `general_stats.rs` behind the complete build: Gaussian and
+Epanechnikov kernel density with Scott, Silverman, or explicit positive bandwidths (rule
+bandwidths scale by the Epanechnikov canonical constant so both kernels match the reference
+rules), sorted-sample quantiles, ECDF coordinates, Acklam inverse-normal Q-Q coordinates, and 2D
+binning. `general_stats_geometry.rs` lowers models to CSS-space geometry behind a cache keyed on
+the dataset generation and options; the pixel-space kinds (strip, beeswarm, dot plot, hexbin)
+also key on the pane extent, so pan/zoom reuses marks while a resize recomputes. The twelve kinds
+are unconditional enum variants; creation gates on `requires_complete_build()` and the standard
+build rejects them atomically with the typed `complete_build_required` error. The statistics
+modules, the `stats` options object, and matrix datasets compile only with the `complete`
+feature; the standard build rejects `stats` options and matrix data with the same typed error, so
+the standard WebAssembly module stays within 10 KB of its pre-G11 size. Category-sample
+kinds reuse the category/value dataset, density/ECDF/Q-Q reuse the histogram values dataset,
+hexbin/contour reuse numeric XY rows, and parallel coordinates / scatter-plot matrices introduce
+bounded matrix rows (2..8 fields, 512 rows) with typed `general_matrix_columns` bulk ingestion
+and ID-keyed updates.
+
+| Family | API | Reference behaviour |
+| --- | --- | --- |
+| Violin | `add_series("violin")`; `stats: { kernel, bandwidth, grid, violin_overlay: "none" \| "quartiles" \| "box", violin_side: "full" \| "left" \| "right" }` | per-category KDE silhouette; two series with left/right sides form a split violin |
+| Density / ridgeline | `"density_curve"` (`area` fill toggle), `"ridgeline"` (`overlap` in band units) | KDE curve and stacked per-category ridges |
+| Strip / beeswarm / dot plot | `"strip_plot"` (`jitter`), `"beeswarm"`, `"dot_plot"` | deterministic jitter, non-overlapping packing, Wilkinson value stacking |
+| ECDF / Q-Q | `"ecdf"`, `"qq_plot"` (`qq_distribution: "normal"`) | empirical CDF step path; normal-theoretical quantiles via Acklam |
+| Hexbin | `"hexbin"` (`hexbin_radius`, auto-raised to keep cells within the bin cap) | d3-hexbin axial-offset cells with a count color ramp and legend |
+| Contour | `"contour"` (`thresholds`, `contour_fill`, `contour_lines`, `smooth`) | marching-squares filled bands and iso-lines over a KDE-smoothed grid |
+| Parallel coordinates | `"parallel_coordinates"` over matrix rows | one polyline per row across N per-field axes with per-axis engine brushing |
+| Scatter matrix | `"scatter_matrix"` over matrix rows | N×N small-multiples scatter grid with linked cross-cell selection |
+
+Synthetic marks (violin silhouettes and overlays, density/ECDF grid points, hexbin cells,
+contour levels) carry generated row identities through hits, selection, tooltips, and
+accessibility with a `{ count, min, max }` stats detail (the hexbin cell minimum is NaN by
+design); parallel-coordinates and scatter-matrix marks address real rows. A `stats` patch
+replaces the whole option block like `histogram`, and non-default `stats` on a non-statistics
+series is `invalid_options`. V2 persistence stores samples and options, never derived models.
+The demo catalog gains thirteen complete-only statistics scenarios (deterministic seeded data),
+which the standard-build dashboard skips with a `complete-only` marker, and
+`g11_statistics.spec.mjs` exercises rendering, per-series hits, option validation and
+round-trips, matrix updates, persistence, and dashboard mounting on `chromium-complete`.
+Statistics tooltip text (`{count} samples`, `from`, `to`) and the hexbin fallback label come
+from the engine text catalog, so they follow the chart language with English and Russian plural
+rules.
+
+Gate evidence: `cargo fmt`, workspace and WASM clippy and workspace tests on both feature sets
+(1,430 engine tests with `complete`), GPUI clippy, tests and pixel parity (the GPUI gallery's
+option match gained explicit arms for the twelve kinds), `perf_gate`, the package gates (lint,
+build, typecheck, API, namespace, release-gate, build-variant, SSR and pack smoke for both builds),
+size budgets and the demo build all pass; the whole gate re-ran green after rebasing onto the
+localization commit. Gating the statistics code behind `complete` cut the
+standard raw WebAssembly growth from 68,447 to 9,907 bytes. Measured complete-build sizes
+(brotli 1,339,375; unpacked package 12,379,270; tarball 4,082,652 under the 4,100,000 ceiling)
+raised two ceilings with that evidence: complete brotli 1,317,000 → 1,380,000 and unpacked
+12,330,000 → 12,600,000; the standard brotli stays at 1,307,373 under 1,317,000.
+`g11_statistics.spec.mjs` renders on Canvas2D and WebGPU on `chromium-complete`. The G8
+catalog-export audits now skip complete-only cards when the loaded build reports `standard`
+(56 cards) and cover all 69 cards with the twelve statistics kinds on `chromium-complete`.
+Playwright full run on the rebased tree: 1,304 passed, 64 skipped; the two failures (a
+custom-series removal and an options-volume card) were the known Windows `ERR_ADDRESS_IN_USE`
+page-load flake and pass 2/2 re-run. The pre-rebase run had the same totals; its two
+financial-page load timeouts (pixel sharpness, live market) also re-passed 5/5. An earlier run
+was invalid because an orphaned complete-build test server held the standard port and
+`reuseExistingServer` served the complete build to the standard project.
+
+Known limits: hexbin rounding matches d3-hexbin on engine fixtures, not a live d3 comparison;
+ridgeline hits exactly on a band boundary are distance-tie resolved; the standard build
+rejects any `stats` options object instead of validating it.
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1382,21 +1449,21 @@ passing, and the native perf gate gains a derived-style target.
 
 ### R11 — Statistics (group B, complete build)
 
-**Batch:** G11. **Depends on:** R9 two builds. **Status:** planned.
+**Batch:** G11. **Depends on:** R9 two builds. **Status:** complete.
 
-- [ ] Shared engine statistics. Kernel density with Gaussian and Epanechnikov kernels and
+- [x] Shared engine statistics. Kernel density with Gaussian and Epanechnikov kernels and
       Scott/Silverman/explicit bandwidth, quantiles, ECDF and 2D binning, with bounded sample
       counts and documented numeric policy.
-- [ ] Violin, with optional box/quartile overlay and split violins.
-- [ ] Density curve (line or area) and ridgeline (stacked densities on category rows).
-- [ ] Strip and deterministic beeswarm, and Wilkinson dot plot.
-- [ ] ECDF and Q-Q plots.
-- [ ] Hexbin with a color scale and legend.
-- [ ] Contour and 2D density (marching squares over gridded values or density), with filled bands
+- [x] Violin, with optional box/quartile overlay and split violins.
+- [x] Density curve (line or area) and ridgeline (stacked densities on category rows).
+- [x] Strip and deterministic beeswarm, and Wilkinson dot plot.
+- [x] ECDF and Q-Q plots.
+- [x] Hexbin with a color scale and legend.
+- [x] Contour and 2D density (marching squares over gridded values or density), with filled bands
       and iso-lines.
-- [ ] Parallel coordinates: a coordinate system of N axes with per-axis brushing.
-- [ ] Scatter-plot matrix as a small-multiples pane grid with linked selection.
-- [ ] G11 full gate green on both builds; batch committed and pushed.
+- [x] Parallel coordinates: a coordinate system of N axes with per-axis brushing.
+- [x] Scatter-plot matrix as a small-multiples pane grid with linked selection.
+- [x] G11 full gate green on both builds; batch committed and pushed.
 
 **Exit:** statistics match the named reference algorithms on fixed fixtures within documented
 tolerances, and every family meets the standing exit rules on the complete build.
@@ -1487,11 +1554,11 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
-| Two builds (standard and complete) | Partial (G9 delivered; first complete-only family arrives in G11) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Two builds (standard and complete) | Partial (G9 delivered; G11 shipped the first complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
 | Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
 | Financial chart styles | Delivered (G10) | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
-| Statistical distributions | Open | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
-| 2D density and multivariate | Open | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
+| Statistical distributions | Delivered (G11, complete build) | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
+| 2D density and multivariate | Delivered (G11, complete build) | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
 | Gauge, chord and network | Open | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
 | Hierarchy extensions, Venn and word cloud | Open | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
 | Geographic maps | Open | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |

@@ -399,6 +399,26 @@ pub(crate) const TOOLTIP_TARGET: Phrase = Phrase::new("target", "цель");
 pub(crate) const TOOLTIP_COMPARATIVE: Phrase = Phrase::new("comparative", "сравнение");
 pub(crate) const TOOLTIP_BANDS: Phrase = Phrase::new("bands", "диапазоны");
 pub(crate) const TOOLTIP_RANK: Phrase = Phrase::new("rank", "ранг");
+#[cfg(feature = "complete")]
+pub(crate) const TOOLTIP_FROM: Phrase = Phrase::new("from", "от");
+#[cfg(feature = "complete")]
+pub(crate) const TOOLTIP_TO: Phrase = Phrase::new("to", "до");
+#[cfg(feature = "complete")]
+pub(crate) const HEXBIN_CELL: Phrase = Phrase::new("hexbin cell", "шестиугольная ячейка");
+
+/// `{count} sample(s)` in a statistics tooltip, with the language's plural rules.
+#[cfg(feature = "complete")]
+pub(crate) fn samples_count(language: ChartLanguage, count: u32) -> String {
+    match language {
+        ChartLanguage::English => {
+            format!("{count} {}", if count == 1 { "sample" } else { "samples" })
+        }
+        ChartLanguage::Russian => format!(
+            "{count} {}",
+            russian_plural(i64::from(count), "наблюдение", "наблюдения", "наблюдений")
+        ),
+    }
+}
 
 /// The display name of a waterfall bar's role (increase/decrease/subtotal/total).
 pub(crate) fn waterfall_mark(

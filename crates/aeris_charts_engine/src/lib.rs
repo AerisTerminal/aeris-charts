@@ -31,6 +31,10 @@ mod general_histogram;
 mod general_layout;
 mod general_legend;
 mod general_series;
+#[cfg(feature = "complete")]
+pub(crate) mod general_stats;
+#[cfg(feature = "complete")]
+pub(crate) mod general_stats_geometry;
 mod heikin_ashi;
 mod history;
 mod hit_test;
@@ -48,6 +52,8 @@ pub use volume_profile::{
 };
 #[cfg(test)]
 mod general_business_tests;
+#[cfg(test)]
+mod general_stats_tests;
 mod ordering;
 mod persistence;
 mod price_line_api;
@@ -218,6 +224,12 @@ pub use general_series::{
     MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
     MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
     MAX_GENERAL_SHARED_TOOLTIP_ITEMS, MIN_GENERAL_POINT_RADIUS,
+};
+#[cfg(feature = "complete")]
+#[doc(hidden)]
+pub use general_series::{
+    GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel, GeneralStatsOptions,
+    GeneralViolinOverlay, GeneralViolinSide,
 };
 pub(crate) use history::ChartHistory;
 pub use history::{ChartHistoryChange, HostEditId};
@@ -2213,6 +2225,17 @@ pub struct ChartEngine {
     retained_frame: frame::RetainedFrame,
     frame_build_stats: FrameBuildStats,
     lod_work: Cell<LodWorkStats>,
+}
+
+/// Typed failure for statistics-family inputs (series kinds, options, matrix data) that the
+/// build without the `complete` feature cannot serve. The package boundary reports it as
+/// `complete_build_required`.
+#[doc(hidden)]
+pub fn complete_build_required(subject: &str) -> ChartError {
+    ChartError::new(
+        ErrorCode::UnsupportedOperation,
+        format!("{subject} require the complete build (@aeristerminal/aeris-charts/complete)"),
+    )
 }
 
 impl ChartEngine {

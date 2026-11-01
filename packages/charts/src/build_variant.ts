@@ -13,7 +13,20 @@ export const COMPLETE_BUILD_ENTRY = "@aeristerminal/aeris-charts/complete";
  * whose module is gated adds its creation kind here; the creation APIs reject it atomically in the
  * standard build, before any engine mutation.
  */
-export const complete_only_families: ReadonlySet<string> = new Set<string>();
+export const complete_only_families: ReadonlySet<string> = new Set<string>([
+  "violin",
+  "density_curve",
+  "ridgeline",
+  "strip_plot",
+  "beeswarm",
+  "dot_plot",
+  "ecdf",
+  "qq_plot",
+  "hexbin",
+  "contour",
+  "parallel_coordinates",
+  "scatter_matrix",
+]);
 
 let loaded_variant: chart_build_variant | null = null;
 

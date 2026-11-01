@@ -255,6 +255,11 @@ struct SeriesV2 {
     stack_mode: crate::GeneralStackMode,
     #[serde(default)]
     histogram: crate::GeneralHistogramOptions,
+    // The standard build ignores this field; a state whose series need it fails at series
+    // restore because the statistics kinds require the complete build.
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    stats: crate::GeneralStatsOptions,
     #[serde(default)]
     bar_mark: crate::GeneralBarMark,
     #[serde(default)]
@@ -1372,6 +1377,24 @@ impl ChartEngine {
                         values: y,
                         values_valid: y_valid,
                     },
+                    #[cfg(not(feature = "complete"))]
+                    crate::GeneralXKind::Matrix => crate::GeneralXyInput::Matrix {
+                        ids,
+                        fields: Vec::new(),
+                        columns: Vec::new(),
+                    },
+                    #[cfg(feature = "complete")]
+                    crate::GeneralXKind::Matrix => crate::GeneralXyInput::Matrix {
+                        ids,
+                        fields: dataset
+                            .matrix_fields()
+                            .map(|fields| fields.to_vec())
+                            .unwrap_or_default(),
+                        columns: dataset
+                            .matrix_columns()
+                            .map(|columns| columns.to_vec())
+                            .unwrap_or_default(),
+                    },
                     crate::GeneralXKind::Numeric if heatmap_y_numeric.is_some() => {
                         crate::GeneralXyInput::HeatmapNumericNumeric {
                             ids,
@@ -1670,6 +1693,8 @@ impl ChartEngine {
                     stack_id: series.stack_id().map(str::to_string),
                     stack_mode: series.stack_mode(),
                     histogram: series.histogram(),
+                    #[cfg(feature = "complete")]
+                    stats: *series.stats(),
                     bar_mark: series.bar_mark(),
                     waterfall: series.waterfall().clone(),
                     end_labels: series.end_labels(),
@@ -2939,6 +2964,8 @@ impl ChartEngine {
                 waterfall: series.waterfall,
                 end_labels: series.end_labels,
                 rank: series.rank,
+                #[cfg(feature = "complete")]
+                stats: series.stats,
             })?;
         }
         let mut layout_datasets = HashMap::new();

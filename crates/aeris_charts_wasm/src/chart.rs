@@ -4199,6 +4199,16 @@ impl AerisChart {
         )
     }
 
+    pub fn set_general_matrix_data_json(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        columns_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_matrix_data_json(dataset, metadata_json, columns_json)
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn set_general_bubble_data_typed(
         &mut self,
@@ -4632,6 +4642,20 @@ impl AerisChart {
         )
     }
 
+    pub fn upsert_general_matrix_data_json(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        columns_json: &str,
+        max_rows: u32,
+    ) -> String {
+        self.inner.borrow_mut().upsert_general_matrix_data_json(
+            dataset,
+            metadata_json,
+            columns_json,
+            max_rows,
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_bubble_data_typed(
         &mut self,

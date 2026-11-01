@@ -1,5 +1,7 @@
 //! Thin browser boundary for engine-owned general charts.
 
+#[cfg(not(feature = "complete"))]
+use aeris_charts_engine::complete_build_required;
 use aeris_charts_engine::{
     AxisDimension, AxisPosition, CalendarInput, CategoryScaleType, ChartError, ContinuousScaleType,
     DEFAULT_GENERAL_FILL_OPACITY, FlowLink, FlowNode, FunnelStage, GanttTask, GeneralAreaBaseline,
@@ -14,6 +16,11 @@ use aeris_charts_engine::{
     GeneralSeriesKind, GeneralSeriesOptions, GeneralSeriesProposal, GeneralStackMode,
     GeneralTooltipSnapshot, GeneralWaterfallOptions, GeneralWaterfallStep, GeneralXyInput,
     HierarchyNode, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS, MosaicCell,
+};
+#[cfg(feature = "complete")]
+use aeris_charts_engine::{
+    GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel, GeneralStatsOptions,
+    GeneralViolinOverlay, GeneralViolinSide,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -304,6 +311,13 @@ struct SeriesInput {
     stack_mode: Option<String>,
     #[serde(default)]
     histogram: HistogramInput,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    stats: StatsInput,
+    /// Present only to reject statistics options in the standard build instead of ignoring them.
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    stats: Option<Value>,
     #[serde(default)]
     bar_mark: Option<String>,
     #[serde(default)]
@@ -321,6 +335,27 @@ struct HistogramInput {
     bin_width: Option<f64>,
     normalization: Option<String>,
     cumulative: bool,
+}
+
+/// Statistics family options (complete build). Omitted fields keep the engine defaults.
+#[cfg(feature = "complete")]
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct StatsInput {
+    kernel: Option<String>,
+    bandwidth: Option<Value>,
+    grid: Option<usize>,
+    violin_overlay: Option<String>,
+    violin_side: Option<String>,
+    area: Option<bool>,
+    overlap: Option<f64>,
+    jitter: Option<f64>,
+    qq_distribution: Option<String>,
+    thresholds: Option<usize>,
+    contour_fill: Option<bool>,
+    contour_lines: Option<bool>,
+    smooth: Option<bool>,
+    hexbin_radius: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -413,6 +448,10 @@ struct PackedColumnsInput {
     colors: Option<Vec<Option<String>>>,
     symbols: Option<Vec<Option<String>>>,
     steps: Option<Vec<u8>>,
+    #[cfg(feature = "complete")]
+    matrix_fields: Option<Vec<String>>,
+    #[cfg(feature = "complete")]
+    matrix_columns: Option<Vec<Vec<f64>>>,
     target: Option<Vec<f64>>,
     target_valid: Option<Vec<u8>>,
     comparative: Option<Vec<f64>>,
@@ -505,8 +544,26 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
         "heatmap_grid" => GeneralSeriesKind::HeatmapGrid,
         "waterfall" => GeneralSeriesKind::Waterfall,
         "bullet" => GeneralSeriesKind::Bullet,
+        "violin" => GeneralSeriesKind::Violin,
+        "density_curve" => GeneralSeriesKind::DensityCurve,
+        "ridgeline" => GeneralSeriesKind::Ridgeline,
+        "strip_plot" => GeneralSeriesKind::StripPlot,
+        "beeswarm" => GeneralSeriesKind::Beeswarm,
+        "dot_plot" => GeneralSeriesKind::DotPlot,
+        "ecdf" => GeneralSeriesKind::Ecdf,
+        "qq_plot" => GeneralSeriesKind::QqPlot,
+        "hexbin" => GeneralSeriesKind::Hexbin,
+        "contour" => GeneralSeriesKind::Contour,
+        "parallel_coordinates" => GeneralSeriesKind::ParallelCoordinates,
+        "scatter_matrix" => GeneralSeriesKind::ScatterMatrix,
         _ => return Err(input_error("unsupported general series kind")),
     };
+    #[cfg(not(feature = "complete"))]
+    if kind.requires_complete_build() {
+        return Err(result_error(&complete_build_required(
+            "statistics series families",
+        )));
+    }
     let mut columns = input.columns;
     let ids = parse_id_values(columns.ids.take())?;
     let missing = |name: &str| input_error(format!("general proposal is missing {name} columns"));
@@ -759,6 +816,56 @@ fn proposal_series(input: SeriesProposalInput) -> Result<GeneralSeriesProposal, 
                 }
             }
         }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Violin
+        | GeneralSeriesKind::Ridgeline
+        | GeneralSeriesKind::StripPlot
+        | GeneralSeriesKind::Beeswarm
+        | GeneralSeriesKind::DotPlot => GeneralXyInput::Category {
+            ids,
+            categories: columns
+                .categories
+                .take()
+                .ok_or_else(|| missing("category"))?,
+            category_indices: columns
+                .category_indices
+                .take()
+                .ok_or_else(|| missing("category index"))?,
+            y: columns.y.take().ok_or_else(|| missing("Y"))?,
+            y_valid: columns.y_valid.take(),
+        },
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DensityCurve | GeneralSeriesKind::Ecdf | GeneralSeriesKind::QqPlot => {
+            GeneralXyInput::Values {
+                ids,
+                values: columns
+                    .values
+                    .take()
+                    .ok_or_else(|| missing("sample values"))?,
+                values_valid: columns.values_valid.take(),
+            }
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Hexbin | GeneralSeriesKind::Contour => GeneralXyInput::Numeric {
+            ids,
+            x: columns.x.take().ok_or_else(|| missing("numeric X"))?,
+            y: columns.y.take().ok_or_else(|| missing("Y"))?,
+            y_valid: columns.y_valid.take(),
+        },
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ParallelCoordinates | GeneralSeriesKind::ScatterMatrix => {
+            GeneralXyInput::Matrix {
+                ids,
+                fields: columns
+                    .matrix_fields
+                    .take()
+                    .ok_or_else(|| missing("matrix field"))?,
+                columns: columns
+                    .matrix_columns
+                    .take()
+                    .ok_or_else(|| missing("matrix column"))?,
+            }
+        }
         _ => {
             if let Some(x_epoch_ms) = columns.x_epoch_ms.take() {
                 GeneralXyInput::Temporal {
@@ -887,6 +994,10 @@ fn row_detail_value(detail: Option<GeneralRowDetail>) -> Value {
             "type": "bullet", "target": target, "comparative": comparative, "bands": bands,
         }),
         Some(GeneralRowDetail::Rank(rank)) => json!({ "type": "rank", "rank": rank }),
+        #[cfg(feature = "complete")]
+        Some(GeneralRowDetail::Stats { count, min, max }) => {
+            json!({ "type": "stats", "count": count, "min": min, "max": max })
+        }
     }
 }
 
@@ -998,6 +1109,65 @@ fn series_options_from_input(
         GeneralSeriesKind::Bullet => {
             GeneralSeriesOptions::bullet(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Violin => {
+            GeneralSeriesOptions::violin(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DensityCurve => GeneralSeriesOptions::density_curve(
+            input.pane,
+            dataset,
+            input.x_axis_id,
+            input.y_axis_id,
+        ),
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Ridgeline => {
+            GeneralSeriesOptions::ridgeline(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::StripPlot => {
+            GeneralSeriesOptions::strip_plot(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Beeswarm => {
+            GeneralSeriesOptions::beeswarm(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::DotPlot => {
+            GeneralSeriesOptions::dot_plot(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Ecdf => {
+            GeneralSeriesOptions::ecdf(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::QqPlot => {
+            GeneralSeriesOptions::qq_plot(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Hexbin => {
+            GeneralSeriesOptions::hexbin(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::Contour => {
+            GeneralSeriesOptions::contour(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ParallelCoordinates => GeneralSeriesOptions::parallel_coordinates(
+            input.pane,
+            dataset,
+            input.x_axis_id,
+            input.y_axis_id,
+        ),
+        #[cfg(feature = "complete")]
+        GeneralSeriesKind::ScatterMatrix => GeneralSeriesOptions::scatter_matrix(
+            input.pane,
+            dataset,
+            input.x_axis_id,
+            input.y_axis_id,
+        ),
+        #[cfg(not(feature = "complete"))]
+        _ => return Err(complete_build_required("statistics series families")),
     };
     options.visible = input.visible;
     options.title = input.title;
@@ -1059,6 +1229,14 @@ fn series_options_from_input(
         }
     };
     options.histogram = histogram_options(input.histogram)?;
+    #[cfg(feature = "complete")]
+    {
+        options.stats = stats_options(input.stats)?;
+    }
+    #[cfg(not(feature = "complete"))]
+    if input.stats.is_some() {
+        return Err(complete_build_required("statistics options"));
+    }
     options.bar_mark = bar_mark(input.bar_mark.as_deref())?;
     options.waterfall = input.waterfall;
     options.end_labels = end_labels(input.end_labels.as_deref())?;
@@ -1086,6 +1264,145 @@ fn histogram_options(input: HistogramInput) -> Result<GeneralHistogramOptions, C
     })
 }
 
+#[cfg(feature = "complete")]
+fn stats_options(input: StatsInput) -> Result<GeneralStatsOptions, ChartError> {
+    let mut options = GeneralStatsOptions::default();
+    if let Some(kernel) = input.kernel.as_deref() {
+        options.kernel = match kernel {
+            "gaussian" => GeneralStatsKernel::Gaussian,
+            "epanechnikov" => GeneralStatsKernel::Epanechnikov,
+            _ => {
+                return Err(invalid_option(
+                    "general stats kernel must be gaussian or epanechnikov",
+                ));
+            }
+        };
+    }
+    if let Some(bandwidth) = &input.bandwidth {
+        options.bandwidth = match bandwidth {
+            Value::String(rule) => match rule.as_str() {
+                "scott" => GeneralStatsBandwidth::Scott,
+                "silverman" => GeneralStatsBandwidth::Silverman,
+                _ => {
+                    return Err(invalid_option(
+                        "general stats bandwidth must be scott, silverman, or a positive number",
+                    ));
+                }
+            },
+            Value::Number(number) => number
+                .as_f64()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(GeneralStatsBandwidth::Explicit)
+                .ok_or_else(|| {
+                    invalid_option("an explicit general stats bandwidth must be a positive number")
+                })?,
+            _ => {
+                return Err(invalid_option(
+                    "general stats bandwidth must be scott, silverman, or a positive number",
+                ));
+            }
+        };
+    }
+    if let Some(grid) = input.grid {
+        options.grid = grid;
+    }
+    if let Some(overlay) = input.violin_overlay.as_deref() {
+        options.violin_overlay = match overlay {
+            "none" => GeneralViolinOverlay::None,
+            "quartiles" => GeneralViolinOverlay::Quartiles,
+            "box" => GeneralViolinOverlay::Box,
+            _ => {
+                return Err(invalid_option(
+                    "general stats violin_overlay must be none, quartiles, or box",
+                ));
+            }
+        };
+    }
+    if let Some(side) = input.violin_side.as_deref() {
+        options.violin_side = match side {
+            "full" => GeneralViolinSide::Full,
+            "left" => GeneralViolinSide::Left,
+            "right" => GeneralViolinSide::Right,
+            _ => {
+                return Err(invalid_option(
+                    "general stats violin_side must be full, left, or right",
+                ));
+            }
+        };
+    }
+    if let Some(area) = input.area {
+        options.area = area;
+    }
+    if let Some(overlap) = input.overlap {
+        options.overlap = overlap;
+    }
+    if let Some(jitter) = input.jitter {
+        options.jitter = jitter;
+    }
+    if let Some(distribution) = input.qq_distribution.as_deref() {
+        options.qq_distribution = match distribution {
+            "normal" => GeneralQqDistribution::Normal,
+            _ => {
+                return Err(invalid_option(
+                    "general stats qq_distribution must be normal",
+                ));
+            }
+        };
+    }
+    if let Some(thresholds) = input.thresholds {
+        options.thresholds = thresholds;
+    }
+    if let Some(contour_fill) = input.contour_fill {
+        options.contour_fill = contour_fill;
+    }
+    if let Some(contour_lines) = input.contour_lines {
+        options.contour_lines = contour_lines;
+    }
+    if let Some(smooth) = input.smooth {
+        options.smooth = smooth;
+    }
+    if let Some(hexbin_radius) = input.hexbin_radius {
+        options.hexbin_radius = hexbin_radius;
+    }
+    Ok(options)
+}
+
+#[cfg(feature = "complete")]
+fn stats_options_value(options: GeneralStatsOptions) -> Value {
+    json!({
+        "kernel": match options.kernel {
+            GeneralStatsKernel::Gaussian => "gaussian",
+            GeneralStatsKernel::Epanechnikov => "epanechnikov",
+        },
+        "bandwidth": match options.bandwidth {
+            GeneralStatsBandwidth::Scott => Value::from("scott"),
+            GeneralStatsBandwidth::Silverman => Value::from("silverman"),
+            GeneralStatsBandwidth::Explicit(value) => json!(value),
+        },
+        "grid": options.grid,
+        "violin_overlay": match options.violin_overlay {
+            GeneralViolinOverlay::None => "none",
+            GeneralViolinOverlay::Quartiles => "quartiles",
+            GeneralViolinOverlay::Box => "box",
+        },
+        "violin_side": match options.violin_side {
+            GeneralViolinSide::Full => "full",
+            GeneralViolinSide::Left => "left",
+            GeneralViolinSide::Right => "right",
+        },
+        "area": options.area,
+        "overlap": options.overlap,
+        "jitter": options.jitter,
+        "qq_distribution": match options.qq_distribution {
+            GeneralQqDistribution::Normal => "normal",
+        },
+        "thresholds": options.thresholds,
+        "contour_fill": options.contour_fill,
+        "contour_lines": options.contour_lines,
+        "smooth": options.smooth,
+        "hexbin_radius": options.hexbin_radius,
+    })
+}
 fn histogram_options_value(options: GeneralHistogramOptions) -> Value {
     json!({
         "bin_count": options.bin_count,
@@ -1119,6 +1436,18 @@ fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
         GeneralSeriesKind::RadialBar => "radial_bar",
         GeneralSeriesKind::Waterfall => "waterfall",
         GeneralSeriesKind::Bullet => "bullet",
+        GeneralSeriesKind::Violin => "violin",
+        GeneralSeriesKind::DensityCurve => "density_curve",
+        GeneralSeriesKind::Ridgeline => "ridgeline",
+        GeneralSeriesKind::StripPlot => "strip_plot",
+        GeneralSeriesKind::Beeswarm => "beeswarm",
+        GeneralSeriesKind::DotPlot => "dot_plot",
+        GeneralSeriesKind::Ecdf => "ecdf",
+        GeneralSeriesKind::QqPlot => "qq_plot",
+        GeneralSeriesKind::Hexbin => "hexbin",
+        GeneralSeriesKind::Contour => "contour",
+        GeneralSeriesKind::ParallelCoordinates => "parallel_coordinates",
+        GeneralSeriesKind::ScatterMatrix => "scatter_matrix",
     }
 }
 
@@ -2015,7 +2344,7 @@ impl ChartInner {
         let Some(series) = self.engine.general_series(id) else {
             return "null".to_owned();
         };
-        json!({
+        let value = json!({
             "pane": self.engine.general_series_pane_index(id),
             "x_axis_id": series.x_axis_id(),
             "y_axis_id": series.y_axis_id(),
@@ -2092,8 +2421,14 @@ impl ChartInner {
                 GeneralRankTies::Dense => "dense",
                 GeneralRankTies::Competition => "competition",
             }),
-        })
-        .to_string()
+        });
+        #[cfg(feature = "complete")]
+        let value = {
+            let mut value = value;
+            value["stats"] = stats_options_value(*series.stats());
+            value
+        };
+        value.to_string()
     }
 
     pub fn update_general_series_options_result_json(
@@ -2259,6 +2594,80 @@ impl ChartInner {
                     ids: None,
                     values: Vec::new(),
                     values_valid: None,
+                },
+            ),
+            #[cfg(not(feature = "complete"))]
+            "violin"
+            | "ridgeline"
+            | "strip_plot"
+            | "beeswarm"
+            | "dot_plot"
+            | "density_curve"
+            | "ecdf"
+            | "qq_plot"
+            | "hexbin"
+            | "contour"
+            | "parallel_coordinates"
+            | "scatter_matrix" => {
+                return result_error(&complete_build_required("statistics series families"));
+            }
+            #[cfg(feature = "complete")]
+            "violin" | "ridgeline" | "strip_plot" | "beeswarm" | "dot_plot" => (
+                match kind {
+                    "violin" => GeneralSeriesKind::Violin,
+                    "ridgeline" => GeneralSeriesKind::Ridgeline,
+                    "strip_plot" => GeneralSeriesKind::StripPlot,
+                    "beeswarm" => GeneralSeriesKind::Beeswarm,
+                    _ => GeneralSeriesKind::DotPlot,
+                },
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    y: Vec::new(),
+                    y_valid: None,
+                },
+            ),
+            #[cfg(feature = "complete")]
+            "density_curve" | "ecdf" | "qq_plot" => (
+                match kind {
+                    "density_curve" => GeneralSeriesKind::DensityCurve,
+                    "ecdf" => GeneralSeriesKind::Ecdf,
+                    _ => GeneralSeriesKind::QqPlot,
+                },
+                GeneralXyInput::Values {
+                    ids: None,
+                    values: Vec::new(),
+                    values_valid: None,
+                },
+            ),
+            #[cfg(feature = "complete")]
+            "hexbin" | "contour" => (
+                if kind == "hexbin" {
+                    GeneralSeriesKind::Hexbin
+                } else {
+                    GeneralSeriesKind::Contour
+                },
+                GeneralXyInput::Numeric {
+                    ids: None,
+                    x: Vec::new(),
+                    y: Vec::new(),
+                    y_valid: None,
+                },
+            ),
+            #[cfg(feature = "complete")]
+            "parallel_coordinates" | "scatter_matrix" => (
+                if kind == "parallel_coordinates" {
+                    GeneralSeriesKind::ParallelCoordinates
+                } else {
+                    GeneralSeriesKind::ScatterMatrix
+                },
+                // Two empty columns: matrix series require 2..=8 fields at creation; the
+                // placeholder is replaced when the host sets data.
+                GeneralXyInput::Matrix {
+                    ids: None,
+                    fields: vec!["a".to_owned(), "b".to_owned()],
+                    columns: vec![Vec::new(), Vec::new()],
                 },
             ),
             "horizontal_bar" => (
@@ -2507,6 +2916,58 @@ impl ChartInner {
             ids,
             values: values.to_vec(),
             values_valid: values_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.replace_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    /// Matrix datasets serve only complete-build statistics families.
+    #[cfg(not(feature = "complete"))]
+    pub fn set_general_matrix_data_json(&mut self, _: u32, _: &str, _: &str) -> String {
+        result_error(&complete_build_required("matrix datasets"))
+    }
+
+    /// Replace a matrix dataset (parallel coordinates / scatter matrix); columns arrive as JSON
+    /// because the 2D field layout has no flat typed-array form.
+    #[cfg(feature = "complete")]
+    pub fn set_general_matrix_data_json(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        columns_json: &str,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let mut packed = match parse_json::<PackedColumnsInput>(columns_json) {
+            Ok(packed) => packed,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let (Some(fields), Some(columns)) =
+            (packed.matrix_fields.take(), packed.matrix_columns.take())
+        else {
+            return input_error("general matrix data requires matrix_fields and matrix_columns");
+        };
+        let input = GeneralXyInput::Matrix {
+            ids,
+            fields,
+            columns,
         };
         match self.engine.replace_general_xy_dataset_styled(
             dataset,
@@ -3290,6 +3751,59 @@ impl ChartInner {
             ids,
             values: values.to_vec(),
             values_valid: values_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_styled(
+            dataset,
+            input,
+            metadata.labels,
+            metadata.colors,
+            metadata.symbols,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[cfg(not(feature = "complete"))]
+    pub fn upsert_general_matrix_data_json(&mut self, _: u32, _: &str, _: &str, _: u32) -> String {
+        result_error(&complete_build_required("matrix datasets"))
+    }
+
+    /// Incrementally update a matrix dataset by row id; columns arrive as JSON (see
+    /// `set_general_matrix_data_json`).
+    #[cfg(feature = "complete")]
+    pub fn upsert_general_matrix_data_json(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        columns_json: &str,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let mut packed = match parse_json::<PackedColumnsInput>(columns_json) {
+            Ok(packed) => packed,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let (Some(fields), Some(columns)) =
+            (packed.matrix_fields.take(), packed.matrix_columns.take())
+        else {
+            return input_error("general matrix data requires matrix_fields and matrix_columns");
+        };
+        let input = GeneralXyInput::Matrix {
+            ids,
+            fields,
+            columns,
         };
         match self.engine.upsert_general_xy_dataset_styled(
             dataset,
@@ -4264,6 +4778,38 @@ mod tests {
         assert_eq!(parse_ids(r#"[1,"row"]"#).unwrap().unwrap().len(), 2);
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!([0.0, 1.0]))).is_some());
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!(["bad", 1.0]))).is_none());
+    }
+
+    #[cfg(not(feature = "complete"))]
+    #[test]
+    fn standard_build_rejects_stats_options_kinds_and_matrix_proposals() {
+        let dataset = GeneralDatasetId::from_raw(1).unwrap();
+        let parse = |json: &str| serde_json::from_str::<SeriesInput>(json).unwrap();
+        let options = r#"{"pane":0,"x_axis_id":"x","y_axis_id":"y"}"#;
+        assert!(
+            series_options_from_input(GeneralSeriesKind::Column, dataset, parse(options)).is_ok()
+        );
+        let with_stats = r#"{"pane":0,"x_axis_id":"x","y_axis_id":"y","stats":{"jitter":0.5}}"#;
+        for kind in [GeneralSeriesKind::Column, GeneralSeriesKind::Violin] {
+            let error = series_options_from_input(kind, dataset, parse(with_stats)).unwrap_err();
+            assert_eq!(
+                error.code(),
+                aeris_charts_engine::ErrorCode::UnsupportedOperation
+            );
+        }
+        let error =
+            series_options_from_input(GeneralSeriesKind::ScatterMatrix, dataset, parse(options))
+                .unwrap_err();
+        assert!(error.message().contains("complete build"));
+
+        let proposal: SeriesProposalInput = serde_json::from_str(
+            r#"{"kind":"parallel_coordinates","x_axis_id":"x","y_axis_id":"y",
+                "columns":{"matrix_fields":["a"],"matrix_columns":[[1.0]]}}"#,
+        )
+        .unwrap();
+        let error = proposal_series(proposal).unwrap_err();
+        assert!(error.contains("\"unsupported_operation\""));
+        assert!(error.contains("complete build"));
     }
 
     #[test]

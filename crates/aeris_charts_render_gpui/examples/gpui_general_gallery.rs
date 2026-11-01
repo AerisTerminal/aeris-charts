@@ -62,6 +62,10 @@ struct Example {
     layout_series: Vec<LayoutSpec>,
     #[serde(default)]
     references: Vec<Map<String, Value>>,
+    /// Statistics families ship only in the complete build; this gallery links the standard
+    /// engine, so it lists those entries as skipped instead of painting them.
+    #[serde(default)]
+    complete_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -137,6 +141,9 @@ struct SeriesSpec {
     waterfall: Option<GeneralWaterfallOptions>,
     end_labels: Option<String>,
     rank: Option<String>,
+    /// Statistics tuning; complete-only examples are skipped before this is read.
+    #[serde(rename = "stats")]
+    _stats: Option<Value>,
 }
 
 /// Browser `general_histogram_options`; omitted fields keep the engine defaults.
@@ -651,6 +658,18 @@ fn series_options(
         Kind::Histogram => GeneralSeriesOptions::histogram(0, dataset, x, y),
         Kind::Waterfall => GeneralSeriesOptions::waterfall(0, dataset, x, y),
         Kind::Bullet => GeneralSeriesOptions::bullet(0, dataset, x, y),
+        Kind::Violin => GeneralSeriesOptions::violin(0, dataset, x, y),
+        Kind::DensityCurve => GeneralSeriesOptions::density_curve(0, dataset, x, y),
+        Kind::Ridgeline => GeneralSeriesOptions::ridgeline(0, dataset, x, y),
+        Kind::StripPlot => GeneralSeriesOptions::strip_plot(0, dataset, x, y),
+        Kind::Beeswarm => GeneralSeriesOptions::beeswarm(0, dataset, x, y),
+        Kind::DotPlot => GeneralSeriesOptions::dot_plot(0, dataset, x, y),
+        Kind::Ecdf => GeneralSeriesOptions::ecdf(0, dataset, x, y),
+        Kind::QqPlot => GeneralSeriesOptions::qq_plot(0, dataset, x, y),
+        Kind::Hexbin => GeneralSeriesOptions::hexbin(0, dataset, x, y),
+        Kind::Contour => GeneralSeriesOptions::contour(0, dataset, x, y),
+        Kind::ParallelCoordinates => GeneralSeriesOptions::parallel_coordinates(0, dataset, x, y),
+        Kind::ScatterMatrix => GeneralSeriesOptions::scatter_matrix(0, dataset, x, y),
     };
     // Browser defaults: options the host omits take these values in `add_series`.
     options.visible = spec.visible.unwrap_or(true);
@@ -1003,6 +1022,15 @@ impl Gallery {
         let cards = catalog
             .examples
             .iter()
+            .filter(|example| {
+                if example.complete_only {
+                    eprintln!(
+                        "gpui_general_gallery: skipping `{}` (complete-build statistics family)",
+                        example.id
+                    );
+                }
+                !example.complete_only
+            })
             .map(|example| cx.new(|_| ChartCard::new(example)))
             .collect();
         Self { cards }

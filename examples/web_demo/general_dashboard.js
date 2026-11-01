@@ -1,4 +1,4 @@
-import { create_chart } from "./dist/aeris_charts_financial.js";
+import { build_variant, create_chart } from "./dist/aeris_charts_financial.js";
 
 let dashboard_root = null;
 let chart_grid = null;
@@ -18,6 +18,7 @@ function create_card(example, index) {
   card.dataset.category = example.category;
   card.dataset.chartIndex = String(index);
   card.setAttribute("aria-label", example.title);
+  if (example.complete_only === true) card.dataset.completeOnly = "true";
   const host = document.createElement("div");
   host.className = "general-chart-host";
   host.setAttribute("role", "group");
@@ -26,7 +27,17 @@ function create_card(example, index) {
   return card;
 }
 
+/** The statistics catalog entries exist only in the complete build; `null` skips the card. */
+function complete_build_active() {
+  try {
+    return build_variant() === "complete";
+  } catch {
+    return null; // engine not initialized yet; the post-create check below decides
+  }
+}
+
 async function mount_example(example, card) {
+  if (example.complete_only === true && complete_build_active() === false) return null;
   const host = card.querySelector(".general-chart-host");
   const grid = example.grid !== false;
   const chart = await create_chart(host, {
@@ -54,6 +65,10 @@ async function mount_example(example, card) {
     },
     kinetic_scroll: false,
   });
+  if (example.complete_only === true && complete_build_active() === false) {
+    chart.remove();
+    return null;
+  }
   const pane = chart.panes()[0];
   const pane_index = pane.pane_index();
   for (const axis of example.axes ?? []) chart.add_axis({ ...axis, pane: pane_index });
@@ -115,11 +130,15 @@ function update_error_status() {
 }
 
 async function mount_state(state) {
-  if (!dashboard_active || !state.desired || state.entry !== null || state.mounting !== null || state.failed || state.card.hidden) return;
+  if (!dashboard_active || !state.desired || state.entry !== null || state.mounting !== null || state.failed || state.skipped || state.card.hidden) return;
   state.mounting = mount_example(state.example, state.card);
   try {
     const entry = await state.mounting;
-    if (!dashboard_active || !state.desired || state.card.hidden) {
+    if (entry === null) {
+      // Complete-build-only example on the standard build: keep the card, skip the chart.
+      state.skipped = true;
+      state.card.dataset.mounted = "complete-only";
+    } else if (!dashboard_active || !state.desired || state.card.hidden) {
       entry.dispose();
       state.card.dataset.mounted = "false";
     } else {
@@ -144,7 +163,7 @@ async function mount_state(state) {
 function reconcile_active_charts() {
   if (!dashboard_active) return;
   for (const state of states) {
-    if (state.card.hidden || state.failed) {
+    if (state.card.hidden || state.failed || state.skipped) {
       state.desired = false;
       unmount_state(state);
     } else if (state.visible) {
@@ -221,6 +240,7 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
       entry: null,
       mounting: null,
       failed: false,
+      skipped: false,
       visible: false,
       desired: false,
       index,

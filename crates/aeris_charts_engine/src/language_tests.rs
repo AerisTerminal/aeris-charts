@@ -137,3 +137,14 @@ fn restored_indicator_titles_follow_the_target_charts_language() {
         "Моментум 10"
     );
 }
+
+#[cfg(feature = "complete")]
+#[test]
+fn statistics_sample_counts_follow_language_plural_rules() {
+    use crate::text::samples_count;
+    assert_eq!(samples_count(ChartLanguage::English, 1), "1 sample");
+    assert_eq!(samples_count(ChartLanguage::English, 3), "3 samples");
+    assert_eq!(samples_count(ChartLanguage::Russian, 21), "21 наблюдение");
+    assert_eq!(samples_count(ChartLanguage::Russian, 3), "3 наблюдения");
+    assert_eq!(samples_count(ChartLanguage::Russian, 12), "12 наблюдений");
+}

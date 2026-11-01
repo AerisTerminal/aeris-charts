@@ -3490,8 +3490,22 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
   loseAfterInstall = false) {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   return page.evaluate(async ({ requestedBackend, onlyId, loseWebGpu, loseAfterInstall }) => {
-    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const { create_chart, build_variant } = await import("/dist/aeris_charts_financial.js");
     const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const loaded_variant = async () => {
+      try {
+        return build_variant();
+      } catch {
+        // The module initializes on first chart creation.
+        const probe = document.createElement("div");
+        document.body.appendChild(probe);
+        (await create_chart(probe, { backend: "canvas2d", autoSize: false })).remove();
+        probe.remove();
+        return build_variant();
+      }
+    };
+    // Complete-only cards are absent from the standard build, exactly as the gallery hides them.
+    const complete = (await loaded_variant()) === "complete";
     // Charts created after a loss get a recreated shared device, so each chart under test loses
     // its own device to exercise the Canvas2D fallback path.
     const lose_device = (target, label, force = false) => {
@@ -3506,8 +3520,8 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
     const catalog = await (await fetch("/general_catalog.json")).json();
     await document.fonts.ready;
     const results = [];
-    for (const example of catalog.examples.filter((entry) => onlyId === null || (Array.isArray(onlyId)
-      ? onlyId.includes(entry.id) : entry.id === onlyId))) {
+    for (const example of catalog.examples.filter((entry) => (complete || entry.complete_only !== true)
+      && (onlyId === null || (Array.isArray(onlyId) ? onlyId.includes(entry.id) : entry.id === onlyId)))) {
       const host = document.createElement("div");
       host.style.cssText = "position:fixed;left:0;top:0;width:360px;height:220px;z-index:10000";
       document.body.appendChild(host);
@@ -3611,8 +3625,15 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
   }, { requestedBackend: backend, onlyId, loseWebGpu, loseAfterInstall });
 }
 
+const COMPLETE_ONLY_KINDS = [
+  "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot", "ecdf", "qq_plot",
+  "hexbin", "contour", "parallel_coordinates", "scatter_matrix",
+];
+const is_complete_project = (test_info) => test_info.project.name === "chromium-complete";
+const catalog_count = (test_info) => (is_complete_project(test_info) ? 69 : 56);
+
 for (const backend of ["canvas2d", "webgpu"]) {
-  test(`all catalog families export and dispose through ${backend}`, async ({ page, browserName }) => {
+  test(`all catalog families export and dispose through ${backend}`, async ({ page, browserName }, test_info) => {
     test.skip(backend === "webgpu" && browserName !== "chromium",
       "WebGPU test adapter is configured in Chromium");
     test.setTimeout(120_000);
@@ -3621,12 +3642,13 @@ for (const backend of ["canvas2d", "webgpu"]) {
     const results = await audit_catalog_exports(page, backend);
     await page.waitForTimeout(50);
     expect(errors).toEqual([]);
-    expect(results).toHaveLength(56);
+    expect(results).toHaveLength(catalog_count(test_info));
     expect(new Set(results.flatMap((entry) => entry.kinds))).toEqual(new Set([
       "xy_line", "xy_area", "range_area", "range_bar", "error_bar", "column",
       "histogram", "horizontal_bar", "box_plot", "heatmap_grid", "scatter", "bubble",
       "pie", "radar", "polar_area", "radial_bar", "funnel", "treemap", "sankey", "sunburst",
       "gantt", "calendar_heatmap", "marimekko", "waterfall", "bullet",
+      ...(is_complete_project(test_info) ? COMPLETE_ONLY_KINDS : []),
     ]));
     expect(results.filter((entry) => !entry.restoredSame).map((entry) => entry.id)).toEqual([]);
     for (const entry of results) {
@@ -3638,14 +3660,14 @@ for (const backend of ["canvas2d", "webgpu"]) {
 }
 
 
-test("all catalog families keep their live image and accept updates across WebGPU loss", async ({ page, browserName }) => {
+test("all catalog families keep their live image and accept updates across WebGPU loss", async ({ page, browserName }, test_info) => {
   test.skip(browserName !== "chromium", "WebGPU test adapter is configured in Chromium");
   test.setTimeout(180_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const results = await audit_catalog_exports(page, "webgpu", null, false, true);
   expect(errors).toEqual([]);
-  expect(results).toHaveLength(56);
+  expect(results).toHaveLength(catalog_count(test_info));
   const failed = (key) => results.filter((entry) => !entry.recovery?.[key]).map((entry) => entry.id);
   expect(failed("lostSame"), "export before and after loss must be byte-identical").toEqual([]);
   expect(failed("hiddenChanged"), "a post-loss visibility update must repaint").toEqual([]);
@@ -3656,14 +3678,14 @@ test("all catalog families keep their live image and accept updates across WebGP
   }
 });
 
-test("all catalog families restore and dispose after WebGPU device loss", async ({ page, browserName }) => {
+test("all catalog families restore and dispose after WebGPU device loss", async ({ page, browserName }, test_info) => {
   test.skip(browserName !== "chromium", "WebGPU test adapter is configured in Chromium");
   test.setTimeout(120_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const results = await audit_catalog_exports(page, "webgpu", null, true);
   expect(errors).toEqual([]);
-  expect(results).toHaveLength(56);
+  expect(results).toHaveLength(catalog_count(test_info));
   expect(results.filter((entry) => !entry.restoredSame || !entry.restoredStateSame).map((entry) => entry.id)).toEqual([]);
   for (const entry of results) {
     expect(entry, entry.id).toMatchObject({ backend: "canvas2d", changed: true,

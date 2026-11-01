@@ -1224,6 +1224,9 @@ test("general dashboard showcases every catalog example", async ({ page, browser
     "box_plot", "heatmap_grid", "scatter", "bubble", "pie", "radar", "polar_area", "radial_bar",
     "waterfall", "bullet",
     "funnel", "treemap", "sankey", "sunburst", "gantt", "calendar_heatmap", "marimekko",
+    // Complete-build statistics families; the standard build lists these cards but skips mounting them.
+    "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot",
+    "ecdf", "qq_plot", "hexbin", "contour", "parallel_coordinates", "scatter_matrix",
   ]));
 
   const first_host = page.locator("#general_workspace .general-chart-host").first();
@@ -1239,7 +1242,9 @@ test("general dashboard showcases every catalog example", async ({ page, browser
   await page.getByRole("button", { name: "All" }).click();
   await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(total);
   const first_card = page.locator("#general_workspace .general-chart-card").first();
-  const last = page.locator("#general_workspace .general-chart-card").last();
+  // Complete-only statistics cards report data-mounted="complete-only" on the standard build;
+  // the scroll assertion targets the last card that this build actually mounts.
+  const last = page.locator("#general_workspace .general-chart-card:not([data-complete-only=\"true\"])").last();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toHaveAttribute("data-mounted", "true");
   await page.waitForTimeout(500);
@@ -2271,7 +2276,7 @@ test("general dashboard keeps rendering when WebGPU has no adapter and does not 
     backend === "canvas2d" && backend_status.reason === "adapter_unavailable")).toBe(true);
   expect(before.badge).toContain("WebGPU fallback (adapter_unavailable)");
 
-  const last = page.locator("#general_workspace .general-chart-card").last();
+  const last = page.locator("#general_workspace .general-chart-card:not([data-complete-only=\"true\"])").last();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toHaveAttribute("data-mounted", "true");
   expect(await page.evaluate(() => window.__adapter_requests)).toBe(before.requests);

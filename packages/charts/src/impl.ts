@@ -20,7 +20,9 @@ import {
 } from "./accessibility.js";
 import { AerisChartsError } from "./errors.js";
 import type { AerisChartsErrorCode } from "./errors.js";
-import { record_loaded_build, require_family_in_build } from "./build_variant.js";
+import {
+  build_variant, COMPLETE_BUILD_ENTRY, record_loaded_build, require_family_in_build,
+} from "./build_variant.js";
 import type {
   alert_api, alert_condition, alert_frequency, alert_line, alert_price_scale, alert_snapshot,
   crosshair_action_request, crosshair_action_request_handler,
@@ -35,7 +37,7 @@ import type {
   general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   layout_accessibility_snapshot, layout_hit, layout_input, layout_series_api, layout_series_kind, layout_series_options,
   box_plot_row, bubble_columns, bubble_row, bullet_row, category_box_columns, category_bullet_columns, category_waterfall_columns, waterfall_row, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
-  error_bar_row, heatmap_grid_row, histogram_columns, histogram_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
+  error_bar_row, general_matrix_columns, heatmap_grid_row, histogram_columns, histogram_row, matrix_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, indicator_input_source, indicator_kind, indicator_output_style, indicator_schema, kinetic_scroll_options, pivot_kind, vwap_reset,
   last_value_data, localization_options, logical_range,
@@ -80,6 +82,19 @@ let init_promise: Promise<unknown> | null = null;
 const DRAWING_KIND_FROM_U8: ReadonlyMap<number, drawing_kind> = new Map(
   (Object.entries(DRAWING_KIND_TO_U8) as [drawing_kind, number][]).map(([kind, wire]) => [wire, kind]),
 );
+
+/**
+ * Throw `complete_build_required` when general series options carry statistics options and the
+ * standard build is loaded; only the complete build's statistics families read them.
+ */
+function require_options_in_build(options: { readonly stats?: unknown } | undefined): void {
+  if (options?.stats === undefined || build_variant() === "complete") return;
+  throw new AerisChartsError(
+    "complete_build_required",
+    `statistics options are only in the complete build; import from "${COMPLETE_BUILD_ENTRY}" `
+      + `(React: "${COMPLETE_BUILD_ENTRY}/react") instead of "@aeristerminal/aeris-charts"`,
+  );
+}
 
 type persistence_error_result = {
   ok: false;
@@ -490,8 +505,12 @@ type packed_temporal_heatmap_columns = Omit<temporal_heatmap_columns, "ids"> & {
 type packed_histogram_columns = Omit<histogram_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
+type packed_matrix_columns = Omit<general_matrix_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
 type general_columns_input =
   | packed_histogram_columns
+  | packed_matrix_columns
   | packed_numeric_xy_columns
   | packed_bubble_columns
   | packed_numeric_range_columns
@@ -570,12 +589,41 @@ function pack_histogram_rows(data: readonly histogram_row[]): packed_histogram_c
   return { ids, values, values_valid };
 }
 
+function pack_matrix_rows(data: readonly matrix_row[]): packed_matrix_columns {
+  const ids = data.some((row) => row.id !== undefined) ? data.map((row) => row.id ?? null) : undefined;
+  const fields: string[] = [];
+  for (const row of data) {
+    for (const key of Object.keys(row)) {
+      if (key !== "id" && !fields.includes(key)) fields.push(key);
+    }
+  }
+  if (fields.length === 0) {
+    throw new AerisChartsError("invalid_data", "matrix rows require at least one numeric field");
+  }
+  const columns = fields.map(() => new Array<number>(data.length));
+  for (const [index, row] of data.entries()) {
+    for (const [field_index, field] of fields.entries()) {
+      const value = row[field];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new AerisChartsError("invalid_data", `matrix field "${field}" must be a finite number on every row`);
+      }
+      columns[field_index]![index] = value;
+    }
+  }
+  return { ids, matrix_fields: fields, matrix_columns: columns };
+}
+
 function pack_general_rows(
   kind: general_series_kind,
-  rows: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[],
+  rows: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[],
   x_scale?: general_axis_options["scale"],
 ): general_columns_input {
-  if (kind === "histogram") return pack_histogram_rows(rows as readonly histogram_row[]);
+  if (kind === "histogram" || kind === "density_curve" || kind === "ecdf" || kind === "qq_plot") {
+    return pack_histogram_rows(rows as readonly histogram_row[]);
+  }
+  if (kind === "parallel_coordinates" || kind === "scatter_matrix") {
+    return pack_matrix_rows(rows as readonly matrix_row[]);
+  }
   const data = rows as readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row)[];
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
@@ -765,8 +813,11 @@ function pack_general_rows(
   }
   const x_mode = kind === "scatter"
     || kind === "bubble"
+    || kind === "hexbin"
+    || kind === "contour"
     ? "numeric"
       : kind === "column" || kind === "horizontal_bar" || kind === "pie" || kind === "radar" || kind === "polar_area" || kind === "radial_bar"
+      || kind === "violin" || kind === "ridgeline" || kind === "strip_plot" || kind === "beeswarm" || kind === "dot_plot"
       ? "category"
       : x_scale === "temporal"
         ? "temporal"
@@ -1037,7 +1088,7 @@ function complete_bullet_columns(columns: packed_category_bullet_columns): {
 
 function proposal_columns(
   kind: general_series_kind,
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[],
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[],
   x_scale: general_axis_options["scale"],
 ): Record<string, unknown> {
   const packed = pack_general_rows(kind, data, x_scale) as unknown as Record<string, unknown>;
@@ -1354,6 +1405,7 @@ class general_series_impl implements general_series_api {
   }
 
   apply_options(patch: Partial<general_series_options>): void {
+    require_options_in_build(patch);
     const current = this.options();
     const options = {
       ...current,
@@ -1379,15 +1431,15 @@ class general_series_impl implements general_series_api {
     this.chart.repaint();
   }
 
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[]): void {
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[]): void {
     this.install_data(pack_general_rows(this.kind, data, this.x_scale()));
   }
 
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void {
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns | general_matrix_columns): void {
     this.install_data(columns);
   }
 
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[], options: general_update_options = {}): void {
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[], options: general_update_options = {}): void {
     if (data.some((row) => row.id === undefined)) {
       throw new AerisChartsError("invalid_data", "general incremental updates require explicit row IDs");
     }
@@ -1395,7 +1447,7 @@ class general_series_impl implements general_series_api {
   }
 
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns | general_matrix_columns,
     options: general_update_options = {},
   ): void {
     this.upsert_data(columns, options);
@@ -1437,8 +1489,20 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
-    if ((this.kind === "histogram") !== ("values" in columns)) {
-      throw new AerisChartsError("invalid_data", "only histogram series accept histogram sample columns");
+    const values_kind = this.kind === "histogram" || this.kind === "density_curve" || this.kind === "ecdf" || this.kind === "qq_plot";
+    if (values_kind !== ("values" in columns)) {
+      throw new AerisChartsError("invalid_data", "only histogram and value statistics series accept sample columns");
+    }
+    const matrix_kind = this.kind === "parallel_coordinates" || this.kind === "scatter_matrix";
+    if (matrix_kind !== ("matrix_fields" in columns)) {
+      throw new AerisChartsError("invalid_data", "only parallel_coordinates and scatter_matrix series accept matrix columns");
+    }
+    const category_stats_kind = this.kind === "violin" || this.kind === "ridgeline" || this.kind === "strip_plot" || this.kind === "beeswarm" || this.kind === "dot_plot";
+    if (category_stats_kind && !("category_indices" in columns)) {
+      throw new AerisChartsError("invalid_data", `${this.kind} requires category/value columns`);
+    }
+    if ((this.kind === "hexbin" || this.kind === "contour") && !("x" in columns)) {
+      throw new AerisChartsError("invalid_data", `${this.kind} requires numeric XY columns`);
     }
     this.chart.prepare_general_transition_update();
     let result: string;
@@ -1448,6 +1512,13 @@ class general_series_impl implements general_series_api {
         `{"ids":${general_ids_json(columns.ids, columns.values.length) || "null"}}`,
         columns.values,
         columns.values_valid,
+        max_rows ?? 0,
+      );
+    } else if ("matrix_fields" in columns) {
+      result = this.chart.wasm.upsert_general_matrix_data_json(
+        this.dataset,
+        general_value_metadata_json(columns, columns.matrix_columns[0]?.length ?? 0),
+        JSON.stringify({ matrix_fields: columns.matrix_fields, matrix_columns: columns.matrix_columns }),
         max_rows ?? 0,
       );
     } else if ("value" in columns) {
@@ -1653,8 +1724,20 @@ class general_series_impl implements general_series_api {
     if (this.kind === "heatmap_grid" && !("value" in columns)) {
       throw new AerisChartsError("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
-    if ((this.kind === "histogram") !== ("values" in columns)) {
-      throw new AerisChartsError("invalid_data", "only histogram series accept histogram sample columns");
+    const values_kind = this.kind === "histogram" || this.kind === "density_curve" || this.kind === "ecdf" || this.kind === "qq_plot";
+    if (values_kind !== ("values" in columns)) {
+      throw new AerisChartsError("invalid_data", "only histogram and value statistics series accept sample columns");
+    }
+    const matrix_kind = this.kind === "parallel_coordinates" || this.kind === "scatter_matrix";
+    if (matrix_kind !== ("matrix_fields" in columns)) {
+      throw new AerisChartsError("invalid_data", "only parallel_coordinates and scatter_matrix series accept matrix columns");
+    }
+    const category_stats_kind = this.kind === "violin" || this.kind === "ridgeline" || this.kind === "strip_plot" || this.kind === "beeswarm" || this.kind === "dot_plot";
+    if (category_stats_kind && !("category_indices" in columns)) {
+      throw new AerisChartsError("invalid_data", `${this.kind} requires category/value columns`);
+    }
+    if ((this.kind === "hexbin" || this.kind === "contour") && !("x" in columns)) {
+      throw new AerisChartsError("invalid_data", `${this.kind} requires numeric XY columns`);
     }
     this.chart.prepare_general_transition_update();
     let result: string;
@@ -1664,6 +1747,12 @@ class general_series_impl implements general_series_api {
         `{"ids":${general_ids_json(columns.ids, columns.values.length) || "null"}}`,
         columns.values,
         columns.values_valid,
+      );
+    } else if ("matrix_fields" in columns) {
+      result = this.chart.wasm.set_general_matrix_data_json(
+        this.dataset,
+        general_value_metadata_json(columns, columns.matrix_columns[0]?.length ?? 0),
+        JSON.stringify({ matrix_fields: columns.matrix_fields, matrix_columns: columns.matrix_columns }),
       );
     } else if ("value" in columns) {
       if ("x_category_indices" in columns) {
@@ -5542,6 +5631,18 @@ export class chart_impl implements chart_api {
       || kind === "radial_bar"
       || kind === "waterfall"
       || kind === "bullet"
+      || kind === "violin"
+      || kind === "density_curve"
+      || kind === "ridgeline"
+      || kind === "strip_plot"
+      || kind === "beeswarm"
+      || kind === "dot_plot"
+      || kind === "ecdf"
+      || kind === "qq_plot"
+      || kind === "hexbin"
+      || kind === "contour"
+      || kind === "parallel_coordinates"
+      || kind === "scatter_matrix"
     ) {
       if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
         throw new AerisChartsError(
@@ -5549,6 +5650,7 @@ export class chart_impl implements chart_api {
           `${kind} requires pane, x_axis_id, and y_axis_id options`,
         );
       }
+      require_options_in_build(options as general_series_options);
       const created = parse_general_result<{ series: number; dataset: number }>(
         this.wasm.add_general_series_result_json(kind, JSON.stringify(options)),
       );
@@ -8208,7 +8310,7 @@ export class chart_impl implements chart_api {
     series: readonly {
       kind: general_series_kind;
       options: Omit<general_series_options, "pane"> & { pane?: number };
-      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[];
+      data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[];
     }[],
     references: readonly general_reference_options[],
   ): void {
@@ -8218,6 +8320,8 @@ export class chart_impl implements chart_api {
       pane,
       axes: proposed_axes,
       series: series.map((item) => {
+        require_family_in_build(item.kind);
+        require_options_in_build(item.options);
         const x_axis = axes_by_id.get(item.options.x_axis_id);
         if (x_axis === undefined) {
           throw new AerisChartsError("invalid_options", `general series axis "${item.options.x_axis_id}" does not exist`);
@@ -8255,6 +8359,8 @@ export class chart_impl implements chart_api {
       pane,
       axes,
       series: composition.series.map((item) => {
+        require_family_in_build(item.kind);
+        require_options_in_build(item.options);
         const x_axis = axes_by_id.get(item.options.x_axis_id);
         if (x_axis === undefined) {
           throw new AerisChartsError(

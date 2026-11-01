@@ -42,7 +42,10 @@ export type series_kind =
   | "custom";
 
 /** General series available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "histogram" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar" | "waterfall" | "bullet";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "histogram" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble" | "pie" | "radar" | "polar_area" | "radial_bar" | "waterfall" | "bullet" | general_stats_series_kind;
+
+/** Complete-build statistics families; absent from the standard build. */
+export type general_stats_series_kind = "violin" | "density_curve" | "ridgeline" | "strip_plot" | "beeswarm" | "dot_plot" | "ecdf" | "qq_plot" | "hexbin" | "contour" | "parallel_coordinates" | "scatter_matrix";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -153,6 +156,15 @@ export interface heatmap_grid_row {
 export interface histogram_row {
   id?: general_row_id;
   value: number | null;
+}
+
+/**
+ * One parallel_coordinates/scatter_matrix record: every non-`id` key is a numeric axis/field.
+ * All rows must carry a finite number for every field; field order follows first appearance.
+ */
+export interface matrix_row {
+  id?: general_row_id;
+  [field: string]: number | string | undefined;
 }
 
 export interface numeric_xy_columns {
@@ -316,6 +328,13 @@ export interface histogram_columns {
   ids?: readonly general_row_id[];
   values: Float64Array;
   values_valid?: Uint8Array;
+}
+
+/** Parallel coordinates / scatter-matrix columns: one equal-length column per field. */
+export interface general_matrix_columns {
+  ids?: readonly general_row_id[];
+  matrix_fields: readonly string[];
+  matrix_columns: readonly (readonly number[])[];
 }
 
 export interface category_heatmap_columns {
@@ -645,6 +664,12 @@ export interface general_series_options {
   /** Engine-side binning for `histogram` series; other kinds reject non-default values. */
   histogram?: general_histogram_options;
   /**
+   * Statistics tuning for the complete-build statistics families (violin, density_curve,
+   * ridgeline, strip_plot, beeswarm, dot_plot, ecdf, qq_plot, hexbin, contour,
+   * parallel_coordinates, scatter_matrix); other kinds reject non-default values.
+   */
+  stats?: general_stats_options;
+  /**
    * Bar mark shape (default `bar`). `lollipop` draws a stem from the baseline with a point
    * symbol at the value on unstacked `column`/`horizontal_bar` series; `dumbbell` draws point
    * symbols at both ends of a `range_bar` joined by a connector. `point_symbol` and
@@ -692,7 +717,16 @@ export type general_row_detail =
     comparative: number | null;
     bands: readonly [number | null, number | null, number | null];
   }
-  | { type: "rank"; rank: number };
+  | { type: "rank"; rank: number }
+  | {
+    type: "stats";
+    /** Sample count backing the synthetic mark (bin, cell, band, or level). */
+    count: number;
+    /** Sample minimum; NaN when the mark carries no range (hexbin cell minimum is unset). */
+    min: number;
+    /** Sample maximum, or the cell count for hexbin marks. */
+    max: number;
+  };
 
 export interface general_histogram_options {
   /**
@@ -706,6 +740,41 @@ export interface general_histogram_options {
   normalization?: "count" | "percent" | "density";
   /** Running totals from the left; cumulative density is the empirical CDF ending at one. */
   cumulative?: boolean;
+}
+
+/**
+ * Engine-side statistics for the complete-build families. Fields apply per kind as documented;
+ * the rest are ignored. Non-default values on a non-statistics series are rejected.
+ */
+export interface general_stats_options {
+  /** KDE kernel (violin, density_curve, ridgeline, contour smoothing); default `gaussian`. */
+  kernel?: "gaussian" | "epanechnikov";
+  /** KDE bandwidth rule, or an explicit positive bandwidth; default `scott`. */
+  bandwidth?: "scott" | "silverman" | number;
+  /** KDE grid resolution: curve points per series or category, contour nodes per axis. `0` uses 64; otherwise 8..256 (contour clamps to 96). */
+  grid?: number;
+  /** Violin center overlay (default `quartiles`). */
+  violin_overlay?: "none" | "quartiles" | "box";
+  /** Violin slot half; one `left` and one `right` series form a split violin (default `full`). */
+  violin_side?: "full" | "left" | "right";
+  /** Density curve: fill the area under the curve (default true) or draw the line only. */
+  area?: boolean;
+  /** Ridgeline ridge height as a multiple of the band height, 0.25..8; values above 1 overlap upward. */
+  overlap?: number;
+  /** Strip-plot jitter extent as a fraction of the slot, 0..1 (default 0.8). */
+  jitter?: number;
+  /** Q-Q theoretical distribution (normal only). */
+  qq_distribution?: "normal";
+  /** Contour band count; `0` picks 8 automatic levels of the grid maximum. */
+  thresholds?: number;
+  /** Contour: paint filled bands (default true). */
+  contour_fill?: boolean;
+  /** Contour: paint iso-lines (default true). */
+  contour_lines?: boolean;
+  /** Contour: smooth counts with a 2D KDE (default true) or use raw 2D bin counts. */
+  smooth?: boolean;
+  /** Hexbin hexagon circumradius in CSS px; `0` picks a radius that keeps the grid within 64 columns. Explicit values must be 4..128. */
+  hexbin_radius?: number;
 }
 
 /** Presentation-only subset retained for callers that do not need compatible axis rebinding. */
@@ -845,13 +914,13 @@ export interface general_series_api {
   /** Mutate presentation and compatible pane/axis bindings while retaining identity and data. */
   apply_options(options: Partial<general_series_options>): void;
   set_visible(visible: boolean): void;
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[]): void;
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns): void;
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[]): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns | general_matrix_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[], options?: general_update_options): void;
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_waterfall_columns | category_bullet_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns | histogram_columns | general_matrix_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;
@@ -3045,6 +3114,23 @@ export interface chart_state_v2 {
       normalization: "Count" | "Percent" | "Density";
       cumulative: boolean;
     };
+    /** Absent in documents written before the statistics families. */
+    stats?: {
+      kernel: "Gaussian" | "Epanechnikov";
+      bandwidth: "Scott" | "Silverman" | { Explicit: number };
+      grid: number;
+      violin_overlay: "None" | "Quartiles" | "Box";
+      violin_side: "Full" | "Left" | "Right";
+      area: boolean;
+      overlap: number;
+      jitter: number;
+      qq_distribution: "Normal";
+      thresholds: number;
+      contour_fill: boolean;
+      contour_lines: boolean;
+      smooth: boolean;
+      hexbin_radius: number;
+    };
     /** Absent in documents written before waterfall, bullet, lollipop, slope, and bump options. */
     bar_mark?: "Bar" | "Lollipop" | "Dumbbell";
     waterfall?: {
@@ -3589,7 +3675,7 @@ export interface general_pane_series_composition {
   key: string;
   kind: general_series_kind;
   options: Omit<general_series_options, "pane"> & { pane?: number };
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row)[];
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | waterfall_row | bullet_row | heatmap_grid_row | histogram_row | matrix_row)[];
   current?: general_series_api;
 }
 

@@ -23,6 +23,9 @@ pub enum GeneralXKind {
     Category,
     /// Unordered one-dimensional samples with no X coordinate, binned by histogram series.
     Values,
+    /// Multiple aligned numeric columns (matrix data for parallel coordinates and scatter
+    /// matrices); the columns live outside the X/Y channels.
+    Matrix,
 }
 
 /// Explicit row identity accepted by the general-data boundary.
@@ -248,7 +251,42 @@ pub enum GeneralXyInput {
         values: Vec<f64>,
         values_valid: Option<Vec<u8>>,
     },
+    /// Multiple aligned numeric columns for matrix series (parallel coordinates and scatter
+    /// matrices). Every column must be finite and share the row count; there are no missing
+    /// values. Field names are nonempty, unique, and at most 128 bytes.
+    ///
+    /// The standard build keeps the variant so it can reject matrix data with the typed
+    /// complete-build error, but skips its serde field code: a persisted matrix dataset
+    /// deserializes as an empty matrix that validation then rejects.
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_matrix_fields")
+    )]
+    Matrix {
+        ids: Option<Vec<GeneralRowId>>,
+        fields: Vec<String>,
+        columns: Vec<Vec<f64>>,
+    },
 }
+
+#[cfg(not(feature = "complete"))]
+type MatrixFields = (Option<Vec<GeneralRowId>>, Vec<String>, Vec<Vec<f64>>);
+
+#[cfg(not(feature = "complete"))]
+fn skip_matrix_fields<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<MatrixFields, D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer)?;
+    Ok((None, Vec::new(), Vec::new()))
+}
+
+/// Field-count and row bounds of a matrix dataset (complete-build statistics families).
+#[cfg(feature = "complete")]
+pub const MAX_GENERAL_MATRIX_FIELDS: usize = 8;
+#[cfg(feature = "complete")]
+pub const MAX_GENERAL_MATRIX_ROWS: usize = 512;
+#[cfg(feature = "complete")]
+pub const MAX_GENERAL_MATRIX_FIELD_BYTES: usize = 128;
 
 /// Role of one waterfall row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -305,6 +343,13 @@ enum GeneralXColumn {
     },
     /// Sample-only rows; the samples live in the Y column.
     Values,
+    /// Matrix dataset fields and their row-aligned columns (`columns[f][row]`); column 0 is
+    /// mirrored into the Y column for row bookkeeping.
+    #[cfg(feature = "complete")]
+    Matrix {
+        fields: Vec<String>,
+        columns: Vec<Vec<f64>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -506,6 +551,8 @@ impl GeneralDataset {
             GeneralXColumn::Temporal(_) => GeneralXKind::Temporal,
             GeneralXColumn::Category { .. } => GeneralXKind::Category,
             GeneralXColumn::Values => GeneralXKind::Values,
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { .. } => GeneralXKind::Matrix,
         }
     }
 
@@ -671,6 +718,33 @@ impl GeneralDataset {
         self.heatmap_y_category_indices.as_deref()
     }
 
+    /// Field names of a matrix dataset (parallel coordinates, scatter matrices).
+    #[cfg(feature = "complete")]
+    pub fn matrix_fields(&self) -> Option<&[String]> {
+        match &self.x {
+            GeneralXColumn::Matrix { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
+
+    /// Columns of a matrix dataset; `columns[f][row]`, all finite and row-aligned.
+    #[cfg(feature = "complete")]
+    pub fn matrix_columns(&self) -> Option<&[Vec<f64>]> {
+        match &self.x {
+            GeneralXColumn::Matrix { columns, .. } => Some(columns),
+            _ => None,
+        }
+    }
+
+    /// One value of a matrix dataset by field and row.
+    #[cfg(feature = "complete")]
+    pub fn matrix_value(&self, field: usize, row: usize) -> Option<f64> {
+        self.matrix_columns()?
+            .get(field)
+            .and_then(|column| column.get(row))
+            .copied()
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         let identity_text = self
             .identities
@@ -692,6 +766,16 @@ impl GeneralDataset {
                     + indices.capacity() * std::mem::size_of::<u32>()
             }
             GeneralXColumn::Values => 0,
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { fields, columns } => {
+                fields.capacity() * std::mem::size_of::<String>()
+                    + fields.iter().map(String::capacity).sum::<usize>()
+                    + columns.capacity() * std::mem::size_of::<Vec<f64>>()
+                    + columns
+                        .iter()
+                        .map(|column| column.capacity() * std::mem::size_of::<f64>())
+                        .sum::<usize>()
+            }
         };
         self.identities.capacity() * std::mem::size_of::<GeneralRowIdentity>()
             + identity_text
@@ -886,6 +970,8 @@ impl GeneralDataset {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
             GeneralXColumn::Category { .. } | GeneralXColumn::Values => self.y[row],
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { .. } => self.y[row],
         };
         Some(Self {
             id: target.id,
@@ -1122,16 +1208,22 @@ impl GeneralDataset {
             GeneralXColumn::Category { .. } | GeneralXColumn::Values => {
                 source.map_or(0.0, |source| from.y[source])
             }
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { .. } => source.map_or(0.0, |source| from.y[source]),
         };
         let source_x = |row: usize| match &from.x {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
             GeneralXColumn::Category { .. } | GeneralXColumn::Values => from.y[row],
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { .. } => from.y[row],
         };
         let target_x = |row: usize| match &target.x {
             GeneralXColumn::Numeric(values) => values[row],
             GeneralXColumn::Temporal(values) => values[row] as f64,
             GeneralXColumn::Category { .. } | GeneralXColumn::Values => target.y[row],
+            #[cfg(feature = "complete")]
+            GeneralXColumn::Matrix { .. } => target.y[row],
         };
         if let (Some(current), Some(to)) = (self.x_low.as_mut(), target.x_low.as_ref()) {
             for (row, current) in current.iter_mut().enumerate() {
@@ -1344,6 +1436,7 @@ impl GeneralXyInput {
             | Self::BulletCategory { .. }
             | Self::HeatmapCategoryCategory { .. } => GeneralXKind::Category,
             Self::Values { .. } => GeneralXKind::Values,
+            Self::Matrix { .. } => GeneralXKind::Matrix,
         }
     }
 
@@ -1377,6 +1470,7 @@ impl GeneralXyInput {
             Self::RangeNumeric { high, .. }
             | Self::RangeTemporal { high, .. }
             | Self::RangeCategory { high, .. } => high,
+            Self::Matrix { columns, .. } => columns.first().map_or(&[], Vec::as_slice),
         }
     }
 
@@ -1402,6 +1496,7 @@ impl GeneralXyInput {
             Self::RangeNumeric { high_valid, .. }
             | Self::RangeTemporal { high_valid, .. }
             | Self::RangeCategory { high_valid, .. } => high_valid.as_deref(),
+            Self::Matrix { .. } => None,
         }
     }
 
@@ -2265,6 +2360,73 @@ impl GeneralXyInput {
                     heatmap_y_category_indices: None,
                 })
             }
+            #[cfg(not(feature = "complete"))]
+            Self::Matrix { .. } => Err(crate::complete_build_required("matrix datasets")),
+            #[cfg(feature = "complete")]
+            Self::Matrix {
+                ids,
+                fields,
+                columns,
+            } => {
+                if fields.is_empty() || fields.len() > MAX_GENERAL_MATRIX_FIELDS {
+                    return Err(resource(format!(
+                        "matrix datasets need 1..={MAX_GENERAL_MATRIX_FIELDS} fields"
+                    )));
+                }
+                if fields
+                    .iter()
+                    .any(|field| field.is_empty() || field.len() > MAX_GENERAL_MATRIX_FIELD_BYTES)
+                {
+                    return Err(invalid_data(format!(
+                        "matrix field names must be nonempty and at most {MAX_GENERAL_MATRIX_FIELD_BYTES} bytes"
+                    )));
+                }
+                if fields.iter().collect::<HashSet<_>>().len() != fields.len() {
+                    return Err(invalid_data("matrix field names must be unique"));
+                }
+                if columns.len() != fields.len() {
+                    return Err(invalid_data("matrix columns must match the field count"));
+                }
+                let row_count = columns.first().map_or(0, Vec::len);
+                validate_row_count(row_count)?;
+                if row_count > MAX_GENERAL_MATRIX_ROWS {
+                    return Err(resource(format!(
+                        "matrix datasets support at most {MAX_GENERAL_MATRIX_ROWS} rows"
+                    )));
+                }
+                if columns.iter().any(|column| column.len() != row_count) {
+                    return Err(invalid_data("matrix columns must stay row-aligned"));
+                }
+                if columns.iter().flatten().any(|value| !value.is_finite()) {
+                    return Err(invalid_data("matrix values must be finite"));
+                }
+                validate_common(
+                    row_count,
+                    ids.as_deref(),
+                    columns.first().map_or(&[], Vec::as_slice),
+                    None,
+                )?;
+                let y = columns.first().cloned().unwrap_or_default();
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Matrix { fields, columns },
+                    y,
+                    y_valid: None,
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
         }
     }
 }
@@ -2964,6 +3126,8 @@ impl GeneralDataStore {
                 GeneralXColumn::Temporal(_) => GeneralXKind::Temporal,
                 GeneralXColumn::Category { .. } => GeneralXKind::Category,
                 GeneralXColumn::Values => GeneralXKind::Values,
+                #[cfg(feature = "complete")]
+                GeneralXColumn::Matrix { .. } => GeneralXKind::Matrix,
             }
         {
             return Err(invalid_data(
@@ -2999,6 +3163,21 @@ impl GeneralDataStore {
         if dataset.heatmap_y_numeric.is_some() != validated.heatmap_y_numeric.is_some() {
             return Err(invalid_data(
                 "general incremental heatmap numeric-Y columns must match the dataset channel shape",
+            ));
+        }
+        #[cfg(feature = "complete")]
+        if let (
+            GeneralXColumn::Matrix {
+                columns: current, ..
+            },
+            GeneralXColumn::Matrix {
+                columns: incoming, ..
+            },
+        ) = (&dataset.x, &validated.x)
+            && current.len() != incoming.len()
+        {
+            return Err(invalid_data(
+                "general incremental matrix columns must match the dataset field count",
             ));
         }
         let existing: HashMap<GeneralRowId, usize> = dataset
@@ -3259,6 +3438,12 @@ impl GeneralDataStore {
                     GeneralXColumn::Temporal(values) => values.push(0),
                     GeneralXColumn::Category { indices, .. } => indices.push(0),
                     GeneralXColumn::Values => {}
+                    #[cfg(feature = "complete")]
+                    GeneralXColumn::Matrix { columns, .. } => {
+                        for column in columns.iter_mut() {
+                            column.push(0.0);
+                        }
+                    }
                 }
                 dataset.y.push(0.0);
                 if let Some(validity) = dataset.y_valid.as_mut() {
@@ -3320,6 +3505,19 @@ impl GeneralDataStore {
                     target[target_row] = category_remap[source[source_row] as usize];
                 }
                 (GeneralXColumn::Values, GeneralXColumn::Values) => {}
+                #[cfg(feature = "complete")]
+                (
+                    GeneralXColumn::Matrix {
+                        columns: target, ..
+                    },
+                    GeneralXColumn::Matrix {
+                        columns: source, ..
+                    },
+                ) => {
+                    for (target, source) in target.iter_mut().zip(source.iter()) {
+                        target[target_row] = source[source_row];
+                    }
+                }
                 _ => unreachable!("general X kinds were validated before mutation"),
             }
             if let (Some(target), Some(source)) = (
@@ -3431,6 +3629,12 @@ impl GeneralDataStore {
                         indices.drain(..trim);
                     }
                     GeneralXColumn::Values => {}
+                    #[cfg(feature = "complete")]
+                    GeneralXColumn::Matrix { columns, .. } => {
+                        for column in columns.iter_mut() {
+                            column.drain(..trim);
+                        }
+                    }
                 }
                 dataset.y.drain(..trim);
                 if let Some(validity) = dataset.y_valid.as_mut() {
@@ -3522,6 +3726,12 @@ impl GeneralDataStore {
                             indices.shrink_to(bounded_capacity)
                         }
                         GeneralXColumn::Values => {}
+                        #[cfg(feature = "complete")]
+                        GeneralXColumn::Matrix { columns, .. } => {
+                            for column in columns.iter_mut() {
+                                column.shrink_to(bounded_capacity);
+                            }
+                        }
                     }
                 }
             }

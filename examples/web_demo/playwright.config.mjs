@@ -50,9 +50,10 @@ export default defineConfig({
       name: "chromium",
       // Timing budgets and the native GPUI matrix remain machine evidence. Deterministic
       // browser/backend pixel comparisons run in the portable publication gate.
+      // g11_statistics needs the complete build; it runs in `chromium-complete`.
       testIgnore: portable_browser
-        ? /(engine_bench|gpui_webgpu_matrix|perf_gate)\.spec\.mjs/
-        : undefined,
+        ? /(engine_bench|gpui_webgpu_matrix|perf_gate|g11_statistics)\.spec\.mjs/
+        : /g11_statistics\.spec\.mjs/,
       grepInvert: portable_browser ? /@machine/ : undefined,
       use: chromium_webgpu,
     },
@@ -60,7 +61,7 @@ export default defineConfig({
       // The complete build (`@aeristerminal/aeris-charts/complete`) runs a representative slice of
       // the shared suite: families both builds contain must behave identically in it.
       name: "chromium-complete",
-      testMatch: /[\\/](build_variant|general_charts|g8_defaults|accessibility|license_attribution)\.spec\.mjs$/,
+      testMatch: /[\\/](build_variant|general_charts|g8_defaults|accessibility|license_attribution|g11_statistics)\.spec\.mjs$/,
       grepInvert: portable_browser ? /@machine/ : undefined,
       use: { ...chromium_webgpu, baseURL: `http://127.0.0.1:${complete_port}` },
     },

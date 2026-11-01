@@ -343,7 +343,20 @@ type general_series_kind =
   | "pie"
   | "radar"
   | "radial_bar"
-  | "polar_area";
+  | "polar_area"
+  // Complete build only (statistics families):
+  | "violin"
+  | "density_curve"
+  | "ridgeline"
+  | "strip_plot"
+  | "beeswarm"
+  | "dot_plot"
+  | "ecdf"
+  | "qq_plot"
+  | "hexbin"
+  | "contour"
+  | "parallel_coordinates"
+  | "scatter_matrix";
 ```
 
 `"histogram"` is the one general name that a financial series kind also uses. `add_series("histogram",
@@ -564,6 +577,8 @@ interface cartesian_series_options {
   end_labels?: "none" | "start" | "end" | "both";
   /** Bump-chart rank transform of an xy_line; defaults to null (plot values). */
   rank?: "dense" | "competition" | null;
+  /** Statistics-family tuning (complete build only; the standard build rejects it with `complete_build_required`); other kinds reject non-default values. */
+  stats?: general_stats_options;
   group_id?: string;
   stack_id?: string;
   stack_mode?: "normal" | "cumulative" | "silhouette" | "wiggle" | "percent" | "positive";
@@ -605,6 +620,66 @@ still applies. Use `null` for a missing row value. Line, scatter, bubble, box-pl
 and range data retain that row without drawing a mark; pass numeric zero explicitly when zero
 is the intended value.
 
+### Statistics families (complete build)
+
+Twelve statistics kinds ship only in the complete build (`@aeristerminal/aeris-charts/complete`);
+the standard build rejects them with `complete_build_required` before any engine state changes.
+The standard build rejects the `stats` options object and matrix data (`matrix_row` records and
+`general_matrix_columns`) the same way, its `options()` snapshots omit `stats`, and restoring V2
+state that contains a statistics series or matrix dataset fails with the same error:
+
+| Kind | Rows | Axes (X × Y) | Mark model |
+| --- | --- | --- | --- |
+| `violin` | category `{ x, y }` samples | band × linear | Per-category KDE silhouette; `violin_side: "left" \| "right"` on two series forms a split violin |
+| `density_curve` | `{ value }` samples | linear × linear | KDE curve over the sample range; `area: false` draws the line only |
+| `ridgeline` | category `{ x, y }` samples | linear × band | One KDE ridge per category on the band axis; `overlap` is the ridge height in band units |
+| `strip_plot` | category `{ x, y }` samples | band × linear | One point per sample, jittered within `jitter` of the slot |
+| `beeswarm` | category `{ x, y }` samples | band × linear | Deterministic non-overlapping point packing per category |
+| `dot_plot` | category `{ x, y }` samples | band × linear | Wilkinson dot plot: equal values stack into columns |
+| `ecdf` | `{ value }` samples | linear × linear | Empirical cumulative distribution step path, 0 to 1 |
+| `qq_plot` | `{ value }` samples | linear × linear | Sample quantiles against the theoretical (normal) distribution |
+| `hexbin` | numeric `{ x, y }` rows | linear × linear | d3-hexbin axial-offset hexagons with a count color ramp and legend |
+| `contour` | numeric `{ x, y }` rows | linear × linear | Marching-squares density bands and iso-lines over a KDE-smoothed grid |
+| `parallel_coordinates` | `matrix_row` records | linear × linear | One polyline per row across N per-field axes; engine brushing filters rows per axis |
+| `scatter_matrix` | `matrix_row` records | linear × linear | N×N small-multiples scatter grid with linked cross-cell selection |
+
+Matrix rows are plain records: every non-`id` key is a numeric field, field order follows first
+appearance, and every row must carry a finite number for every field (2..8 fields, at most 512
+rows). Typed bulk ingestion uses `general_matrix_columns` (`matrix_fields` plus one equal-length
+`matrix_columns` array per field); incremental `update_data` by row `id` is supported.
+
+All statistics options live under one optional `stats` object; fields apply per kind as the table
+notes and the rest are ignored. A patch replaces the whole `stats` object (like `histogram`), and
+non-default values on a non-statistics series are rejected with `invalid_options`:
+
+```ts
+interface general_stats_options {
+  kernel?: "gaussian" | "epanechnikov"; // KDE kernel; default gaussian
+  bandwidth?: "scott" | "silverman" | number; // rule or explicit positive width; default scott
+  grid?: number; // KDE grid: 0 = 64, else 8..256 (contour clamps to 96)
+  violin_overlay?: "none" | "quartiles" | "box"; // default quartiles
+  violin_side?: "full" | "left" | "right"; // default full
+  area?: boolean; // density_curve fill; default true
+  overlap?: number; // ridgeline ridge height in band units, 0.25..8; default 1
+  jitter?: number; // strip_plot jitter fraction of the slot, 0..1; default 0.8
+  qq_distribution?: "normal"; // Q-Q theoretical distribution
+  thresholds?: number; // contour band count; 0 = 8 automatic levels
+  contour_fill?: boolean; // filled bands; default true
+  contour_lines?: boolean; // iso-lines; default true
+  smooth?: boolean; // contour 2D KDE smoothing vs raw bin counts; default true
+  hexbin_radius?: number; // hexagon circumradius in CSS px; 0 = auto within 64 columns, else 4..128
+}
+```
+
+KDE bandwidths follow Scott's or Silverman's rule of thumb (scaled by the Epanechnikov kernel's
+canonical constant) or the explicit positive number. ECDF and Q-Q quantiles use the engine's
+shared sorted-sample quantile with Acklam's inverse-normal transform for the normal Q-Q
+coordinates. Synthetic marks (violin categories, density/ECDF grid points, hexbin cells, contour
+levels) are hit-testable rows with generated IDs; tooltip and accessibility snapshots carry
+`detail: { type: "stats", count, min, max }` (the hexbin cell minimum is NaN by design, and its
+`max` is the cell count). Parallel-coordinates and scatter-matrix marks are the real dataset
+rows. Strip/beeswarm/dot, hexbin, and contour geometry resolves in CSS pixel space, so it
+recomputes when the viewport extent changes; the rest are pure data-space models.
 ## Object data shapes
 
 Object rows are validated and converted to typed engine columns once at the package boundary.
@@ -766,6 +841,14 @@ interface temporal_heatmap_columns {
   value: Float64Array;
   value_valid?: Uint8Array;
 }
+
+interface general_matrix_columns {
+  ids?: readonly general_row_id[];
+  /** 2..8 nonempty, unique field names, at most 128 bytes each. */
+  matrix_fields: readonly string[];
+  /** One Float64Array per field, all with the same row count (at most 512 rows). */
+  matrix_columns: readonly Float64Array[];
+}
 ```
 
 All parallel arrays must have equal row counts. Validity arrays contain only `0` or `1`. Category
@@ -778,6 +861,9 @@ index columns plus one numeric `value` channel; both dictionaries merge and comp
 updates and bounded retention rather than introducing a second data store. Continuous and temporal heatmaps reuse
 the ordinary numeric/temporal X column, add one aligned numeric `y_coordinate` column, and keep `value` in the
 existing value/validity channel. Cell extents are inferred deterministically from neighboring coordinate centers.
+`parallel_coordinates` and `scatter_matrix` use `general_matrix_columns`: the field columns live outside the
+X/Y channels (column 0 mirrors into the value channel for row bookkeeping), every value must be finite, and the
+whole matrix dataset replaces or updates atomically by row ID like every other family.
 
 The first release needs `set_data()`, `set_data_typed()`, append/update by explicit row ID, bounded
 retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. General storage is
@@ -870,6 +956,8 @@ Different Y axes are allowed within that region when their scale types accept th
 | `horizontal_bar` (numeric X, category Y) | incompatible | same region | incompatible | incompatible | incompatible |
 | `scatter`, `bubble`, `error_bar` | incompatible | same region | same region | same region with point axis | incompatible |
 | `heatmap_grid`, `box_plot` | incompatible | same region when both axes agree | same region when axes agree | same region | incompatible |
+| `violin`, `ridgeline`, `strip_plot`, `beeswarm`, `dot_plot` (band category axis) | incompatible | incompatible | incompatible | same region with band axis | incompatible |
+| `density_curve`, `ecdf`, `qq_plot`, `hexbin`, `contour`, `parallel_coordinates`, `scatter_matrix` (linear X and Y) | incompatible | same region | incompatible | incompatible | incompatible |
 | Pie (including donut), radar, radial bar, polar area | incompatible | incompatible | incompatible | incompatible | same polar region |
 
 Additional rules:

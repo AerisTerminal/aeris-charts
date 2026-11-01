@@ -1601,6 +1601,7 @@ impl ChartEngine {
                                             | GeneralSeriesKind::HeatmapGrid
                                             | GeneralSeriesKind::Waterfall
                                             | GeneralSeriesKind::Bullet
+                                            | GeneralSeriesKind::Ridgeline
                                     )
                             }
                             AxisDimension::Radius => false,
@@ -1972,6 +1973,25 @@ impl ChartEngine {
                                 extend_numeric_bounds(&mut bounds, high);
                             }
                         }
+                        continue;
+                    }
+                    #[cfg(feature = "complete")]
+                    if series.kind().requires_complete_build() {
+                        exact_histogram_x = false;
+                        if let Some((series_bounds, series_zero)) =
+                            self.general_stats_axis_bounds(series, axis.dimension, axis.scale)
+                        {
+                            include_zero |= series_zero;
+                            if let Some((low, high)) = series_bounds {
+                                extend_numeric_bounds(&mut bounds, low);
+                                extend_numeric_bounds(&mut bounds, high);
+                            }
+                        }
+                        continue;
+                    }
+                    #[cfg(not(feature = "complete"))]
+                    if series.kind().requires_complete_build() {
+                        exact_histogram_x = false;
                         continue;
                     }
                     exact_histogram_x = false;
@@ -3808,7 +3828,7 @@ fn scan_general_series_numeric_bounds(
     (bounds, include_zero)
 }
 
-fn extend_numeric_bounds(bounds: &mut Option<(f64, f64)>, value: f64) {
+pub(crate) fn extend_numeric_bounds(bounds: &mut Option<(f64, f64)>, value: f64) {
     *bounds = Some(match *bounds {
         Some((low, high)) => (low.min(value), high.max(value)),
         None => (value, value),
