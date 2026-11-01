@@ -39,7 +39,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
 | G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
 | G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
-| G10 | R10 | Financial chart styles | **Planned** | Visible-range volume profiles already exist | Heikin-Ashi, derived-sequence foundation, Renko, Kagi, Point & Figure, Line Break |
+| G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
 | G11 | R11 | Statistics (complete build) | **Planned** | — | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
 | G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
@@ -902,6 +902,47 @@ namespace, release-gate, build-variant, SSR and pack smoke for both builds) and 
 pass. Playwright: 1,274 passed and 64 skipped in the full run. The 26 Chromium failures in that
 run were Windows `ERR_NO_BUFFER_SPACE` socket exhaustion and load timeouts; all 26 pass on rerun.
 
+### G10 — Financial chart styles (2026-11-01)
+
+**Heikin-Ashi** is a time-preserving bar transform whose engine presentation cache keys on the
+data generation plus the first-changed row each mutation reports: a live append or tip
+replacement recomputes only the rows from that point. Frame geometry, autoscale, and candle
+chrome read the derived values; `series_data`, crosshair, and trading paths keep raw OHLC.
+
+**Derived-sequence foundation.** Renko, Line Break, Kagi, and Point & Figure run as one
+streaming state machine per transform over one canonical host OHLC source. Derived bars carry
+their own logical index; their identity is the source row that opened and closed them, so many
+bars share one source time, time-axis labels come from source rows, and indicators compute on
+the derived closes. A checkpoint taken before the newest source row makes live tip replacement
+restore and replay only that row, and the changed tail reinstalls in place (data-layer tail
+truncation, tick-mark tail re-push, tail-local drawing-anchor mapping) rather than rebuilding
+the axis. Source and output cap at 1,000,000 rows/bars and reject overflow atomically.
+
+| Style | Options | Construction |
+| --- | --- | --- |
+| Renko | `box_size` or `atr_length`, `source: "close" \| "high_low"`, `wicks` | fixed or Wilder-ATR box, two-box reversal, optional wicks from extremes since the prior brick |
+| Kagi | `reversal`, `reversal_mode: "absolute" \| "percent"` | yang (thick) above the prior shoulder, yin (thin) below the prior waist, vertical segment split at the reference price |
+| Point & Figure | `box_size` (price or ATR), `reversal_boxes` (default 3), `source: "close" \| "high_low"` | fixed boxes, bounded X/O columns with a dense-column line fallback |
+| Line Break | `lines` (default 3, max 100) | close against the high/low of the last lines; a reversal line opens at the previous line's open |
+
+Declared policies: the crosshair and value snapshots resolve a derived bar to its source open
+time (first match among bars sharing one source time); drawings persist anchors as the bar's
+(open, close) source times plus an occurrence ordinal, clamping to the run's last bar when a
+rebuild shortens the run; the transform definition round-trips through chart-state V3
+`price_transforms` while the canonical source remains host-owned. `synthetic_bar_at` exposes
+the derived bar at any logical index. The demo adds four transform cards and a Heikin-Ashi
+candle style.
+
+Gate evidence: `cargo fmt`, workspace and WASM clippy and workspace tests on both feature sets
+(1,391 engine tests), GPUI clippy, tests and pixel parity, `perf_gate`, the package gates (lint,
+build, typecheck, API, namespace, release-gate, build-variant, SSR and pack smoke for both builds)
+and size budgets all pass. Playwright full run: 1,301 passed, 64 skipped; the one failure was the
+demo-shell card-count assertion for the four new transform cards, updated, with the whole
+`demo_shell` spec re-run green. `g10_financial_styles.spec.mjs` passes on Canvas2D and WebGPU.
+
+Known limits: one independent non-time source per chart; percent Kagi reversals must stay
+below 100%; a chart with no complete Renko/P&F box yet projects zero bars.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1319,19 +1360,19 @@ or the change is recorded with measured evidence and maintainer approval.
 
 ### R10 — Financial chart styles (group C)
 
-**Batch:** G10. **Depends on:** R9. **Status:** planned.
+**Batch:** G10. **Depends on:** R9. **Status:** complete.
 
-- [ ] Heikin-Ashi as a time-preserving bar transform with live tip updates.
-- [ ] A derived-sequence foundation for styles that are not time based. Bricks and boxes get their
+- [x] Heikin-Ashi as a time-preserving bar transform with live tip updates.
+- [x] A derived-sequence foundation for styles that are not time based. Bricks and boxes get their
       own logical index. Time labels come from the source rows, many bricks may share one source
       time, and live updates rebuild only the affected tip within bounded work.
-- [ ] Renko with fixed or ATR box size, wicks policy and reversal rules.
-- [ ] Kagi with absolute or percent reversal, and yin/yang line thickness.
-- [ ] Point & Figure with box size, reversal count, X/O columns and a high/low or close source.
-- [ ] Line Break with a configurable line count.
-- [ ] Declared policies for crosshair, time axis labels, drawings anchored by source time,
+- [x] Renko with fixed or ATR box size, wicks policy and reversal rules.
+- [x] Kagi with absolute or percent reversal, and yin/yang line thickness.
+- [x] Point & Figure with box size, reversal count, X/O columns and a high/low or close source.
+- [x] Line Break with a configurable line count.
+- [x] Declared policies for crosshair, time axis labels, drawings anchored by source time,
       indicators computed on the derived closes, persistence and export on derived styles.
-- [ ] G10 full gate green; batch committed and pushed.
+- [x] G10 full gate green; batch committed and pushed.
 
 Visible-range volume profiles already exist and are not repeated here.
 
@@ -1448,7 +1489,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
 | Two builds (standard and complete) | Partial (G9 delivered; first complete-only family arrives in G11) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
 | Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
-| Financial chart styles | Open | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
+| Financial chart styles | Delivered (G10) | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
 | Statistical distributions | Open | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
 | 2D density and multivariate | Open | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
 | Gauge, chord and network | Open | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |

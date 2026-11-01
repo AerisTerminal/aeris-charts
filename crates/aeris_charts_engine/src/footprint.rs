@@ -643,6 +643,25 @@ impl BarSequenceMapping {
         Self { common_indices }
     }
 
+    /// Mapping for a rebuild that kept the first `prefix` bars in place: the prefix maps to
+    /// itself and only the replaced tails are compared, so the cost is bounded by the tails.
+    pub(crate) fn with_shared_prefix(
+        prefix: usize,
+        old_tail: &[BarSequencePoint],
+        new_tail: &[BarSequencePoint],
+    ) -> Self {
+        let tail = Self::between_points(old_tail, new_tail);
+        let mut common_indices = Vec::with_capacity(tail.common_indices.len() + 2);
+        if let Some(last) = prefix.checked_sub(1) {
+            common_indices.push((0, 0));
+            if last > 0 {
+                common_indices.push((last as u64, last as u64));
+            }
+        }
+        common_indices.extend(tail.common_indices);
+        Self { common_indices }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.common_indices.is_empty()
     }

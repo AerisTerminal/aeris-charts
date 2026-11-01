@@ -211,11 +211,26 @@ function use_footprint_view(chart, footprint) {
 // Presentation choices survive leaving and reopening the footprint preview.
 const footprint_style = { cell_mode: "bid_ask", show_bar_summary: true };
 
+// A price transform owns a fresh candlestick series on the main scale; the demo's bars become its
+// canonical source and the derived sequence replaces the time axis while the card is active.
+function price_transform_series(chart, primary_series, bars, title, options) {
+  const transformed = chart.add_series("candlestick", {
+    price_scale_id: primary_series.price_scale_id(),
+    price_line_visible: true,
+    last_value_visible: true,
+    title,
+  });
+  chart.configure_synthetic_bar_series(transformed, options);
+  chart.set_synthetic_bar_source(transformed, bars);
+  return transformed;
+}
+
 function series_features(bars, primary_series, live_source) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
   const shade_data = background_shade_data(bars);
   const base = Math.floor(Math.min(...closes) - 2);
+  const transform_box = Math.max((Math.max(...closes) - Math.min(...closes)) / 30, 0.25);
   return [
     {
       id: "footprint", label: "Footprint", detail: "Bid × Ask · POC · stacked delta", icon: "chart",
@@ -243,6 +258,30 @@ function series_features(bars, primary_series, live_source) {
         return footprint;
       },
       compose: (chart, footprint) => use_footprint_view(chart, footprint),
+    },
+    {
+      id: "renko", label: "Renko", detail: "Fixed-box bricks + wicks", icon: "chart",
+      create: (chart) => price_transform_series(chart, primary_series, bars, "RENKO", {
+        kind: "renko_fixed", box_size: transform_box, source: "close", wicks: true,
+      }),
+    },
+    {
+      id: "kagi", label: "Kagi", detail: "Yang/yin at shoulders/waists", icon: "chart",
+      create: (chart) => price_transform_series(chart, primary_series, bars, "KAGI", {
+        kind: "kagi", reversal_size: transform_box * 2, reversal_mode: "absolute",
+      }),
+    },
+    {
+      id: "point-and-figure", label: "Point & Figure", detail: "X/O columns · 3-box reversal", icon: "chart",
+      create: (chart) => price_transform_series(chart, primary_series, bars, "P&F", {
+        kind: "point_and_figure", box_size: transform_box / 2, reversal_boxes: 3, source: "high_low",
+      }),
+    },
+    {
+      id: "line-break", label: "Line Break", detail: "Three-line reversal", icon: "chart",
+      create: (chart) => price_transform_series(chart, primary_series, bars, "LINE BREAK", {
+        kind: "line_break", lines: 3,
+      }),
     },
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to compare", icon: "chart", interactive: true,

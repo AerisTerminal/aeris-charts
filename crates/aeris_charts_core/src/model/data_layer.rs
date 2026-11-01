@@ -1420,6 +1420,68 @@ impl DataLayer {
         Some(keep)
     }
 
+    /// Drop the newest rows of a series so at most `keep` remain, with [`Self::pop`] semantics.
+    /// When the dropped times are exactly the tail of the merged axis and no other owned timeline
+    /// reaches them, the merged axis, this series' plot indices, and its LOD shrink in place in
+    /// `O(dropped + series)`; any other shape (shared tail times, a replay cutoff) falls back to
+    /// the `O(total rows)` [`Self::pop`] rebuild. Returns the new row count.
+    pub fn truncate_tail(&mut self, id: SeriesId, keep: usize) -> Option<usize> {
+        let slot = self.materialize_time_alias(id)?;
+        let len = self.series[slot].times.len();
+        if keep >= len {
+            return Some(len);
+        }
+        let dropped = len - keep;
+        let first_dropped = self.series[slot].times[keep];
+        let merged_keep = self
+            .merged_times
+            .len()
+            .checked_sub(dropped)
+            .filter(|&merged_keep| {
+                self.time_cutoff.is_none()
+                    && self.merged_times[merged_keep..] == self.series[slot].times[keep..]
+            });
+        let exclusive_tail = self.live_slots.values().all(|&other| {
+            other == slot
+                || self.series[other].time_alias.is_some()
+                || self.series[other]
+                    .times
+                    .last()
+                    .is_none_or(|&last| last < first_dropped)
+        });
+        let Some(merged_keep) = merged_keep.filter(|_| exclusive_tail) else {
+            return self.pop(id, dropped);
+        };
+        let s = &mut self.series[slot];
+        s.times.truncate(keep);
+        s.values.truncate(keep);
+        for channel in &mut s.point_colors {
+            if !channel.is_empty() {
+                channel.truncate(keep);
+            }
+        }
+        s.rebuild_lod_range(keep.saturating_sub(1)..keep);
+        s.plot.truncate(keep);
+        s.generation = s.generation.wrapping_add(1);
+        // Removing only the trailing union times leaves every surviving logical index in place,
+        // so no merged-time rebase mapping is needed.
+        self.merged_times.truncate(merged_keep);
+        self.time_points_generation = self.time_points_generation.wrapping_add(1);
+        let aliases = self
+            .live_slots
+            .values()
+            .filter_map(|&alias| {
+                self.resolved_alias_range(alias)
+                    .filter(|&(source_slot, _, _)| source_slot == slot)
+                    .map(|range| (alias, range))
+            })
+            .collect::<Vec<_>>();
+        for (alias, (source_slot, offset, len)) in aliases {
+            self.copy_plot_range(alias, source_slot, offset, len);
+        }
+        Some(keep)
+    }
+
     /// Drop the **oldest** rows of a series until at most `keep` remain (the eviction half of the
     /// `max_points` retention policy; [`pop`] is its newest-first counterpart). Per-point color
     /// channels shift in lockstep with their rows, and the merged time points are rebuilt so times
@@ -2132,6 +2194,52 @@ mod tests {
         assert_eq!(dl.merged_times(), &[1, 2, 3, 4]);
         assert_eq!(dl.pop(a, 5), Some(0));
         assert_eq!(dl.merged_times(), &[3, 4]);
+    }
+
+    #[test]
+    fn truncate_tail_shrinks_an_exclusive_tail_in_place_and_matches_pop() {
+        let mut fast = DataLayer::new();
+        let mut slow = DataLayer::new();
+        for dl in [&mut fast, &mut slow] {
+            let id = dl.add_series();
+            let times = (0..200).collect::<Vec<i64>>();
+            let close = (0..200).map(|row| 100.0 + row as f64).collect::<Vec<_>>();
+            assert!(dl.set_data(
+                id,
+                times,
+                close.clone(),
+                close.iter().map(|value| value + 1.0).collect(),
+                close.iter().map(|value| value - 1.0).collect(),
+                close,
+            ));
+        }
+        let generation = fast.time_points_generation();
+        assert_eq!(fast.truncate_tail(0, 150), Some(150));
+        assert_eq!(slow.pop(0, 50), Some(150));
+        assert_ne!(fast.time_points_generation(), generation);
+        assert_eq!(fast.merged_times(), slow.merged_times());
+        assert_eq!(indices(&fast, 0), indices(&slow, 0));
+        assert_eq!(fast.series_data(0), slow.series_data(0));
+        assert_lod_matches_fresh(&fast, 0);
+        assert!(fast.update(0, 150, [1.0, 2.0, 0.5, 1.5]));
+        assert_eq!(indices(&fast, 0).len(), 151);
+        assert_eq!(fast.truncate_tail(0, 151), Some(151));
+        assert_eq!(fast.truncate_tail(0, 0), Some(0));
+        assert!(fast.merged_times().is_empty());
+        assert!(indices(&fast, 0).is_empty());
+    }
+
+    #[test]
+    fn truncate_tail_falls_back_when_another_timeline_shares_the_tail() {
+        let mut dl = DataLayer::new();
+        let a = dl.add_series();
+        let b = dl.add_series();
+        set(&mut dl, a, &[1, 2, 3, 4], &[10.0, 20.0, 30.0, 40.0]);
+        set(&mut dl, b, &[3, 4], &[90.0, 95.0]);
+        assert_eq!(dl.truncate_tail(a, 2), Some(2));
+        assert_eq!(dl.merged_times(), &[1, 2, 3, 4]);
+        assert_eq!(indices(&dl, a), [0, 1]);
+        assert_eq!(indices(&dl, b), [2, 3]);
     }
 
     #[test]

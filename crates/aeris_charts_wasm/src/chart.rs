@@ -1858,6 +1858,10 @@ impl AerisChart {
             .update_synthetic_bar_source(id, time, open, high, low, close)
     }
 
+    pub fn synthetic_bar_at_json(&self, id: u32, logical: f64) -> String {
+        self.inner.borrow().synthetic_bar_at_json(id, logical)
+    }
+
     pub fn trade_stream_id(&self, key: &str) -> u32 {
         self.inner.borrow().trade_stream_id(key)
     }

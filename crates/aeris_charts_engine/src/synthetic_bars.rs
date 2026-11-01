@@ -3,20 +3,86 @@
 //! Hosts supply canonical OHLC bars. The engine owns the synthetic sequence and preserves each
 //! output bar's source-time bounds; renderers consume ordinary series geometry and never rebuild
 //! Renko, Line Break, Kagi, or Point & Figure state.
+//!
+//! Every transform is one streaming state machine. A full rebuild replays the source rows through
+//! the same per-row step that live updates use, and a checkpoint taken before the newest source row
+//! lets a replaced tip restore that checkpoint and replay only the tip row, so live work is bounded
+//! by the bars the tip row forms rather than by history length.
 
 use crate::BarSequencePoint;
 
 pub const MAX_SYNTHETIC_BARS: usize = 1_000_000;
 pub const MAX_SYNTHETIC_SOURCE_BARS: usize = 1_000_000;
+pub const DEFAULT_LINE_BREAK_LINES: u32 = 3;
+/// Each source row compares against this many prior lines, so the count bounds per-row work.
+pub const MAX_LINE_BREAK_LINES: u32 = 100;
+pub const DEFAULT_POINT_AND_FIGURE_REVERSAL_BOXES: u32 = 3;
+
+/// Source prices a box transform reacts to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyntheticPriceSource {
+    /// Each source row's close.
+    #[default]
+    Close,
+    /// The row's high for advances and its low for declines. The current direction is tested
+    /// first; the opposite extreme is used only when the first one forms nothing.
+    HighLow,
+}
+
+/// How a Kagi `reversal_size` is measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KagiReversalMode {
+    /// A price distance.
+    #[default]
+    Absolute,
+    /// A percentage of the current line's extreme.
+    Percent,
+}
+
+fn default_line_break_lines() -> u32 {
+    DEFAULT_LINE_BREAK_LINES
+}
+
+fn default_reversal_boxes() -> u32 {
+    DEFAULT_POINT_AND_FIGURE_REVERSAL_BOXES
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SyntheticBarOptions {
-    RenkoFixed { box_size: f64 },
-    RenkoAtr { period: u32 },
-    LineBreak { lines: u32 },
-    Kagi { reversal_size: f64 },
-    PointAndFigure { box_size: f64, reversal_boxes: u32 },
+    RenkoFixed {
+        box_size: f64,
+        #[serde(default)]
+        source: SyntheticPriceSource,
+        #[serde(default)]
+        wicks: bool,
+    },
+    /// Box size follows Wilder's ATR of the source rows; bricks start once the ATR is warm.
+    RenkoAtr {
+        period: u32,
+        #[serde(default)]
+        source: SyntheticPriceSource,
+        #[serde(default)]
+        wicks: bool,
+    },
+    LineBreak {
+        #[serde(default = "default_line_break_lines")]
+        lines: u32,
+    },
+    Kagi {
+        reversal_size: f64,
+        #[serde(default)]
+        reversal_mode: KagiReversalMode,
+    },
+    PointAndFigure {
+        box_size: f64,
+        #[serde(default = "default_reversal_boxes")]
+        reversal_boxes: u32,
+        #[serde(default)]
+        source: SyntheticPriceSource,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,6 +94,31 @@ pub struct SyntheticSourceBar {
     pub close: f64,
 }
 
+/// Kagi line thickness state. A line turns yang (thick) when it rises above the prior shoulder
+/// and yin (thin) when it falls below the prior waist; the first line is yang when it rises.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct KagiLine {
+    pub yang_at_open: bool,
+    /// The prior shoulder for a rising line or the prior waist for a falling line. Both are the
+    /// previous line's open, so the value is final once this line exists.
+    pub reference: Option<f64>,
+}
+
+impl KagiLine {
+    /// Price where a line spanning `open..close` switches thickness, if it crosses the reference.
+    pub fn switch_price(self, open: f64, close: f64) -> Option<f64> {
+        let reference = self.reference?;
+        let rising = close >= open;
+        ((rising && !self.yang_at_open && close > reference)
+            || (!rising && self.yang_at_open && close < reference))
+            .then_some(reference)
+    }
+
+    pub fn yang_at_close(self, open: f64, close: f64) -> bool {
+        self.yang_at_open != self.switch_price(open, close).is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct SyntheticBar {
     pub logical_index: u64,
@@ -37,6 +128,8 @@ pub struct SyntheticBar {
     pub high: f64,
     pub low: f64,
     pub close: f64,
+    /// Thickness state for Kagi lines; `None` for every other transform.
+    pub kagi: Option<KagiLine>,
 }
 
 impl SyntheticBar {
@@ -46,6 +139,10 @@ impl SyntheticBar {
             open_timestamp_micros: self.open_timestamp_micros,
             close_timestamp_micros: self.close_timestamp_micros,
         }
+    }
+
+    fn kagi_yang_at_close(self) -> Option<bool> {
+        Some(self.kagi?.yang_at_close(self.open, self.close))
     }
 }
 
@@ -100,12 +197,44 @@ enum Direction {
     Down,
 }
 
+/// Transform state that is not derivable from the emitted bars.
+#[derive(Clone, Copy, Debug)]
+struct TransformState {
+    true_range_sum: f64,
+    atr: Option<f64>,
+    /// Renko wick extremes observed since the previous brick; NaN while empty.
+    wick_high: f64,
+    wick_low: f64,
+}
+
+impl Default for TransformState {
+    fn default() -> Self {
+        Self {
+            true_range_sum: 0.0,
+            atr: None,
+            wick_high: f64::NAN,
+            wick_low: f64::NAN,
+        }
+    }
+}
+
+/// Everything a tip replacement must restore. Kagi and Point & Figure extend the previous last
+/// bar in place, so that bar is saved alongside the length.
+#[derive(Clone, Copy, Debug)]
+struct TipCheckpoint {
+    bars_len: usize,
+    last_bar: Option<SyntheticBar>,
+    state: TransformState,
+}
+
 #[derive(Clone, Debug)]
 pub struct SyntheticBarAggregator {
     options: SyntheticBarOptions,
     source: Vec<SyntheticSourceBar>,
     bars: Vec<SyntheticBar>,
-    atr_values: Vec<Option<f64>>,
+    state: TransformState,
+    /// State before the newest source row was applied.
+    tip: Option<TipCheckpoint>,
 }
 
 impl SyntheticBarAggregator {
@@ -115,7 +244,8 @@ impl SyntheticBarAggregator {
             options,
             source: Vec::new(),
             bars: Vec::new(),
-            atr_values: Vec::new(),
+            state: TransformState::default(),
+            tip: None,
         })
     }
 
@@ -140,141 +270,206 @@ impl SyntheticBarAggregator {
         Ok(())
     }
 
-    pub fn update_source(&mut self, bar: SyntheticSourceBar) -> Result<(), SyntheticBarError> {
+    /// Append a newer source row or replace the newest one. Returns the first bar index whose
+    /// contents may differ, or `None` when the bar sequence is unchanged. Bars before that index
+    /// are untouched; bars from it onward are the complete new tail.
+    pub fn update_source(
+        &mut self,
+        bar: SyntheticSourceBar,
+    ) -> Result<Option<usize>, SyntheticBarError> {
         validate_source(core::slice::from_ref(&bar))?;
         match self.source.last().map(|source| source.timestamp_micros) {
-            Some(last) if bar.timestamp_micros < last => {
-                return Err(SyntheticBarError::OutOfOrderSource {
-                    index: self.source.len(),
-                });
-            }
-            Some(last) if bar.timestamp_micros == last => {
-                let mut candidate = self.clone();
-                if let Some(current) = candidate.source.last_mut() {
-                    *current = bar;
-                }
-                candidate.rebuild()?;
-                *self = candidate;
-            }
-            _ => {
-                if self.source.len() == MAX_SYNTHETIC_SOURCE_BARS {
-                    return Err(SyntheticBarError::SourceCapacity);
-                }
-                let previous_bars_len = self.bars.len();
-                let previous_last = self.bars.last().copied();
-                let previous_atr_len = self.atr_values.len();
-                self.source.push(bar);
-                if let Err(error) = self.append_tip() {
-                    self.source.pop();
-                    self.atr_values.truncate(previous_atr_len);
-                    self.bars.truncate(previous_bars_len);
-                    if let (Some(previous), Some(current)) = (previous_last, self.bars.last_mut()) {
-                        *current = previous;
-                    }
-                    return Err(error);
-                }
-                return Ok(());
-            }
+            Some(last) if bar.timestamp_micros < last => Err(SyntheticBarError::OutOfOrderSource {
+                index: self.source.len(),
+            }),
+            Some(last) if bar.timestamp_micros == last => self.replace_tip(bar),
+            _ => self.append(bar),
         }
-        Ok(())
+    }
+
+    fn append(&mut self, bar: SyntheticSourceBar) -> Result<Option<usize>, SyntheticBarError> {
+        if self.source.len() == MAX_SYNTHETIC_SOURCE_BARS {
+            return Err(SyntheticBarError::SourceCapacity);
+        }
+        let checkpoint = self.checkpoint();
+        self.source.push(bar);
+        if let Err(error) = self.step(self.source.len() - 1) {
+            self.restore(checkpoint);
+            self.source.pop();
+            return Err(error);
+        }
+        self.tip = Some(checkpoint);
+        Ok((self.bars.len() != checkpoint.bars_len
+            || self.bars.last().copied() != checkpoint.last_bar)
+            .then_some(checkpoint.bars_len.saturating_sub(1)))
+    }
+
+    fn replace_tip(&mut self, bar: SyntheticSourceBar) -> Result<Option<usize>, SyntheticBarError> {
+        let index = self.source.len() - 1;
+        let Some(checkpoint) = self.tip else {
+            let mut candidate = self.clone();
+            candidate.source[index] = bar;
+            candidate.rebuild()?;
+            *self = candidate;
+            return Ok(Some(0));
+        };
+        let first = checkpoint.bars_len.saturating_sub(1);
+        let previous_tail = self.bars[first..].to_vec();
+        let previous_state = self.state;
+        let previous_source = self.source[index];
+        self.restore(checkpoint);
+        self.source[index] = bar;
+        if let Err(error) = self.step(index) {
+            self.bars.truncate(first);
+            self.bars.extend_from_slice(&previous_tail);
+            self.state = previous_state;
+            self.source[index] = previous_source;
+            return Err(error);
+        }
+        Ok((self.bars[first..] != previous_tail[..]).then_some(first))
+    }
+
+    fn checkpoint(&self) -> TipCheckpoint {
+        TipCheckpoint {
+            bars_len: self.bars.len(),
+            last_bar: self.bars.last().copied(),
+            state: self.state,
+        }
+    }
+
+    fn restore(&mut self, checkpoint: TipCheckpoint) {
+        self.bars.truncate(checkpoint.bars_len);
+        if let (Some(saved), Some(last)) = (checkpoint.last_bar, self.bars.last_mut()) {
+            *last = saved;
+        }
+        self.state = checkpoint.state;
     }
 
     fn rebuild(&mut self) -> Result<(), SyntheticBarError> {
-        self.atr_values.clear();
-        self.bars = match self.options {
-            SyntheticBarOptions::RenkoFixed { box_size } => {
-                build_renko(&self.source, |_| Some(box_size))
-            }
-            SyntheticBarOptions::RenkoAtr { period } => {
-                self.atr_values = atr_values(&self.source, period as usize);
-                build_atr_renko_with_values(&self.source, &self.atr_values)
-            }
-            SyntheticBarOptions::LineBreak { lines } => {
-                build_line_break(&self.source, lines as usize)
-            }
-            SyntheticBarOptions::Kagi { reversal_size } => build_kagi(&self.source, reversal_size),
-            SyntheticBarOptions::PointAndFigure {
-                box_size,
-                reversal_boxes,
-            } => build_point_and_figure(&self.source, box_size, reversal_boxes),
-        }?;
-        for (index, bar) in self.bars.iter_mut().enumerate() {
-            bar.logical_index = index as u64;
+        self.bars.clear();
+        self.state = TransformState::default();
+        self.tip = None;
+        for index in 0..self.source.len() {
+            let checkpoint = self.checkpoint();
+            self.step(index)?;
+            self.tip = Some(checkpoint);
         }
         Ok(())
     }
 
-    fn append_tip(&mut self) -> Result<(), SyntheticBarError> {
-        let index = self.source.len().saturating_sub(1);
+    fn step(&mut self, index: usize) -> Result<(), SyntheticBarError> {
         match self.options {
-            SyntheticBarOptions::RenkoFixed { box_size } => {
-                self.append_renko(index, box_size, 0)?;
-            }
-            SyntheticBarOptions::RenkoAtr { period } => {
+            SyntheticBarOptions::RenkoFixed {
+                box_size,
+                source,
+                wicks,
+            } => self.renko_step(index, box_size, 0, source, wicks),
+            SyntheticBarOptions::RenkoAtr {
+                period,
+                source,
+                wicks,
+            } => {
                 let period = period as usize;
                 let range = true_range(&self.source, index);
-                let next = if index + 1 == period {
-                    Some(
-                        (0..=index)
-                            .map(|row| true_range(&self.source, row))
-                            .sum::<f64>()
-                            / period as f64,
-                    )
-                } else if index + 1 > period {
-                    self.atr_values[index - 1]
-                        .map(|previous| (previous * (period - 1) as f64 + range) / period as f64)
+                if index < period {
+                    self.state.true_range_sum += range;
+                    if index + 1 == period {
+                        self.state.atr = Some(self.state.true_range_sum / period as f64);
+                    }
                 } else {
-                    None
-                };
-                self.atr_values.push(next);
-                if let Some(box_size) = next {
-                    self.append_renko(index, box_size, period - 1)?;
+                    self.state.atr = self
+                        .state
+                        .atr
+                        .map(|previous| (previous * (period - 1) as f64 + range) / period as f64);
+                }
+                match self.state.atr {
+                    Some(box_size) => self.renko_step(index, box_size, period - 1, source, wicks),
+                    None => Ok(()),
                 }
             }
-            SyntheticBarOptions::LineBreak { lines } => {
-                self.append_line_break(index, lines as usize)?
-            }
-            SyntheticBarOptions::Kagi { reversal_size } => {
-                self.append_kagi(index, reversal_size)?
-            }
+            SyntheticBarOptions::LineBreak { lines } => self.line_break_step(index, lines as usize),
+            SyntheticBarOptions::Kagi {
+                reversal_size,
+                reversal_mode,
+            } => self.kagi_step(index, reversal_size, reversal_mode),
             SyntheticBarOptions::PointAndFigure {
                 box_size,
                 reversal_boxes,
-            } => self.append_point_and_figure(index, box_size, reversal_boxes)?,
+                source,
+            } => self.point_and_figure_step(index, box_size, reversal_boxes, source),
         }
-        Ok(())
     }
 
-    fn append_renko(
-        &mut self,
-        index: usize,
-        box_size: f64,
-        anchor_index: usize,
-    ) -> Result<(), SyntheticBarError> {
-        if index <= anchor_index {
-            return Ok(());
-        }
-        let source = self.source[index];
-        let mut anchor = self
-            .bars
-            .last()
-            .map_or(self.source[anchor_index].close, |bar| bar.close);
-        let mut anchor_time = self
-            .bars
-            .last()
-            .map_or(self.source[anchor_index].timestamp_micros, |bar| {
-                bar.close_timestamp_micros
-            });
-        let mut direction = self.bars.last().map(|bar| {
+    fn last_direction(&self) -> Option<Direction> {
+        self.bars.last().map(|bar| {
             if bar.close >= bar.open {
                 Direction::Up
             } else {
                 Direction::Down
             }
-        });
+        })
+    }
+
+    fn renko_step(
+        &mut self,
+        index: usize,
+        box_size: f64,
+        anchor_index: usize,
+        source: SyntheticPriceSource,
+        wicks: bool,
+    ) -> Result<(), SyntheticBarError> {
+        if index <= anchor_index {
+            return Ok(());
+        }
+        let row = self.source[index];
+        if wicks {
+            self.state.wick_high = self.state.wick_high.max(row.high);
+            self.state.wick_low = self.state.wick_low.min(row.low);
+        }
+        // A flat warm-up yields a zero ATR; a zero box would emit bricks without bound.
+        if !(box_size.is_finite() && box_size > 0.0) {
+            return Ok(());
+        }
+        let prices = match source {
+            SyntheticPriceSource::Close => [row.close, f64::NAN],
+            SyntheticPriceSource::HighLow => match self.last_direction() {
+                Some(Direction::Up) => [row.high, row.low],
+                Some(Direction::Down) => [row.low, row.high],
+                None if row.close >= row.open => [row.high, row.low],
+                None => [row.low, row.high],
+            },
+        };
+        for price in prices {
+            if price.is_nan() || self.renko_bricks(index, price, box_size, anchor_index, wicks)? > 0
+            {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit every brick `price` completes from the current anchor. A reversal needs two boxes.
+    fn renko_bricks(
+        &mut self,
+        index: usize,
+        price: f64,
+        box_size: f64,
+        anchor_index: usize,
+        wicks: bool,
+    ) -> Result<usize, SyntheticBarError> {
+        let time = self.source[index].timestamp_micros;
+        let (mut anchor, mut anchor_time) = self.bars.last().map_or(
+            (
+                self.source[anchor_index].close,
+                self.source[anchor_index].timestamp_micros,
+            ),
+            |bar| (bar.close, bar.close_timestamp_micros),
+        );
+        let mut direction = self.last_direction();
+        let mut emitted = 0;
         loop {
-            let up_distance = source.close - anchor;
-            let down_distance = anchor - source.close;
+            let up_distance = price - anchor;
+            let down_distance = anchor - price;
             let next = match direction {
                 None if up_distance >= box_size => Some((Direction::Up, anchor, anchor + box_size)),
                 None if down_distance >= box_size => {
@@ -297,31 +492,36 @@ impl SyntheticBarAggregator {
             let Some((next_direction, open, close)) = next else {
                 break;
             };
-            output(
-                &mut self.bars,
-                anchor_time,
-                source.timestamp_micros,
-                open,
-                close,
-            )?;
+            output(&mut self.bars, anchor_time, time, open, close, None)?;
+            if wicks {
+                if let Some(brick) = self.bars.last_mut() {
+                    match next_direction {
+                        Direction::Up => brick.low = brick.low.min(self.state.wick_low),
+                        Direction::Down => brick.high = brick.high.max(self.state.wick_high),
+                    }
+                }
+                self.state.wick_high = f64::NAN;
+                self.state.wick_low = f64::NAN;
+            }
             anchor = close;
-            anchor_time = source.timestamp_micros;
+            anchor_time = time;
             direction = Some(next_direction);
+            emitted += 1;
         }
-        Ok(())
+        Ok(emitted)
     }
 
-    fn append_line_break(&mut self, index: usize, lines: usize) -> Result<(), SyntheticBarError> {
+    fn line_break_step(&mut self, index: usize, lines: usize) -> Result<(), SyntheticBarError> {
         let source = self.source[index];
         let Some(previous) = self.bars.last().copied() else {
-            output(
+            return output(
                 &mut self.bars,
                 source.timestamp_micros,
                 source.timestamp_micros,
                 source.open,
                 source.close,
-            )?;
-            return Ok(());
+                None,
+            );
         };
         let from = self.bars.len().saturating_sub(lines);
         let recent = &self.bars[from..];
@@ -333,37 +533,62 @@ impl SyntheticBarAggregator {
             .iter()
             .map(|bar| bar.low)
             .fold(f64::INFINITY, f64::min);
-        if source.close > high || source.close < low {
+        let rising = source.close > high;
+        if rising || source.close < low {
+            // A continuation line starts at the previous close; a reversal line starts at the
+            // previous line's open, so it never overlaps the line it reverses.
+            let reverses = (rising && previous.close < previous.open)
+                || (!rising && previous.close > previous.open);
             output(
                 &mut self.bars,
                 previous.close_timestamp_micros,
                 source.timestamp_micros,
-                previous.close,
+                if reverses {
+                    previous.open
+                } else {
+                    previous.close
+                },
                 source.close,
+                None,
             )?;
         }
         Ok(())
     }
 
-    fn append_kagi(&mut self, index: usize, reversal_size: f64) -> Result<(), SyntheticBarError> {
+    fn kagi_step(
+        &mut self,
+        index: usize,
+        reversal_size: f64,
+        mode: KagiReversalMode,
+    ) -> Result<(), SyntheticBarError> {
         if index == 0 {
             return Ok(());
         }
+        let threshold = |pivot: f64| match mode {
+            KagiReversalMode::Absolute => reversal_size,
+            KagiReversalMode::Percent => pivot.abs() * reversal_size / 100.0,
+        };
         let source = self.source[index];
         let Some(last) = self.bars.last().copied() else {
             let first = self.source[0];
-            if (source.close - first.close).abs() >= reversal_size {
+            let distance = (source.close - first.close).abs();
+            if distance > 0.0 && distance >= threshold(first.close) {
                 output(
                     &mut self.bars,
                     first.timestamp_micros,
                     source.timestamp_micros,
                     first.close,
                     source.close,
+                    Some(KagiLine {
+                        yang_at_open: source.close > first.close,
+                        reference: None,
+                    }),
                 )?;
             }
             return Ok(());
         };
         let rising = last.close >= last.open;
+        let reversal = threshold(last.close);
         if (rising && source.close > last.close) || (!rising && source.close < last.close) {
             if let Some(current) = self.bars.last_mut() {
                 current.close = source.close;
@@ -371,8 +596,8 @@ impl SyntheticBarAggregator {
                 current.low = current.low.min(source.close);
                 current.close_timestamp_micros = source.timestamp_micros;
             }
-        } else if (rising && source.close <= last.close - reversal_size)
-            || (!rising && source.close >= last.close + reversal_size)
+        } else if (rising && source.close <= last.close - reversal)
+            || (!rising && source.close >= last.close + reversal)
         {
             output(
                 &mut self.bars,
@@ -380,70 +605,85 @@ impl SyntheticBarAggregator {
                 source.timestamp_micros,
                 last.close,
                 source.close,
+                Some(KagiLine {
+                    yang_at_open: last.kagi_yang_at_close().unwrap_or(rising),
+                    reference: Some(last.open),
+                }),
             )?;
         }
         Ok(())
     }
 
-    fn append_point_and_figure(
+    fn point_and_figure_step(
         &mut self,
         index: usize,
         box_size: f64,
         reversal_boxes: u32,
+        price_source: SyntheticPriceSource,
     ) -> Result<(), SyntheticBarError> {
         if index == 0 {
             return Ok(());
         }
         let source = self.source[index];
+        let (high, low) = match price_source {
+            SyntheticPriceSource::Close => (source.close, source.close),
+            SyntheticPriceSource::HighLow => (source.high, source.low),
+        };
         let reversal = box_size * f64::from(reversal_boxes);
+        let whole_boxes = |distance: f64| (distance / box_size).floor() * box_size;
         let Some(last) = self.bars.last().copied() else {
             let first = self.source[0];
-            let distance = source.close - first.close;
-            if distance.abs() >= box_size {
-                let boxes = (distance.abs() / box_size).floor();
-                let close = first.close + distance.signum() * boxes * box_size;
-                output(
-                    &mut self.bars,
-                    first.timestamp_micros,
-                    source.timestamp_micros,
-                    first.close,
-                    close,
-                )?;
-            }
-            return Ok(());
+            let up = high - first.close >= box_size;
+            let down = first.close - low >= box_size;
+            let close = match (up, down) {
+                (true, true) if source.close >= source.open => {
+                    first.close + whole_boxes(high - first.close)
+                }
+                (true, false) => first.close + whole_boxes(high - first.close),
+                (_, true) => first.close - whole_boxes(first.close - low),
+                (false, false) => return Ok(()),
+            };
+            return output(
+                &mut self.bars,
+                first.timestamp_micros,
+                source.timestamp_micros,
+                first.close,
+                close,
+                None,
+            );
         };
         let rising = last.close >= last.open;
-        if rising && source.close >= last.close + box_size {
-            let close = last.close + ((source.close - last.close) / box_size).floor() * box_size;
+        if rising && high >= last.close + box_size {
+            let close = last.close + whole_boxes(high - last.close);
             if let Some(current) = self.bars.last_mut() {
                 current.close = close;
                 current.high = close;
                 current.close_timestamp_micros = source.timestamp_micros;
             }
-        } else if !rising && source.close <= last.close - box_size {
-            let close = last.close - ((last.close - source.close) / box_size).floor() * box_size;
+        } else if !rising && low <= last.close - box_size {
+            let close = last.close - whole_boxes(last.close - low);
             if let Some(current) = self.bars.last_mut() {
                 current.close = close;
                 current.low = close;
                 current.close_timestamp_micros = source.timestamp_micros;
             }
-        } else if rising && source.close <= last.close - reversal {
-            let close = last.close - ((last.close - source.close) / box_size).floor() * box_size;
+        } else if rising && low <= last.close - reversal {
             output(
                 &mut self.bars,
                 last.close_timestamp_micros,
                 source.timestamp_micros,
                 last.close - box_size,
-                close,
+                last.close - whole_boxes(last.close - low),
+                None,
             )?;
-        } else if !rising && source.close >= last.close + reversal {
-            let close = last.close + ((source.close - last.close) / box_size).floor() * box_size;
+        } else if !rising && high >= last.close + reversal {
             output(
                 &mut self.bars,
                 last.close_timestamp_micros,
                 source.timestamp_micros,
                 last.close + box_size,
-                close,
+                last.close + whole_boxes(high - last.close),
+                None,
             )?;
         }
         Ok(())
@@ -457,12 +697,16 @@ impl SyntheticBarAggregator {
             .source
             .partition_point(|bar| bar.timestamp_micros <= clock_micros);
         let mut projection = Self::new(self.options)?;
-        projection.set_source(self.source[..visible].to_vec())?;
+        projection.source = self.source[..visible].to_vec();
+        projection.rebuild()?;
         Ok(projection.bars)
     }
 }
 
 impl crate::ChartEngine {
+    /// Configure one candlestick/bar series as the chart's price transform. Reconfiguring a
+    /// series keeps the canonical source it already holds and rebuilds it atomically: an error
+    /// leaves the previous transform in place.
     pub fn configure_synthetic_bar_series(
         &mut self,
         id: crate::SeriesId,
@@ -490,7 +734,10 @@ impl crate::ChartEngine {
         if other_synthetic || non_time_stream {
             return Err(SyntheticBarError::SequenceDomainInUse);
         }
-        let aggregator = SyntheticBarAggregator::new(options)?;
+        let mut aggregator = SyntheticBarAggregator::new(options)?;
+        if let Some(existing) = self.synthetic_series.get(&id) {
+            aggregator.set_source(existing.source().to_vec())?;
+        }
         self.synthetic_series.insert(id, aggregator);
         self.refresh_synthetic_bar_projection(id)
     }
@@ -507,34 +754,22 @@ impl crate::ChartEngine {
         self.refresh_synthetic_bar_projection(id)
     }
 
+    /// Append or replace the newest source row. Outside replay only the bars the tip row formed
+    /// are rebuilt and reinstalled; the history before them is not revisited.
     pub fn update_synthetic_bar_source(
         &mut self,
         id: crate::SeriesId,
         source: SyntheticSourceBar,
     ) -> Result<(), SyntheticBarError> {
-        let (previous_len, previous_last) = {
-            let aggregator = self
-                .synthetic_series
-                .get(&id)
-                .ok_or(SyntheticBarError::UnknownSeries(id))?;
-            (aggregator.bars().len(), aggregator.bars().last().copied())
-        };
-        self.synthetic_series
+        let changed = self
+            .synthetic_series
             .get_mut(&id)
             .ok_or(SyntheticBarError::UnknownSeries(id))?
             .update_source(source)?;
-        let (next_len, next_last) = {
-            let aggregator = self
-                .synthetic_series
-                .get(&id)
-                .ok_or(SyntheticBarError::UnknownSeries(id))?;
-            (aggregator.bars().len(), aggregator.bars().last().copied())
-        };
-        if previous_len == next_len && previous_last == next_last {
+        let Some(from) = changed else {
             return Ok(());
-        }
-        if self.replay_clock_micros().is_none() {
-            let from = previous_len.saturating_sub(1).min(next_len);
+        };
+        if self.replay_clock_micros().is_none() && self.sequence_points().is_some() {
             return self.refresh_synthetic_bar_projection_from(id, from);
         }
         self.refresh_synthetic_bar_projection(id)
@@ -544,13 +779,41 @@ impl crate::ChartEngine {
         Some(self.synthetic_series.get(&id)?.bars())
     }
 
-    pub(crate) fn synthetic_bar_options(&self, id: crate::SeriesId) -> Option<SyntheticBarOptions> {
+    /// The displayed derived bar at a chart logical index. Source-time bounds come from the
+    /// sequence sidecar and prices from the installed projection, so replay reports its clipped
+    /// tip; the Kagi thickness state is prefix-stable and comes from the aggregator.
+    pub fn synthetic_bar_at(&self, id: crate::SeriesId, index: usize) -> Option<SyntheticBar> {
+        let aggregator = self.synthetic_series.get(&id)?;
+        let point = *self.sequence_points()?.get(index)?;
+        let (_, columns) = self.data.series_data(id)?;
+        Some(SyntheticBar {
+            logical_index: index as u64,
+            open_timestamp_micros: point.open_timestamp_micros,
+            close_timestamp_micros: point.close_timestamp_micros,
+            open: *columns[0].get(index)?,
+            high: *columns[1].get(index)?,
+            low: *columns[2].get(index)?,
+            close: *columns[3].get(index)?,
+            kagi: aggregator.bars().get(index).and_then(|bar| bar.kagi),
+        })
+    }
+
+    pub fn synthetic_bar_options(&self, id: crate::SeriesId) -> Option<SyntheticBarOptions> {
         Some(self.synthetic_series.get(&id)?.options())
     }
 
+    pub(crate) fn synthetic_kagi_line(&self, id: crate::SeriesId, row: usize) -> Option<KagiLine> {
+        self.synthetic_series.get(&id)?.bars().get(row)?.kagi
+    }
+
+    pub(crate) fn synthetic_series_ids(&self) -> Vec<crate::SeriesId> {
+        let mut ids = self.synthetic_series.keys().copied().collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids
+    }
+
     pub(crate) fn refresh_synthetic_replay_projections(&mut self) -> Result<(), SyntheticBarError> {
-        let ids = self.synthetic_series.keys().copied().collect::<Vec<_>>();
-        for id in ids {
+        for id in self.synthetic_series_ids() {
             self.refresh_synthetic_bar_projection(id)?;
         }
         Ok(())
@@ -578,18 +841,16 @@ impl crate::ChartEngine {
         id: crate::SeriesId,
         from: usize,
     ) -> Result<(), SyntheticBarError> {
-        let (projection, expected) = {
+        let projection = {
             let bars = self
                 .synthetic_series
                 .get(&id)
                 .ok_or(SyntheticBarError::UnknownSeries(id))?
                 .bars();
-            if from >= bars.len() {
-                return Ok(());
-            }
-            (projection_columns(&bars[from..]), bars.len() - from)
+            projection_columns(&bars[from.min(bars.len())..])
         };
-        if self.update_sequence_projection_bars_inner(id, from, projection) == expected {
+        let expected = projection.0.len();
+        if self.replace_sequence_projection_tail(id, from, projection) == Some(expected) {
             Ok(())
         } else {
             Err(SyntheticBarError::InvalidSource { index: from })
@@ -610,16 +871,23 @@ fn projection_columns(bars: &[SyntheticBar]) -> crate::SequenceProjectionColumns
     )
 }
 
-fn validate_options(options: SyntheticBarOptions) -> Result<(), SyntheticBarError> {
+pub(crate) fn validate_options(options: SyntheticBarOptions) -> Result<(), SyntheticBarError> {
     let positive = |value: f64| value.is_finite() && value > 0.0;
     let valid = match options {
-        SyntheticBarOptions::RenkoFixed { box_size } => positive(box_size),
-        SyntheticBarOptions::RenkoAtr { period } => period > 0,
-        SyntheticBarOptions::LineBreak { lines } => lines > 0,
-        SyntheticBarOptions::Kagi { reversal_size } => positive(reversal_size),
+        SyntheticBarOptions::RenkoFixed { box_size, .. } => positive(box_size),
+        SyntheticBarOptions::RenkoAtr { period, .. } => period > 0,
+        SyntheticBarOptions::LineBreak { lines } => (1..=MAX_LINE_BREAK_LINES).contains(&lines),
+        SyntheticBarOptions::Kagi {
+            reversal_size,
+            reversal_mode,
+        } => {
+            positive(reversal_size)
+                && (reversal_mode == KagiReversalMode::Absolute || reversal_size < 100.0)
+        }
         SyntheticBarOptions::PointAndFigure {
             box_size,
             reversal_boxes,
+            ..
         } => positive(box_size) && reversal_boxes > 0,
     };
     if valid {
@@ -656,6 +924,7 @@ fn output(
     close_time: i64,
     open: f64,
     close: f64,
+    kagi: Option<KagiLine>,
 ) -> Result<(), SyntheticBarError> {
     if bars.len() == MAX_SYNTHETIC_BARS {
         return Err(SyntheticBarError::Capacity);
@@ -668,57 +937,9 @@ fn output(
         high: open.max(close),
         low: open.min(close),
         close,
+        kagi,
     });
     Ok(())
-}
-
-fn build_renko(
-    source: &[SyntheticSourceBar],
-    mut box_at: impl FnMut(usize) -> Option<f64>,
-) -> Result<Vec<SyntheticBar>, SyntheticBarError> {
-    let mut bars = Vec::new();
-    let Some(first) = source.first() else {
-        return Ok(bars);
-    };
-    let mut anchor = first.close;
-    let mut anchor_time = first.timestamp_micros;
-    let mut direction = None;
-    for (index, source) in source.iter().enumerate().skip(1) {
-        let Some(box_size) = box_at(index).filter(|size| size.is_finite() && *size > 0.0) else {
-            continue;
-        };
-        loop {
-            let up_distance = source.close - anchor;
-            let down_distance = anchor - source.close;
-            let next = match direction {
-                None if up_distance >= box_size => Some((Direction::Up, anchor, anchor + box_size)),
-                None if down_distance >= box_size => {
-                    Some((Direction::Down, anchor, anchor - box_size))
-                }
-                Some(Direction::Up) if up_distance >= box_size => {
-                    Some((Direction::Up, anchor, anchor + box_size))
-                }
-                Some(Direction::Up) if down_distance >= box_size * 2.0 => {
-                    Some((Direction::Down, anchor - box_size, anchor - box_size * 2.0))
-                }
-                Some(Direction::Down) if down_distance >= box_size => {
-                    Some((Direction::Down, anchor, anchor - box_size))
-                }
-                Some(Direction::Down) if up_distance >= box_size * 2.0 => {
-                    Some((Direction::Up, anchor + box_size, anchor + box_size * 2.0))
-                }
-                _ => None,
-            };
-            let Some((next_direction, open, close)) = next else {
-                break;
-            };
-            output(&mut bars, anchor_time, source.timestamp_micros, open, close)?;
-            anchor = close;
-            anchor_time = source.timestamp_micros;
-            direction = Some(next_direction);
-        }
-    }
-    Ok(bars)
 }
 
 fn true_range(source: &[SyntheticSourceBar], index: usize) -> f64 {
@@ -731,492 +952,5 @@ fn true_range(source: &[SyntheticSourceBar], index: usize) -> f64 {
     })
 }
 
-fn atr_values(source: &[SyntheticSourceBar], period: usize) -> Vec<Option<f64>> {
-    let mut atr = vec![None; source.len()];
-    let mut ranges = Vec::with_capacity(source.len());
-    for index in 0..source.len() {
-        let range = true_range(source, index);
-        ranges.push(range);
-        if index + 1 == period {
-            atr[index] = Some(ranges[..=index].iter().sum::<f64>() / period as f64);
-        } else if index + 1 > period {
-            let previous = atr[index - 1].unwrap_or(range);
-            atr[index] = Some((previous * (period - 1) as f64 + range) / period as f64);
-        }
-    }
-    atr
-}
-
-fn build_atr_renko_with_values(
-    source: &[SyntheticSourceBar],
-    atr: &[Option<f64>],
-) -> Result<Vec<SyntheticBar>, SyntheticBarError> {
-    let Some(first_ready) = atr.iter().position(Option::is_some) else {
-        return Ok(Vec::new());
-    };
-    build_renko(&source[first_ready..], |index| atr[first_ready + index])
-}
-
-fn build_line_break(
-    source: &[SyntheticSourceBar],
-    lines: usize,
-) -> Result<Vec<SyntheticBar>, SyntheticBarError> {
-    let mut bars = Vec::new();
-    for source in source {
-        let Some(previous) = bars.last().copied() else {
-            output(
-                &mut bars,
-                source.timestamp_micros,
-                source.timestamp_micros,
-                source.open,
-                source.close,
-            )?;
-            continue;
-        };
-        let from = bars.len().saturating_sub(lines);
-        let recent = &bars[from..];
-        let high = recent
-            .iter()
-            .map(|bar| bar.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let low = recent
-            .iter()
-            .map(|bar| bar.low)
-            .fold(f64::INFINITY, f64::min);
-        if source.close > high || source.close < low {
-            output(
-                &mut bars,
-                previous.close_timestamp_micros,
-                source.timestamp_micros,
-                previous.close,
-                source.close,
-            )?;
-        }
-    }
-    Ok(bars)
-}
-
-fn build_kagi(
-    source: &[SyntheticSourceBar],
-    reversal_size: f64,
-) -> Result<Vec<SyntheticBar>, SyntheticBarError> {
-    let mut bars = Vec::new();
-    let Some(first) = source.first() else {
-        return Ok(bars);
-    };
-    let mut pivot = first.close;
-    let mut pivot_time = first.timestamp_micros;
-    let mut direction = None;
-    for source in source.iter().skip(1) {
-        match direction {
-            None if source.close >= pivot + reversal_size => {
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot,
-                    source.close,
-                )?;
-                pivot = source.close;
-                direction = Some(Direction::Up);
-            }
-            None if source.close <= pivot - reversal_size => {
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot,
-                    source.close,
-                )?;
-                pivot = source.close;
-                direction = Some(Direction::Down);
-            }
-            Some(Direction::Up) if source.close > pivot => {
-                if let Some(current) = bars.last_mut() {
-                    current.close = source.close;
-                    current.high = current.high.max(source.close);
-                    current.close_timestamp_micros = source.timestamp_micros;
-                }
-                pivot = source.close;
-            }
-            Some(Direction::Up) if source.close <= pivot - reversal_size => {
-                pivot_time = bars
-                    .last()
-                    .map_or(source.timestamp_micros, |bar| bar.close_timestamp_micros);
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot,
-                    source.close,
-                )?;
-                pivot = source.close;
-                direction = Some(Direction::Down);
-            }
-            Some(Direction::Down) if source.close < pivot => {
-                if let Some(current) = bars.last_mut() {
-                    current.close = source.close;
-                    current.low = current.low.min(source.close);
-                    current.close_timestamp_micros = source.timestamp_micros;
-                }
-                pivot = source.close;
-            }
-            Some(Direction::Down) if source.close >= pivot + reversal_size => {
-                pivot_time = bars
-                    .last()
-                    .map_or(source.timestamp_micros, |bar| bar.close_timestamp_micros);
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot,
-                    source.close,
-                )?;
-                pivot = source.close;
-                direction = Some(Direction::Up);
-            }
-            _ => {}
-        }
-    }
-    Ok(bars)
-}
-
-fn build_point_and_figure(
-    source: &[SyntheticSourceBar],
-    box_size: f64,
-    reversal_boxes: u32,
-) -> Result<Vec<SyntheticBar>, SyntheticBarError> {
-    let mut bars = Vec::new();
-    let Some(first) = source.first() else {
-        return Ok(bars);
-    };
-    let mut pivot = first.close;
-    let mut pivot_time = first.timestamp_micros;
-    let mut direction = None;
-    let reversal = box_size * f64::from(reversal_boxes);
-    for source in source.iter().skip(1) {
-        match direction {
-            None if source.close >= pivot + box_size => {
-                let boxes = ((source.close - pivot) / box_size).floor();
-                let close = pivot + boxes * box_size;
-                output(&mut bars, pivot_time, source.timestamp_micros, pivot, close)?;
-                pivot = close;
-                direction = Some(Direction::Up);
-            }
-            None if source.close <= pivot - box_size => {
-                let boxes = ((pivot - source.close) / box_size).floor();
-                let close = pivot - boxes * box_size;
-                output(&mut bars, pivot_time, source.timestamp_micros, pivot, close)?;
-                pivot = close;
-                direction = Some(Direction::Down);
-            }
-            Some(Direction::Up) if source.close >= pivot + box_size => {
-                let boxes = ((source.close - pivot) / box_size).floor();
-                pivot += boxes * box_size;
-                if let Some(current) = bars.last_mut() {
-                    current.close = pivot;
-                    current.high = pivot;
-                    current.close_timestamp_micros = source.timestamp_micros;
-                }
-            }
-            Some(Direction::Up) if source.close <= pivot - reversal => {
-                let boxes = ((pivot - source.close) / box_size).floor();
-                let close = pivot - boxes * box_size;
-                pivot_time = bars
-                    .last()
-                    .map_or(source.timestamp_micros, |bar| bar.close_timestamp_micros);
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot - box_size,
-                    close,
-                )?;
-                pivot = close;
-                direction = Some(Direction::Down);
-            }
-            Some(Direction::Down) if source.close <= pivot - box_size => {
-                let boxes = ((pivot - source.close) / box_size).floor();
-                pivot -= boxes * box_size;
-                if let Some(current) = bars.last_mut() {
-                    current.close = pivot;
-                    current.low = pivot;
-                    current.close_timestamp_micros = source.timestamp_micros;
-                }
-            }
-            Some(Direction::Down) if source.close >= pivot + reversal => {
-                let boxes = ((source.close - pivot) / box_size).floor();
-                let close = pivot + boxes * box_size;
-                pivot_time = bars
-                    .last()
-                    .map_or(source.timestamp_micros, |bar| bar.close_timestamp_micros);
-                output(
-                    &mut bars,
-                    pivot_time,
-                    source.timestamp_micros,
-                    pivot + box_size,
-                    close,
-                )?;
-                pivot = close;
-                direction = Some(Direction::Up);
-            }
-            _ => {}
-        }
-    }
-    Ok(bars)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn source(values: &[f64]) -> Vec<SyntheticSourceBar> {
-        values
-            .iter()
-            .enumerate()
-            .map(|(index, &close)| SyntheticSourceBar {
-                timestamp_micros: (index as i64 + 1) * 1_000_000,
-                open: close,
-                high: close,
-                low: close,
-                close,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fixed_renko_requires_two_boxes_to_reverse_and_emits_every_crossed_box() {
-        let mut bars =
-            SyntheticBarAggregator::new(SyntheticBarOptions::RenkoFixed { box_size: 1.0 }).unwrap();
-        bars.set_source(source(&[100.0, 103.2, 102.1, 100.8]))
-            .unwrap();
-        assert_eq!(
-            bars.bars()
-                .iter()
-                .map(|bar| (bar.open, bar.close))
-                .collect::<Vec<_>>(),
-            vec![
-                (100.0, 101.0),
-                (101.0, 102.0),
-                (102.0, 103.0),
-                (102.0, 101.0)
-            ]
-        );
-    }
-
-    #[test]
-    fn atr_renko_waits_for_wilder_warmup() {
-        let mut bars =
-            SyntheticBarAggregator::new(SyntheticBarOptions::RenkoAtr { period: 3 }).unwrap();
-        let mut input = source(&[100.0, 101.0, 102.0, 105.0]);
-        for bar in &mut input {
-            bar.high += 0.5;
-            bar.low -= 0.5;
-        }
-        bars.set_source(input).unwrap();
-        assert_eq!(bars.bars().len(), 1);
-        assert_eq!(bars.bars()[0].open_timestamp_micros, 3_000_000);
-    }
-
-    #[test]
-    fn line_break_compares_close_against_last_n_line_extremes() {
-        let mut bars =
-            SyntheticBarAggregator::new(SyntheticBarOptions::LineBreak { lines: 3 }).unwrap();
-        bars.set_source(source(&[100.0, 101.0, 102.0, 101.5, 99.0]))
-            .unwrap();
-        assert_eq!(
-            bars.bars().iter().map(|bar| bar.close).collect::<Vec<_>>(),
-            vec![100.0, 101.0, 102.0, 99.0]
-        );
-    }
-
-    #[test]
-    fn kagi_extends_direction_and_reverses_only_by_configured_amount() {
-        let mut bars =
-            SyntheticBarAggregator::new(SyntheticBarOptions::Kagi { reversal_size: 2.0 }).unwrap();
-        bars.set_source(source(&[100.0, 103.0, 104.0, 103.0, 101.5, 99.0]))
-            .unwrap();
-        assert_eq!(
-            bars.bars()
-                .iter()
-                .map(|bar| (bar.open, bar.close))
-                .collect::<Vec<_>>(),
-            vec![(100.0, 104.0), (104.0, 99.0)]
-        );
-    }
-
-    #[test]
-    fn point_and_figure_builds_columns_and_honors_reversal_boxes() {
-        let mut bars = SyntheticBarAggregator::new(SyntheticBarOptions::PointAndFigure {
-            box_size: 1.0,
-            reversal_boxes: 3,
-        })
-        .unwrap();
-        bars.set_source(source(&[100.0, 104.2, 102.0, 100.5, 103.8]))
-            .unwrap();
-        assert_eq!(
-            bars.bars()
-                .iter()
-                .map(|bar| (bar.open, bar.close))
-                .collect::<Vec<_>>(),
-            vec![(100.0, 104.0), (103.0, 101.0)]
-        );
-    }
-
-    #[test]
-    fn source_replacement_is_atomic_and_ordered() {
-        let mut bars =
-            SyntheticBarAggregator::new(SyntheticBarOptions::LineBreak { lines: 3 }).unwrap();
-        bars.set_source(source(&[100.0, 101.0])).unwrap();
-        let before = bars.bars().to_vec();
-        let mut invalid = source(&[102.0])[0];
-        invalid.high = 100.0;
-        assert!(bars.update_source(invalid).is_err());
-        assert_eq!(bars.bars(), before);
-    }
-
-    #[test]
-    fn ordered_tip_updates_match_full_rebuild_for_every_transform() {
-        let input = source(&[100.0, 101.0, 103.0, 102.0, 98.0, 99.0, 104.0]);
-        for options in [
-            SyntheticBarOptions::RenkoFixed { box_size: 1.0 },
-            SyntheticBarOptions::RenkoAtr { period: 3 },
-            SyntheticBarOptions::LineBreak { lines: 3 },
-            SyntheticBarOptions::Kagi { reversal_size: 2.0 },
-            SyntheticBarOptions::PointAndFigure {
-                box_size: 1.0,
-                reversal_boxes: 3,
-            },
-        ] {
-            let mut streamed = SyntheticBarAggregator::new(options).unwrap();
-            for bar in &input {
-                streamed.update_source(*bar).unwrap();
-            }
-            let mut rebuilt = SyntheticBarAggregator::new(options).unwrap();
-            rebuilt.set_source(input.clone()).unwrap();
-            assert_eq!(streamed.bars(), rebuilt.bars(), "{options:?}");
-        }
-    }
-
-    #[test]
-    fn chart_projection_owns_sequence_identity_replay_and_domain_exclusivity() {
-        let mut chart = crate::ChartEngine::new(600.0, 400.0, 1.0);
-        chart
-            .configure_synthetic_bar_series(0, SyntheticBarOptions::RenkoFixed { box_size: 1.0 })
-            .unwrap();
-        chart
-            .set_synthetic_bar_source(0, source(&[100.0, 103.0, 99.0]))
-            .unwrap();
-        assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 6);
-        assert_eq!(chart.sequence_points().unwrap().len(), 6);
-
-        chart.set_replay_clock_micros(Some(2_000_000)).unwrap();
-        assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 3);
-        assert_eq!(chart.sequence_points().unwrap().len(), 3);
-        chart.set_replay_clock_micros(None).unwrap();
-        assert_eq!(chart.data_layer().series_data(0).unwrap().0.len(), 6);
-
-        let before = chart.synthetic_bars(0).unwrap().to_vec();
-        chart
-            .update_synthetic_bar_source(
-                0,
-                SyntheticSourceBar {
-                    timestamp_micros: 4_000_000,
-                    open: 99.0,
-                    high: 105.0,
-                    low: 99.0,
-                    close: 105.0,
-                },
-            )
-            .unwrap();
-        assert_eq!(&chart.synthetic_bars(0).unwrap()[..before.len()], before);
-
-        // The source owner is the only write path for synthetic projections: accepting generic
-        // OHLC writes, pop, or an independent retention cap would desynchronize replay and the
-        // logical sequence from the aggregator's canonical state.
-        assert!(!chart.update_series_bar(0, 5.0, [1.0, 1.0, 1.0, 1.0]));
-        assert!(
-            chart
-                .set_series_data(0, &[5.0], &[1.0], &[1.0], &[1.0], &[1.0])
-                .is_err()
-        );
-        assert_eq!(chart.series_pop(0, 1), None);
-        assert!(!chart.set_series_max_points(0, Some(2)));
-
-        let second = chart.add_series(crate::SeriesKind::Candlestick);
-        assert_eq!(
-            chart.configure_synthetic_bar_series(
-                second,
-                SyntheticBarOptions::LineBreak { lines: 3 },
-            ),
-            Err(SyntheticBarError::SequenceDomainInUse)
-        );
-        assert_eq!(
-            chart.add_trade_stream(
-                "second-sequence",
-                crate::FootprintAggregationOptions {
-                    bars: crate::FootprintBarAggregation::Trades { trades_per_bar: 10 },
-                    ..crate::FootprintAggregationOptions::default()
-                },
-            ),
-            Err(crate::FootprintError::SequenceDomainInUse)
-        );
-    }
-
-    #[test]
-    fn kagi_and_point_and_figure_emit_distinct_shared_frame_geometry() {
-        let mut kagi = crate::ChartEngine::new(600.0, 400.0, 1.0);
-        kagi.configure_synthetic_bar_series(0, SyntheticBarOptions::Kagi { reversal_size: 2.0 })
-            .unwrap();
-        kagi.set_synthetic_bar_source(0, source(&[100.0, 103.0, 104.0, 101.0]))
-            .unwrap();
-        kagi.time_scale.set_width(600.0);
-        kagi.fit_content();
-        kagi.set_visible_logical_range(-1.0, 2.0);
-        kagi.build_frame();
-        let frame = kagi.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            aeris_charts_render::draw_list::Prim::VLine { width, .. } if *width >= 2
-        )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            aeris_charts_render::draw_list::Prim::HLine { width, .. } if *width >= 1
-        )));
-
-        let mut point_and_figure = crate::ChartEngine::new(600.0, 400.0, 1.0);
-        point_and_figure
-            .configure_synthetic_bar_series(
-                0,
-                SyntheticBarOptions::PointAndFigure {
-                    box_size: 1.0,
-                    reversal_boxes: 3,
-                },
-            )
-            .unwrap();
-        point_and_figure
-            .set_synthetic_bar_source(0, source(&[100.0, 104.2, 100.5]))
-            .unwrap();
-        point_and_figure.time_scale.set_width(600.0);
-        point_and_figure.fit_content();
-        point_and_figure.set_visible_logical_range(-1.0, 2.0);
-        point_and_figure.set_bar_spacing(20.0);
-        point_and_figure.build_frame();
-        let frame = point_and_figure.build_frame();
-        let glyphs = frame.panes[0]
-            .main
-            .iter()
-            .filter_map(|primitive| match primitive {
-                aeris_charts_render::draw_list::Prim::Text { text, .. }
-                    if text == "X" || text == "O" =>
-                {
-                    Some(text.as_str())
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(glyphs.contains(&"X"));
-        assert!(glyphs.contains(&"O"));
-        assert!(glyphs.len() <= 4_096);
-    }
-}
+mod tests;

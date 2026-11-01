@@ -342,6 +342,26 @@ impl PlotList {
         }
     }
 
+    /// Drop plot rows at and after `len`, invalidating only the min/max chunks they touched.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        let (Some(first_removed), Some(last)) = (self.index_at(len), self.last_index()) else {
+            return;
+        };
+        match &mut self.indices {
+            PlotIndices::Empty => {}
+            PlotIndices::Dense { len: dense_len, .. } => *dense_len = len,
+            PlotIndices::Sparse(indices) => indices.truncate(len),
+        }
+        if len == 0 {
+            self.indices = PlotIndices::Empty;
+        }
+        for chunk in first_removed.div_euclid(CHUNK_SIZE)..=last.div_euclid(CHUNK_SIZE) {
+            for plot in 0..4 {
+                self.min_max_cache.remove(&(plot, chunk));
+            }
+        }
+    }
+
     pub fn size(&self) -> usize {
         match &self.indices {
             PlotIndices::Empty => 0,

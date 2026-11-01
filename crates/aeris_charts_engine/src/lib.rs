@@ -270,8 +270,10 @@ pub use resampling::{
     ResampleOptions, ResampledBar,
 };
 pub use synthetic_bars::{
-    MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS, SyntheticBar, SyntheticBarAggregator,
-    SyntheticBarError, SyntheticBarOptions, SyntheticSourceBar,
+    DEFAULT_LINE_BREAK_LINES, DEFAULT_POINT_AND_FIGURE_REVERSAL_BOXES, KagiLine, KagiReversalMode,
+    MAX_LINE_BREAK_LINES, MAX_SYNTHETIC_BARS, MAX_SYNTHETIC_SOURCE_BARS, SyntheticBar,
+    SyntheticBarAggregator, SyntheticBarError, SyntheticBarOptions, SyntheticPriceSource,
+    SyntheticSourceBar,
 };
 pub use trading::{
     AccountId, ExecutionId, ExecutionKind, ExecutionMarkerShape, HostEventHit, HostEventMarker,
@@ -1938,6 +1940,9 @@ pub struct ChartEngine {
     /// non-time footprint rebuild. It is consumed before ordinary timestamp rebasing so drawing
     /// anchors follow the same full-resolution bars even when row keys are reused.
     pending_sequence_mapping: Option<BarSequenceMapping>,
+    /// First sequence row replaced by a bounded tail update, consumed by the next time sync so
+    /// tick weights before it are kept instead of rebuilt.
+    pending_sequence_tail: Option<usize>,
     /// Persisted non-time drawing identities waiting for the host to install a matching bar
     /// sequence. Entries are bounded by the persistence anchor limits and are consumed when they
     /// resolve to a live sequence point.
@@ -2262,6 +2267,7 @@ impl ChartEngine {
             profile_drawing_cache: Vec::new(),
             profile_drawing_recalculations: 0,
             pending_sequence_mapping: None,
+            pending_sequence_tail: None,
             drawing_anchor_times: HashMap::new(),
             drawing_time_anchors: HashMap::new(),
             series,
@@ -4849,12 +4855,7 @@ impl ChartEngine {
                 if !index.is_finite() || index < 0.0 {
                     return None;
                 }
-                points
-                    .get(index as usize)
-                    .map(|sequence| DrawingAnchorTime {
-                        open_timestamp_micros: sequence.open_timestamp_micros,
-                        close_timestamp_micros: sequence.close_timestamp_micros,
-                    })
+                DrawingAnchorTime::of_sequence_point(points, index as usize)
             })
             .collect()
     }
@@ -4866,16 +4867,7 @@ impl ChartEngine {
         if self.drawing_anchor_times.is_empty() {
             return;
         }
-        let lookup = sequence
-            .iter()
-            .enumerate()
-            .map(|(index, point)| {
-                (
-                    (point.open_timestamp_micros, point.close_timestamp_micros),
-                    index,
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let lookup = DrawingAnchorTime::sequence_lookup(sequence);
         let mut resolved_ids = Vec::new();
         let mut changed = false;
         for drawing in &mut self.drawings {
@@ -4891,10 +4883,7 @@ impl ChartEngine {
                     resolved_all = false;
                     continue;
                 };
-                let Some(&index) = lookup.get(&(
-                    anchor_time.open_timestamp_micros,
-                    anchor_time.close_timestamp_micros,
-                )) else {
+                let Some(index) = anchor_time.resolve(&lookup) else {
                     resolved_all = false;
                     continue;
                 };
@@ -4951,6 +4940,66 @@ impl ChartEngine {
             matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar)
         }));
         self.update_sequence_projection_bars_inner(id, from, projection)
+    }
+
+    /// Replace the sequence projection from row `from` onward with `projection`, the complete
+    /// new tail. Rows before `from`, their sequence points, and their tick weights stay in place,
+    /// so the work is bounded by the replaced tail rather than by history length. Returns the
+    /// installed tail length, or `None` when the projection does not fit the current sequence.
+    pub(crate) fn replace_sequence_projection_tail(
+        &mut self,
+        id: SeriesId,
+        from: usize,
+        projection: SequenceProjectionColumns,
+    ) -> Option<usize> {
+        let (mut points, open, high, low, close) = projection;
+        if [open.len(), high.len(), low.len(), close.len()]
+            .iter()
+            .any(|&len| len != points.len())
+        {
+            return None;
+        }
+        let old_len = self.sequence_points.as_ref()?.len();
+        let rows = self.data.series_data(id).map(|(times, _)| times.len())?;
+        if from > old_len || rows != old_len {
+            return None;
+        }
+        self.invalidate_frame_series(id);
+        let previous_generation = self.data.series_generation(id).unwrap_or(0);
+        if self.data.truncate_tail(id, from)? != from {
+            return None;
+        }
+        if !points.is_empty() {
+            let times = (from..from + points.len())
+                .map(|index| index as i64)
+                .collect::<Vec<_>>();
+            self.data
+                .update_many(id, &times, [&open, &high, &low, &close])?;
+        }
+        for (offset, point) in points.iter_mut().enumerate() {
+            point.logical_index = (from + offset) as u64;
+        }
+        let sequence = self.sequence_points.as_mut()?;
+        let mapping = BarSequenceMapping::with_shared_prefix(from, &sequence[from..], &points);
+        sequence.truncate(from);
+        sequence.extend_from_slice(&points);
+        self.pending_sequence_mapping = Some(mapping);
+        self.pending_sequence_tail = Some(from);
+        // The row keys synchronized below are not chart time, so pending time anchors must not
+        // resolve against them.
+        let pending_time_anchors = std::mem::take(&mut self.drawing_time_anchors);
+        self.sync_time_points();
+        self.update_indicators_after_change(
+            id,
+            IndicatorChange {
+                from,
+                previous_generation,
+                full_replace: false,
+            },
+        );
+        self.drawing_time_anchors = pending_time_anchors;
+        self.apply_persisted_drawing_anchor_times();
+        Some(points.len())
     }
 
     fn update_sequence_projection_bars_inner(
@@ -6172,7 +6221,13 @@ impl ChartEngine {
         let has_projected_axis =
             self.future_time_projection.is_some() || self.past_time_projection.is_some();
         let has_sequence_axis = self.sequence_points().is_some();
-        if has_sequence_axis || !has_projected_axis || time_points_changed {
+        let sequence_tail = self
+            .pending_sequence_tail
+            .take()
+            .filter(|_| has_sequence_axis && time_points_changed);
+        if let Some(from) = sequence_tail {
+            self.sync_sequence_axis_tail(from);
+        } else if (!has_sequence_axis && !has_projected_axis) || time_points_changed {
             // The canonical axis borrows the merged timeline. Only sequence axes and changing
             // projections need a materialized set of tick timestamps.
             let materialized =
@@ -6236,6 +6291,44 @@ impl ChartEngine {
         }
         self.prune_selection_anchor_snapshot();
         self.data.begin_merged_time_transaction();
+    }
+
+    /// Tick weights for a sequence whose points before `from` are unchanged: drop the replaced
+    /// marks, push the new tail, and revise the inferred first weight, which depends only on the
+    /// endpoints and the length.
+    fn sync_sequence_axis_tail(&mut self, from: usize) {
+        let Some(points) = self.sequence_points.as_deref() else {
+            return;
+        };
+        let seconds = |point: &BarSequencePoint| point.open_timestamp_micros.div_euclid(1_000_000);
+        let from = from.min(self.synced_points_len).min(points.len());
+        self.tick_marks.truncate_from(from as TimePointIndex);
+        for index in from..points.len() {
+            let weight = index.checked_sub(1).map_or(0, |previous| {
+                weight_by_time_in_time_zone(
+                    seconds(&points[index]),
+                    seconds(&points[previous]),
+                    self.time_zone,
+                ) as u8
+            });
+            self.tick_marks.push_weight(index as TimePointIndex, weight);
+        }
+        let first = points.first().map(seconds);
+        let last = points.last().map(seconds);
+        if let (Some(first), Some(last)) = (first, last) {
+            self.tick_marks.set_first_weight(inferred_first_weight(
+                first,
+                last,
+                points.len(),
+                self.time_zone,
+            ));
+        }
+        self.synced_points_len = points.len();
+        self.synced_first_time = first;
+        self.synced_last_time = last;
+        self.synced_time_points_generation = self.data.time_points_generation();
+        self.synced_future_time_projection_revision = self.future_time_projection_revision;
+        self.synced_past_time_projection_revision = self.past_time_projection_revision;
     }
 
     fn sync_sequence_axis_times(&mut self) {

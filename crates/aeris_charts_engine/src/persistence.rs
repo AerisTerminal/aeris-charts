@@ -118,6 +118,12 @@ struct StateV2 {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+struct PriceTransformV3 {
+    series_id: SeriesId,
+    options: crate::SyntheticBarOptions,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct StateV3 {
     schema: String,
     schema_version: u32,
@@ -125,6 +131,10 @@ struct StateV3 {
     drawings: Vec<DrawingV1>,
     #[serde(default)]
     indicators: Vec<IndicatorV3>,
+    /// Price-transform (synthetic bar) definitions of live series. The transformed series' data
+    /// remains host-owned; only the definition round-trips.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    price_transforms: Vec<PriceTransformV3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     general_transition_duration_ms: Option<f64>,
 }
@@ -889,7 +899,7 @@ fn remap_indicator_source(
 impl ChartEngine {
     /// Deterministic JSON of stable chart state. Plain financial charts retain the V1 wire format.
     pub fn export_state_json(&self) -> Result<String, ChartError> {
-        if !self.indicators.is_empty()
+        if (!self.indicators.is_empty() || !self.synthetic_series.is_empty())
             && self
                 .panes
                 .iter()
@@ -962,12 +972,21 @@ impl ChartEngine {
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
+        let price_transforms = self
+            .synthetic_series_ids()
+            .into_iter()
+            .filter_map(|series_id| {
+                self.synthetic_bar_options(series_id)
+                    .map(|options| PriceTransformV3 { series_id, options })
+            })
+            .collect::<Vec<_>>();
         let document = serde_json::to_string(&StateV3 {
             schema: base.schema,
             schema_version: PERSISTENCE_SCHEMA_VERSION_STUDIES,
             panes: base.panes,
             drawings: base.drawings,
             indicators,
+            price_transforms,
             general_transition_duration_ms: (self.general_transition_duration_ms > 0.0)
                 .then_some(self.general_transition_duration_ms),
         })
@@ -2679,7 +2698,32 @@ impl ChartEngine {
             ));
             expected_outputs.push(vec![u32::MAX; expected]);
         }
+        // Validate transforms before any state installs. The owner itself is attached after the
+        // base install; its projection stays empty until the host installs the canonical source.
+        let mut transform = None;
+        for definition in &state.price_transforms {
+            if transform.replace(definition.series_id).is_some() {
+                return Err(invalid(
+                    "a chart can persist only one independent non-time bar sequence",
+                ));
+            }
+            if crate::synthetic_bars::validate_options(definition.options).is_err() {
+                return Err(invalid(format!(
+                    "price transform for series {} is invalid",
+                    definition.series_id
+                )));
+            }
+        }
         let mut result = self.install_validated_state(validated)?;
+        if let Some(definition) = state.price_transforms.first() {
+            self.configure_synthetic_bar_series(definition.series_id, definition.options)
+                .map_err(|error| {
+                    invalid(format!(
+                        "price transform for series {} could not be restored: {error}",
+                        definition.series_id
+                    ))
+                })?;
+        }
         let mut remapped_outputs = Vec::with_capacity(resolved.len());
         self.study_restore_pane_cursor = Some(1);
         for (study, (source, source_input, kind, volume_source, styles)) in
@@ -4180,6 +4224,92 @@ mod tests {
         }
     }
 
+    #[test]
+    fn price_transform_persists_and_shared_time_drawing_anchors_resolve_by_occurrence() {
+        let source = |closes: &[f64]| {
+            closes
+                .iter()
+                .enumerate()
+                .map(|(index, &price)| crate::SyntheticSourceBar {
+                    timestamp_micros: (index as i64 + 1) * 1_000_000,
+                    open: price,
+                    high: price,
+                    low: price,
+                    close: price,
+                })
+                .collect::<Vec<_>>()
+        };
+        let options = crate::SyntheticBarOptions::RenkoFixed {
+            box_size: 1.0,
+            source: crate::SyntheticPriceSource::Close,
+            wicks: true,
+        };
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_synthetic_bar_series(0, options).unwrap();
+        // Four bricks: (t1,t2) then three sharing (t2,t2).
+        chart
+            .set_synthetic_bar_source(0, source(&[100.0, 104.5]))
+            .unwrap();
+        chart.add_sma(0, 2);
+        let id = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 102.0,
+                    },
+                    DrawingPoint {
+                        logical: 3.0,
+                        price: 104.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["schema_version"], PERSISTENCE_SCHEMA_VERSION_STUDIES);
+        assert_eq!(
+            value["price_transforms"][0]["options"]["kind"],
+            serde_json::json!("renko_fixed")
+        );
+        assert_eq!(
+            value["drawings"][0]["anchor_times_micros"][0]["occurrence"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            value["drawings"][0]["anchor_times_micros"][1]["occurrence"],
+            serde_json::json!(2)
+        );
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.synthetic_bar_options(0), Some(options));
+        assert_eq!(restored.indicator_bindings().len(), 1);
+        assert_eq!(
+            restored.indicator_bindings()[0].kind,
+            crate::IndicatorKind::Sma { period: 2 }
+        );
+
+        // The restored source forms only two shared-time bricks, so the second anchor clamps to
+        // the run's last bar while the first still lands on the run's second bar. A first-match
+        // policy would collapse both onto the run's first bar.
+        restored
+            .set_synthetic_bar_source(0, source(&[100.0, 103.5]))
+            .unwrap();
+        let drawing = restored.drawing(id).unwrap();
+        assert_eq!(
+            drawing
+                .points
+                .iter()
+                .map(|point| point.logical)
+                .collect::<Vec<_>>(),
+            vec![2.0, 2.0]
+        );
+        assert!(restored.drawing_anchor_times.is_empty());
+    }
     #[test]
     fn b2_common_drawing_state_persists_losslessly() {
         let mut chart = settled_chart();

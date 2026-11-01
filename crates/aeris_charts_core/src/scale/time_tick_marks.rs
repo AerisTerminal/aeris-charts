@@ -288,6 +288,22 @@ impl TimeTickMarks {
         }
     }
 
+    /// Drop every mark at or after `index`, keeping earlier buckets in place. Callers re-push the
+    /// replaced tail through [`Self::push_weight`] in ascending order.
+    pub fn truncate_from(&mut self, index: TimePointIndex) {
+        self.cache = None;
+        if self.first_mark.is_some_and(|first| first.index >= index) {
+            self.first_mark = None;
+            self.marks_by_weight.clear();
+            return;
+        }
+        self.marks_by_weight.retain(|_, indices| {
+            let keep = indices.partition_point(|&mark| mark < index);
+            indices.truncate(keep);
+            !indices.is_empty()
+        });
+    }
+
     /// Streaming hot path: append a single point's weight without any O(n) scratch vector.
     /// Matches `fill_weights_for_points` semantics for one appended point with a known
     /// predecessor.
@@ -390,6 +406,29 @@ impl TimeTickMarks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_tail_repush_matches_a_full_rebuild() {
+        let times = (0..120)
+            .map(|index| 1_577_836_800 + index * 3_600)
+            .collect::<Vec<_>>();
+        let mut weights = vec![0u8; times.len()];
+        fill_weights_for_points(&times, &mut weights, 0);
+        let mut full = TimeTickMarks::new();
+        full.set_weights(&weights);
+
+        let mut repaired = TimeTickMarks::new();
+        repaired.set_weights(&weights[..100]);
+        repaired.truncate_from(90);
+        for (index, &weight) in weights.iter().enumerate().skip(90) {
+            repaired.push_weight(index as TimePointIndex, weight);
+        }
+        repaired.set_first_weight(weights[0]);
+        assert_eq!(repaired.build(6.0, 60.0), full.build(6.0, 60.0));
+
+        repaired.truncate_from(0);
+        assert!(repaired.build(6.0, 60.0).is_empty());
+    }
 
     #[test]
     fn civil_date_conversion() {

@@ -189,18 +189,9 @@ impl ChartEngine {
             .ok()
             .and_then(|count| first_id.checked_add(count))
             .ok_or_else(|| resource("drawing identity space is exhausted"))?;
-        let sequence_index = self.sequence_points().map(|points| {
-            points
-                .iter()
-                .enumerate()
-                .map(|(index, point)| {
-                    (
-                        (point.open_timestamp_micros, point.close_timestamp_micros),
-                        index,
-                    )
-                })
-                .collect::<HashMap<_, _>>()
-        });
+        let sequence_index = self
+            .sequence_points()
+            .map(DrawingAnchorTime::sequence_lookup);
         let time_axis_has_bars = sequence_index.is_none() && !self.data.merged_times().is_empty();
 
         let mut drawings = Vec::with_capacity(items.len());
@@ -256,10 +247,7 @@ impl ChartEngine {
                 let mut unresolved_time = None;
                 let mut unresolved_bar = point.sequence_bar;
                 if let Some(index) = &sequence_index {
-                    if let Some(bar) = point.sequence_bar
-                        && let Some(&found) =
-                            index.get(&(bar.open_timestamp_micros, bar.close_timestamp_micros))
-                    {
+                    if let Some(found) = point.sequence_bar.and_then(|bar| bar.resolve(index)) {
                         logical = found as f64 + (point.logical - point.logical.round());
                         unresolved_bar = None;
                     }

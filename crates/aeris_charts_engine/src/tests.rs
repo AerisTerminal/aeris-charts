@@ -253,6 +253,58 @@ fn constructs_without_a_browser_or_gpu() {
 }
 
 #[test]
+fn heikin_ashi_live_tip_updates_recompute_only_the_tip_rows() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let rows = 2_000;
+    let times = (0..rows).map(|row| 60.0 * row as f64).collect::<Vec<_>>();
+    let close = (0..rows)
+        .map(|row| 100.0 + (row as f64 * 0.37).sin() * 4.0)
+        .collect::<Vec<_>>();
+    let open = close.iter().map(|value| value - 0.5).collect::<Vec<_>>();
+    let high = close.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+    let low = open.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("valid candlestick data");
+    assert!(chart.series_apply_options_json(0, r#"{"heikin_ashi":true}"#));
+    chart.time_scale.fit_content();
+    chart.build_frame();
+    assert!(chart.heikin_ashi_row(0, 0).is_some());
+    let computed = |chart: &ChartEngine| {
+        chart
+            .series_entry(0)
+            .unwrap()
+            .heikin_ashi_cache
+            .borrow()
+            .computed_rows()
+    };
+    let baseline = computed(&chart);
+    assert_eq!(baseline, rows);
+
+    let tip = 60.0 * (rows - 1) as f64;
+    assert!(chart.update_series_bar(0, tip, [99.0, 104.0, 98.0, 103.0]));
+    assert!(chart.update_series_bar(0, tip + 60.0, [103.0, 105.0, 101.0, 102.0]));
+    chart.build_frame();
+    assert_eq!(
+        chart.heikin_ashi_row(0, rows - 1).map(|row| row[3]),
+        Some(101.0)
+    );
+    assert_eq!(computed(&chart), baseline + 2);
+
+    // The projection is time-preserving and equals a projection rebuilt from scratch.
+    let (row_times, columns) = chart.data.series_data(0).unwrap();
+    assert_eq!(row_times.len(), rows + 1);
+    let mut rebuilt = heikin_ashi::HeikinAshiCache::default();
+    for row in 0..=rows {
+        assert_eq!(
+            chart.heikin_ashi_row(0, row),
+            rebuilt.row(0, columns, row),
+            "row {row}"
+        );
+    }
+}
+
+#[test]
 fn heikin_ashi_frame_projection_preserves_raw_queries() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [1.0, 2.0];

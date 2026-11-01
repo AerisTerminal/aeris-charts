@@ -363,6 +363,7 @@
       <label>border dn <input type="color" id="border_down_color" value="#f7525f"></label>
       <label><input type="checkbox" id="wick_visible" checked> wicks</label>
       <label><input type="checkbox" id="border_visible" checked> borders</label>
+      <label title="Engine-owned Heikin Ashi projection; the canonical bars stay raw"><input type="checkbox" id="heikin_ashi_toggle"> heikin ashi</label>
       <button id="candle_parts_reset" type="button" title="Reset wick/border colors to follow the body colors">reset parts</button>
     </div>
 
@@ -2020,6 +2021,7 @@ function apply_main_style() {
     ...candle_body_options(),
     wick_visible: document.getElementById("wick_visible").checked,
     border_visible: document.getElementById("border_visible").checked,
+    heikin_ashi: document.getElementById("heikin_ashi_toggle").checked,
     color: kind === "area" ? document.getElementById("area_top").value : document.getElementById("line_color").value,
     line_width: Number(document.getElementById("line_width").value),
     // No explicit area fill: the engine derives it from the series color at the canonical fill
@@ -2078,6 +2080,7 @@ function sync_active_toolbar() {
   const options = current.options();
   const presented_kind = presented_series_kind(current);
   document.getElementById("point_markers_toggle").checked = options.point_markers === true;
+  document.getElementById("heikin_ashi_toggle").checked = options.heikin_ashi === true;
   document.getElementById("last_price_pulse_toggle").checked = options.last_price_animation === true;
   const radio = document.querySelector(`input[name="series"][value="${presented_kind}"]`);
   for (const peer of document.querySelectorAll('input[name="series"]')) peer.checked = peer === radio;
@@ -2164,6 +2167,7 @@ document.getElementById("wick_down_color").addEventListener("input", (e) => { ca
 document.getElementById("border_up_color").addEventListener("input", (e) => { candle_part_touched.border_up = true; active_series().apply_options({ border_up_color: e.target.value }); });
 document.getElementById("border_down_color").addEventListener("input", (e) => { candle_part_touched.border_down = true; active_series().apply_options({ border_down_color: e.target.value }); });
 document.getElementById("wick_visible").addEventListener("change", (e) => active_series().apply_options({ wick_visible: e.target.checked }));
+document.getElementById("heikin_ashi_toggle").addEventListener("change", (e) => active_series().apply_options({ heikin_ashi: e.target.checked }));
 document.getElementById("border_visible").addEventListener("change", (e) => active_series().apply_options({ border_visible: e.target.checked }));
 // Unpin every part override ("" = clear back to follow-body) and re-sync pickers to the body
 // colors the parts now follow.

@@ -569,41 +569,64 @@ impl ChartEngine {
         );
         match options {
             crate::SyntheticBarOptions::Kagi { .. } => {
+                // Yang (thick, up color) and yin (thin, down color) follow the engine-owned
+                // shoulder/waist state; a vertical that crosses its reference switches there. A
+                // conflated bucket uses the state of its last row, which owns the close.
                 let base_width = (rs.line_width * hpr).round().max(1.0) as i32;
-                let mut previous: Option<(i32, i32)> = None;
-                for bar in visible {
-                    let rising = bar.close >= bar.open;
-                    let color = if rising { rs.up } else { rs.down };
-                    let width = if rising {
-                        base_width.saturating_mul(2)
+                let style_for = |yang: bool| {
+                    if yang {
+                        (base_width.saturating_mul(2), rs.up)
                     } else {
-                        base_width
-                    };
+                        (base_width, rs.down)
+                    }
+                };
+                let y_at = |price: f64| {
+                    (scale.price_to_coordinate(price, rs.base_value) * vpr).round() as i32
+                };
+                let mut previous_x: Option<i32> = None;
+                for bar in visible {
+                    let line = self.synthetic_kagi_line(rs.id, bar.source_row).unwrap_or(
+                        crate::KagiLine {
+                            yang_at_open: bar.close >= bar.open,
+                            reference: None,
+                        },
+                    );
                     let x = bar.x_px.round() as i32;
-                    let open_y =
-                        (scale.price_to_coordinate(bar.open, rs.base_value) * vpr).round() as i32;
-                    let close_y =
-                        (scale.price_to_coordinate(bar.close, rs.base_value) * vpr).round() as i32;
-                    if let Some((previous_x, previous_y)) = previous {
+                    let open_y = y_at(bar.open);
+                    let close_y = y_at(bar.close);
+                    let (open_width, open_color) = style_for(line.yang_at_open);
+                    if let Some(previous_x) = previous_x {
                         out.push(Prim::HLine {
                             y: open_y,
                             x0: previous_x.min(x),
                             x1: previous_x.max(x),
+                            width: open_width,
+                            style: LineStyle::Solid,
+                            color: open_color,
+                        });
+                    }
+                    let switch_y = line.switch_price(bar.open, bar.close).map(y_at);
+                    let first_end = switch_y.unwrap_or(close_y);
+                    out.push(Prim::VLine {
+                        x,
+                        y0: open_y.min(first_end),
+                        y1: open_y.max(first_end),
+                        width: open_width,
+                        style: LineStyle::Solid,
+                        color: open_color,
+                    });
+                    if let Some(switch_y) = switch_y {
+                        let (width, color) = style_for(!line.yang_at_open);
+                        out.push(Prim::VLine {
+                            x,
+                            y0: switch_y.min(close_y),
+                            y1: switch_y.max(close_y),
                             width,
                             style: LineStyle::Solid,
                             color,
                         });
-                        debug_assert_eq!(previous_y, open_y);
                     }
-                    out.push(Prim::VLine {
-                        x,
-                        y0: open_y.min(close_y),
-                        y1: open_y.max(close_y),
-                        width,
-                        style: LineStyle::Solid,
-                        color,
-                    });
-                    previous = Some((x, close_y));
+                    previous_x = Some(x);
                 }
             }
             crate::SyntheticBarOptions::PointAndFigure { box_size, .. } => {

@@ -406,15 +406,23 @@ test("configuring synthetic bars delivers faults before the next chart call", as
     });
     const output = chart.add_custom_study("test.synthetic-fault", source)[0];
     const before = [...faults];
-    // Isolate the configuring wasm call from repaint's other wasm calls.
+    // Reconfiguring preserves the canonical source: an equivalent transform rebuilds the same
+    // projection and the study sees its rows, so no fault fires.
+    const preserved = source.data().length;
+    chart.configure_synthetic_bar_series(source, options);
+    const after_same = [...faults];
+    // A transform whose box forms no bricks empties the projection, and the study fault is
+    // delivered by the configuring call itself. Isolate it from repaint's other wasm calls.
     const repaint = chart.repaint;
     Object.defineProperty(chart, "repaint", { configurable: true, value: () => {} });
-    chart.configure_synthetic_bar_series(source, options);
+    chart.configure_synthetic_bar_series(source, { kind: "renko_fixed", box_size: 1000 });
     Object.defineProperty(chart, "repaint", { configurable: true, value: repaint });
     // Do not call another wasm method (including output.data()) before snapshotting.
-    return { before, faults: [...faults], binding: output.id };
+    return { before, preserved, after_same, faults: [...faults], binding: output.id };
   });
   expect(result.before).toEqual([]);
+  expect(result.preserved).toBe(2);
+  expect(result.after_same).toEqual([]);
   expect(result.faults).toEqual([{ binding: result.binding, message: "synthetic reconfiguration failed" }]);
 });
 

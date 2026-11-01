@@ -44,7 +44,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  replay_change_handler, replay_clock_stats, replay_seek_stats, replay_state, replay_step, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar_options, trade_stream_stats,
+  replay_change_handler, replay_clock_stats, replay_seek_stats, replay_state, replay_step, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar, synthetic_bar_options, trade_stream_stats,
   profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_presentation_options,
   periodic_profile_presentation_request, periodic_profile_presentation_options,
   anchored_vwap_point, profile_drawing_options, profile_drawing_snapshot,
@@ -5282,6 +5282,12 @@ export class chart_impl implements chart_api {
     if (result !== "") throw new AerisChartsError("invalid_data", result);
     this.sync_countdown_timer();
     this.repaint();
+  }
+
+  synthetic_bar_at(series: series_api | number, logical: number): synthetic_bar | null {
+    const series_id = typeof series === "number" ? series : series.id;
+    const json = this.wasm.synthetic_bar_at_json(series_id, logical);
+    return json === "" ? null : (JSON.parse(json) as synthetic_bar);
   }
 
   trade_stream_id(key: string): number | null {

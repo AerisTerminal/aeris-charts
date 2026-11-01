@@ -91,6 +91,18 @@ impl ChartInner {
             .map_or_else(|error| error.to_string(), |()| String::new())
     }
 
+    /// The displayed derived bar at a logical index as JSON, or an empty string when the series
+    /// has no transform or the index is outside the projection.
+    pub fn synthetic_bar_at_json(&self, id: u32, logical: f64) -> String {
+        if !logical.is_finite() || logical < 0.0 || logical > usize::MAX as f64 {
+            return String::new();
+        }
+        self.engine
+            .synthetic_bar_at(id as SeriesId, logical as usize)
+            .and_then(|bar| serde_json::to_string(&bar).ok())
+            .unwrap_or_default()
+    }
+
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
         if state_json.is_empty() || state_json == "null" {
             return self.engine.clear_area_brush_state(id as SeriesId);

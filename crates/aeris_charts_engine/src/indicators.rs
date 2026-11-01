@@ -3836,6 +3836,16 @@ impl ChartEngine {
         dependency: SeriesId,
         change: IndicatorChange,
     ) {
+        if let (Some(series), Some(generation)) = (
+            self.series_entry(dependency),
+            self.data.series_generation(dependency),
+        ) {
+            series.heikin_ashi_cache.borrow_mut().note_change(
+                change.previous_generation,
+                generation,
+                if change.full_replace { 0 } else { change.from },
+            );
+        }
         self.indicator_changes.clear();
         self.indicator_changes.push((dependency, change));
         self.propagate_indicator_changes();

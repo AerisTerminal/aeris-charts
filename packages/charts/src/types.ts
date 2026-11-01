@@ -2296,13 +2296,40 @@ export interface footprint_series_options {
   show_range_strip: boolean;
 }
 
+/** Source prices a box transform reacts to: each row's close, or its high for advances and low
+ *  for declines (current direction tested first). Defaults to `"close"`. */
+export type synthetic_price_source = "close" | "high_low";
+
+/** How a Kagi `reversal_size` is measured: a price distance, or a percentage of the current
+ *  line's extreme (must be under 100). Defaults to `"absolute"`. */
+export type kagi_reversal_mode = "absolute" | "percent";
+
 /** Engine-owned price-action transform applied to canonical host OHLC source bars. */
 export type synthetic_bar_options =
-  | { kind: "renko_fixed"; box_size: number }
-  | { kind: "renko_atr"; period: number }
-  | { kind: "line_break"; lines: number }
-  | { kind: "kagi"; reversal_size: number }
-  | { kind: "point_and_figure"; box_size: number; reversal_boxes: number };
+  | { kind: "renko_fixed"; box_size: number; source?: synthetic_price_source; wicks?: boolean }
+  | { kind: "renko_atr"; period: number; source?: synthetic_price_source; wicks?: boolean }
+  | { kind: "line_break"; lines?: number }
+  | { kind: "kagi"; reversal_size: number; reversal_mode?: kagi_reversal_mode }
+  | { kind: "point_and_figure"; box_size: number; reversal_boxes?: number; source?: synthetic_price_source };
+
+/** Kagi line thickness state: a line turns yang (thick) above the prior shoulder and yin (thin)
+ *  below the prior waist. `reference` is that shoulder or waist. */
+export interface kagi_line {
+  yang_at_open: boolean;
+  reference: number | null;
+}
+
+/** One derived bar of a price transform, with full-resolution source-time bounds. */
+export interface synthetic_bar {
+  logical_index: number;
+  open_timestamp_micros: number;
+  close_timestamp_micros: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  kagi: kagi_line | null;
+}
 
 export type any_series_options = series_options & Partial<feature_series_options> & Partial<footprint_series_options>;
 
@@ -3046,6 +3073,8 @@ export interface chart_state_v3 {
   panes: persisted_pane_v1[];
   drawings: persisted_drawing_v1[];
   indicators: unknown[];
+  /** Price-transform definitions of live series; absent when no series is transformed. */
+  price_transforms?: { series_id: number; options: synthetic_bar_options }[];
   /** Persisted opt-in duration; active animation progress is runtime-only. */
   general_transition_duration_ms?: number;
 }
@@ -4203,6 +4232,9 @@ export interface chart_api {
   set_synthetic_bar_source(series: series_api | number, data: readonly series_data[]): void;
   /** Append or replace the current canonical source bar, then refresh the synthetic sequence. */
   update_synthetic_bar_source(series: series_api | number, data: ohlc_data): void;
+  /** The displayed derived bar at a logical index, or `null` when the series has no transform
+   *  or the index is outside the projection. */
+  synthetic_bar_at(series: series_api | number, logical: number): synthetic_bar | null;
   trade_stream_id(key: string): number | null;
   trade_stream_revision(stream_id: number): number | null;
   trade_stream_stats(stream_id: number): trade_stream_stats | null;

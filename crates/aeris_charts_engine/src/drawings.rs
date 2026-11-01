@@ -959,6 +959,61 @@ pub struct DrawingPoint {
 pub(crate) struct DrawingAnchorTime {
     pub(crate) open_timestamp_micros: i64,
     pub(crate) close_timestamp_micros: i64,
+    /// Position among consecutive bars that share both source times, such as several Renko
+    /// bricks formed by one source row. Absent in documents saved before it existed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) occurrence: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+/// First index and run length of each distinct source-time pair in a sequence.
+pub(crate) type SequenceAnchorLookup = HashMap<(i64, i64), (usize, usize)>;
+
+impl DrawingAnchorTime {
+    fn key(point: &crate::BarSequencePoint) -> (i64, i64) {
+        (point.open_timestamp_micros, point.close_timestamp_micros)
+    }
+
+    /// The identity of `points[index]`, counting the earlier bars of its shared-time run.
+    pub(crate) fn of_sequence_point(
+        points: &[crate::BarSequencePoint],
+        index: usize,
+    ) -> Option<Self> {
+        let point = points.get(index)?;
+        let key = Self::key(point);
+        let occurrence = points[..index]
+            .iter()
+            .rev()
+            .take_while(|previous| Self::key(previous) == key)
+            .count();
+        Some(Self {
+            open_timestamp_micros: key.0,
+            close_timestamp_micros: key.1,
+            occurrence: u32::try_from(occurrence).unwrap_or(u32::MAX),
+        })
+    }
+
+    pub(crate) fn sequence_lookup(points: &[crate::BarSequencePoint]) -> SequenceAnchorLookup {
+        let mut lookup = SequenceAnchorLookup::new();
+        for (index, point) in points.iter().enumerate() {
+            lookup
+                .entry(Self::key(point))
+                .and_modify(|(_, count)| *count += 1)
+                .or_insert((index, 1));
+        }
+        lookup
+    }
+
+    /// The bar this identity names. When the run is now shorter (for example after a coarser
+    /// box size), the identity clamps to the run's last bar.
+    pub(crate) fn resolve(self, lookup: &SequenceAnchorLookup) -> Option<usize> {
+        let &(first, count) =
+            lookup.get(&(self.open_timestamp_micros, self.close_timestamp_micros))?;
+        Some(first + (self.occurrence as usize).min(count - 1))
+    }
 }
 
 /// Horizontal text alignment shared by every tool's label (TS `drawing_text_h_align`; maps to

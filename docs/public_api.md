@@ -40,10 +40,13 @@ The supported root surface is:
   stacked imbalances, density LOD, and derived bar/level queries; generic OHLC setters are rejected
   because they cannot supply order-flow truth;
 - one chart-level replay clock plus shared canonical trade streams, typed batch ingestion, ordinary
-  candle/bar bindings, exact seek-work telemetry, and fixed/ATR Renko, Line Break, Kagi, and Point &
-  Figure transforms through `configure_synthetic_bar_series`, `set_synthetic_bar_source[_typed]`,
-  and `update_synthetic_bar_source`; synthetic source/history remains host-owned and is not part of
-  chart-state persistence;
+  candle/bar bindings, exact seek-work telemetry, and fixed/ATR Renko (close or high/low source,
+  optional wicks), Line Break (configurable line count), Kagi (absolute or percent reversal with
+  yang/yin shoulder/waist switching), and Point & Figure (configurable box and reversal count,
+  close or high/low source) transforms through `configure_synthetic_bar_series`,
+  `set_synthetic_bar_source[_typed]`, `update_synthetic_bar_source`, and the derived-bar query
+  `synthetic_bar_at`; the transform definition round-trips in chart-state V3 `price_transforms`
+  while synthetic source/history remains host-owned;
 - engine-owned bar replay through `replay_select_start`, `replay_cancel_selection`,
   `replay_select_time`, `replay_play`, `replay_pause`, `replay_toggle_play`,
   `replay_step_forward`, `replay_step_back`, `set_replay_speed`, `set_replay_step`,
