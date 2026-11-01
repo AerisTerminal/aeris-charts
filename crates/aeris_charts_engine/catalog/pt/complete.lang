@@ -1,0 +1,6 @@
+# Texto das famílias de gráficos presentes apenas na build completa.
+from = de {value}
+to = até {value}
+hexbin_cell = célula hexagonal
+samples[one] = {count} amostra
+samples[other] = {count} amostras

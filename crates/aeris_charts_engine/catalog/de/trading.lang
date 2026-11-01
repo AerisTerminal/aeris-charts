@@ -1,0 +1,21 @@
+# Die Handelsüberlagerung: Order- und Positionschips, Schaltflächen und Ausführungsmarken.
+buy = Kaufen
+sell = Verkaufen
+market = Market
+limit = Limit
+stop = Stop
+stop_limit = Stop-Limit
+inactive = Inaktiv
+replay = Replay
+close_position = Position schließen
+cancel_take_profit = Take-Profit stornieren
+cancel_stop_loss = Stop-Loss stornieren
+cancel_order = Order stornieren
+cancel_remaining = Rest {quantity} stornieren
+trigger = Auslösen {quantity}
+# Die Durchschnittspreis-Markierung im Tooltip einer zusammengefassten Ausführung.
+average_price = Ø
+fills[one] = {count} Ausführung
+fills[other] = {count} Ausführungen
+bid = Bid
+ask = Ask

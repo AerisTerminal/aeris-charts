@@ -1,0 +1,14 @@
+# 金融チャートと一般チャートの凡例の行。
+ohlc_open = 始
+ohlc_high = 高
+ohlc_low = 安
+ohlc_close = 終
+# 凡例とツールチップで折りたたまれた行を示すマーカー。
+more_rows[other] = 他 {count} 件
+# 無題の一般系列の代替タイトル。
+series_fallback = 系列 {number}
+asset = 資産
+options_volume = オプション出来高
+calls = コール
+puts = プット
+delta = デルタ

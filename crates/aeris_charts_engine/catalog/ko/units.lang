@@ -1,0 +1,7 @@
+# 측정 통계와 봉 마감 카운트다운의 기간 단위.
+duration_days = {value}일
+duration_hours = {value}시간
+duration_minutes = {value}분
+duration_seconds = {value}초
+# 표시 가능한 최대 일수를 넘는 카운트다운.
+countdown_overflow = {days}일+

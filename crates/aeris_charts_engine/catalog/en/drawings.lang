@@ -1,0 +1,38 @@
+# Text the drawing tools paint on the chart, and the anchor names of their settings.
+
+# Measure statistics. `{count}` arrives formatted and can carry a minus sign.
+bars[one] = {count} bar
+bars[other] = {count} bars
+# A fractional bar count; `{value}` has two decimals.
+bars_fraction = {value} bars
+range = range
+distance = distance: {pixels} px
+
+# Long and short position tools. `{percent}` has three decimals.
+position_target = Target: {price} ({percent}%) {ticks}, Amount: {amount}
+position_stop = Stop: {price} ({percent}%) {ticks}, Amount: {amount}
+position_open_pnl = Open P&L: {pnl}, Qty: {quantity}
+position_closed_pnl = Closed P&L: {pnl}, Qty: {quantity}
+risk_reward = Risk/reward ratio: {ratio}
+
+# Anchor names in the drawing settings.
+anchor_entry = Entry
+anchor_target = Target
+anchor_stop = Stop
+anchor_point = Point
+anchor_numbered_point = Point {number}
+
+# Prompts of empty text drawings.
+line_text_placeholder = + Add text
+annotation_placeholder = Add text
+
+# Elliott wave degrees. English shows the stored identifier itself.
+wave_degree_subminuette = subminuette
+wave_degree_minuette = minuette
+wave_degree_minute = minute
+wave_degree_minor = minor
+wave_degree_intermediate = intermediate
+wave_degree_primary = primary
+wave_degree_cycle = cycle
+wave_degree_supercycle = supercycle
+wave_degree_grand_supercycle = grand_supercycle

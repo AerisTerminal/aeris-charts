@@ -1,0 +1,37 @@
+# 描画ツールがチャート上に表示するテキストと、設定に表示するアンカー名。
+
+# 計測の統計。`{count}` は書式設定済みで、マイナス記号が付く場合があります。
+bars[other] = {count} 本
+# 小数のバー数。`{value}` は小数点以下 2 桁です。
+bars_fraction = {value} 本
+range = 値幅
+distance = 距離：{pixels} px
+
+# 買い・売りポジションツール。`{percent}` は小数点以下 3 桁です。
+position_target = 利確：{price}（{percent}%）{ticks}、金額：{amount}
+position_stop = 損切り：{price}（{percent}%）{ticks}、金額：{amount}
+position_open_pnl = 評価損益：{pnl}、数量：{quantity}
+position_closed_pnl = 確定損益：{pnl}、数量：{quantity}
+risk_reward = リスクリワード比：{ratio}
+
+# 描画設定のアンカー名。
+anchor_entry = エントリー
+anchor_target = 利確
+anchor_stop = 損切り
+anchor_point = ポイント
+anchor_numbered_point = ポイント {number}
+
+# 空のテキスト描画のプロンプト。
+line_text_placeholder = + テキストを追加
+annotation_placeholder = テキストを追加
+
+# エリオット波動の階層。
+wave_degree_subminuette = サブミニュエット
+wave_degree_minuette = ミニュエット
+wave_degree_minute = ミニュート
+wave_degree_minor = マイナー
+wave_degree_intermediate = インターミディエイト
+wave_degree_primary = プライマリー
+wave_degree_cycle = サイクル
+wave_degree_supercycle = スーパーサイクル
+wave_degree_grand_supercycle = グランドスーパーサイクル

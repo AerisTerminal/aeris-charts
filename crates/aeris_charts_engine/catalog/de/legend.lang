@@ -1,0 +1,15 @@
+# Legendenzeilen finanzieller und allgemeiner Charts.
+ohlc_open = E
+ohlc_high = H
+ohlc_low = T
+ohlc_close = S
+# Die Markierung eingeklappter Zeilen in Legenden und Tooltips.
+more_rows[one] = +{count} weitere
+more_rows[other] = +{count} weitere
+# Der Ersatztitel einer unbenannten allgemeinen Reihe.
+series_fallback = Reihe {number}
+asset = Basiswert
+options_volume = Optionsvolumen
+calls = Calls
+puts = Puts
+delta = Delta

@@ -1,0 +1,5 @@
+# 전체 빌드에만 포함되는 차트 유형의 텍스트.
+from = 시작 {value}
+to = 끝 {value}
+hexbin_cell = 육각 빈 셀
+samples[other] = 표본 {count}개

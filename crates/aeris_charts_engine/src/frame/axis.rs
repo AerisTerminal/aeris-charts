@@ -1248,7 +1248,7 @@ impl ChartEngine {
                 };
                 let text = format_date_pattern_with_time_zone(
                     time,
-                    crate::text::bar_month_tag_pattern(self.language),
+                    aeris_charts_core::format::time_formatter::numeric_date_pattern(self.language),
                     &self.month_names,
                     self.time_zone,
                 );
@@ -2518,14 +2518,14 @@ impl ChartEngine {
                     let market = self.market_colors();
                     let sides = [
                         (
-                            crate::text::BID.text(self.language),
+                            crate::text::trading::BID.text(self.language),
                             series.bid,
                             series.bid_color.as_str(),
                             PRIMARY,
                             1u32,
                         ),
                         (
-                            crate::text::ASK.text(self.language),
+                            crate::text::trading::ASK.text(self.language),
                             series.ask,
                             series.ask_color.as_str(),
                             market.down,

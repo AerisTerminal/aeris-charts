@@ -1,0 +1,21 @@
+# La surcouche de trading : pastilles d'ordres et de positions, boutons et marqueurs d'exécution.
+buy = Achat
+sell = Vente
+market = Marché
+limit = Limite
+stop = Stop
+stop_limit = Stop limite
+inactive = Inactif
+replay = Relecture
+close_position = Fermer la position
+cancel_take_profit = Annuler le take profit
+cancel_stop_loss = Annuler le stop loss
+cancel_order = Annuler l'ordre
+cancel_remaining = Annuler le reste {quantity}
+trigger = Déclencher {quantity}
+# Le marqueur de prix moyen de l'infobulle d'une exécution agrégée.
+average_price = moy.
+fills[one] = {count} exécution
+fills[other] = {count} exécutions
+bid = Bid
+ask = Ask

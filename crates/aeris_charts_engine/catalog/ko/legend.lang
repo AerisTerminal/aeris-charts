@@ -1,0 +1,14 @@
+# 금융 및 일반 차트의 범례 행.
+ohlc_open = 시
+ohlc_high = 고
+ohlc_low = 저
+ohlc_close = 종
+# 범례와 툴팁의 접힌 행 표시.
+more_rows[other] = +{count}개 더 보기
+# 제목 없는 일반 시리즈의 기본 제목.
+series_fallback = 시리즈 {number}
+asset = 자산
+options_volume = 옵션 거래량
+calls = 콜
+puts = 풋
+delta = 델타

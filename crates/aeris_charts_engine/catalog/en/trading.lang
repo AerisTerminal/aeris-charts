@@ -1,0 +1,21 @@
+# The trading overlay: order and position chips, buttons and execution markers.
+buy = Buy
+sell = Sell
+market = Market
+limit = Limit
+stop = Stop
+stop_limit = Stop Limit
+inactive = Inactive
+replay = Replay
+close_position = Close position
+cancel_take_profit = Cancel take profit
+cancel_stop_loss = Cancel stop loss
+cancel_order = Cancel order
+cancel_remaining = Cancel remaining {quantity}
+trigger = Trigger {quantity}
+# The average-price marker of an aggregated execution tooltip.
+average_price = avg
+fills[one] = {count} fill
+fills[other] = {count} fills
+bid = Bid
+ask = Ask

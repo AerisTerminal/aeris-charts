@@ -1,0 +1,22 @@
+# The trading overlay: order and position chips, buttons and execution markers.
+buy = Покупка
+sell = Продажа
+market = Рынок
+limit = Лимит
+stop = Стоп
+stop_limit = Стоп-лимит
+inactive = Неактивен
+replay = Повтор
+close_position = Закрыть позицию
+cancel_take_profit = Отменить тейк-профит
+cancel_stop_loss = Отменить стоп-лосс
+cancel_order = Отменить ордер
+cancel_remaining = Отменить оставшиеся {quantity}
+trigger = Триггер {quantity}
+# The average-price marker of an aggregated execution tooltip.
+average_price = ср.
+fills[one] = {count} сделка
+fills[few] = {count} сделки
+fills[many] = {count} сделок
+bid = Бид
+ask = Аск

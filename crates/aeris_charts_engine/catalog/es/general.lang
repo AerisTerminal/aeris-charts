@@ -1,0 +1,16 @@
+# Descripciones emergentes y etiquetas de accesibilidad de los gráficos generales (no financieros).
+no_value = Sin valor
+quartiles = Q1 {q1} · Q3 {q3}
+size = tamaño {value}
+target = objetivo {value}
+comparative = comparativo {value}
+bands = bandas {values}
+rank = posición {rank}
+waterfall_increase = aumento {start} → {end}
+waterfall_decrease = disminución {start} → {end}
+waterfall_subtotal = subtotal
+waterfall_total = total
+gantt_task = {start} – {end} · {percent}% completado
+gantt_milestone = Hito {date}
+# `{share}` tiene un decimal.
+mosaic_cell = {column}, {segment}, {share}% de la columna

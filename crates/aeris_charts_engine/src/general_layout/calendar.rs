@@ -310,7 +310,7 @@ fn color_scale(base: Color, input: &CalendarInput) -> (Color, Color) {
 }
 
 fn day_labels(language: crate::ChartLanguage, input: &CalendarInput) -> [&str; 7] {
-    let defaults = crate::text::default_day_labels(language);
+    let defaults = aeris_charts_core::format::time_formatter::weekday_initials(language);
     std::array::from_fn(|index| {
         input
             .day_labels

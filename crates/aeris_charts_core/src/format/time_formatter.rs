@@ -11,46 +11,234 @@
 
 use std::sync::LazyLock;
 
+use crate::language::ChartLanguage;
 use crate::scale::time_tick_marks::{TickMarkWeight, civil_from_timestamp};
 use crate::time_zone::{ChartTimeZone, LocalTimeParts};
 
-const MONTHS_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+/// The built-in stand-alone month names of a language: the abbreviated and the wide forms.
+/// Languages with letter case start each name with a capital, as axis labels do.
+const fn builtin_month_names(language: ChartLanguage) -> [[&'static str; 12]; 2] {
+    match language {
+        ChartLanguage::English => [
+            [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            ],
+            [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ],
+        ],
+        ChartLanguage::German => [
+            [
+                "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+            ],
+            [
+                "Januar",
+                "Februar",
+                "März",
+                "April",
+                "Mai",
+                "Juni",
+                "Juli",
+                "August",
+                "September",
+                "Oktober",
+                "November",
+                "Dezember",
+            ],
+        ],
+        ChartLanguage::Spanish => [
+            [
+                "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sept", "Oct", "Nov", "Dic",
+            ],
+            [
+                "Enero",
+                "Febrero",
+                "Marzo",
+                "Abril",
+                "Mayo",
+                "Junio",
+                "Julio",
+                "Agosto",
+                "Septiembre",
+                "Octubre",
+                "Noviembre",
+                "Diciembre",
+            ],
+        ],
+        ChartLanguage::French => [
+            [
+                "Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin", "Juil.", "Août", "Sept.", "Oct.",
+                "Nov.", "Déc.",
+            ],
+            [
+                "Janvier",
+                "Février",
+                "Mars",
+                "Avril",
+                "Mai",
+                "Juin",
+                "Juillet",
+                "Août",
+                "Septembre",
+                "Octobre",
+                "Novembre",
+                "Décembre",
+            ],
+        ],
+        ChartLanguage::Portuguese => [
+            [
+                "Jan.", "Fev.", "Mar.", "Abr.", "Mai.", "Jun.", "Jul.", "Ago.", "Set.", "Out.",
+                "Nov.", "Dez.",
+            ],
+            [
+                "Janeiro",
+                "Fevereiro",
+                "Março",
+                "Abril",
+                "Maio",
+                "Junho",
+                "Julho",
+                "Agosto",
+                "Setembro",
+                "Outubro",
+                "Novembro",
+                "Dezembro",
+            ],
+        ],
+        ChartLanguage::Russian => [
+            [
+                "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
+            ],
+            [
+                "Январь",
+                "Февраль",
+                "Март",
+                "Апрель",
+                "Май",
+                "Июнь",
+                "Июль",
+                "Август",
+                "Сентябрь",
+                "Октябрь",
+                "Ноябрь",
+                "Декабрь",
+            ],
+        ],
+        ChartLanguage::Hindi => [
+            [
+                "जन॰",
+                "फ़र॰",
+                "मार्च",
+                "अप्रैल",
+                "मई",
+                "जून",
+                "जुल॰",
+                "अग॰",
+                "सित॰",
+                "अक्तू॰",
+                "नव॰",
+                "दिस॰",
+            ],
+            [
+                "जनवरी",
+                "फ़रवरी",
+                "मार्च",
+                "अप्रैल",
+                "मई",
+                "जून",
+                "जुलाई",
+                "अगस्त",
+                "सितंबर",
+                "अक्तूबर",
+                "नवंबर",
+                "दिसंबर",
+            ],
+        ],
+        ChartLanguage::ChineseSimplified => [
+            [
+                "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
+                "12月",
+            ],
+            [
+                "一月",
+                "二月",
+                "三月",
+                "四月",
+                "五月",
+                "六月",
+                "七月",
+                "八月",
+                "九月",
+                "十月",
+                "十一月",
+                "十二月",
+            ],
+        ],
+        ChartLanguage::Japanese => [
+            [
+                "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
+                "12月",
+            ],
+            [
+                "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
+                "12月",
+            ],
+        ],
+        ChartLanguage::Korean => [
+            [
+                "1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월",
+                "12월",
+            ],
+            [
+                "1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월",
+                "12월",
+            ],
+        ],
+    }
+}
 
-const MONTHS_LONG: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
+/// The numeric day/month/year pattern of a language (tokens as in [`format_date_pattern`]),
+/// which the axis month tag under each bar uses.
+pub const fn numeric_date_pattern(language: ChartLanguage) -> &'static str {
+    match language {
+        ChartLanguage::English => "M/d/yyyy",
+        ChartLanguage::German | ChartLanguage::Russian => "d.M.yyyy",
+        ChartLanguage::Spanish
+        | ChartLanguage::French
+        | ChartLanguage::Portuguese
+        | ChartLanguage::Hindi => "d/M/yyyy",
+        ChartLanguage::ChineseSimplified | ChartLanguage::Japanese => "yyyy/M/d",
+        ChartLanguage::Korean => "yyyy. M. d.",
+    }
+}
 
-const MONTHS_SHORT_RU: [&str; 12] = [
-    "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
-];
-
-const MONTHS_LONG_RU: [&str; 12] = [
-    "Январь",
-    "Февраль",
-    "Март",
-    "Апрель",
-    "Май",
-    "Июнь",
-    "Июль",
-    "Август",
-    "Сентябрь",
-    "Октябрь",
-    "Ноябрь",
-    "Декабрь",
-];
+/// The short weekday headers of a language, Sunday first, as a calendar chart shows them
+/// without host labels.
+pub const fn weekday_initials(language: ChartLanguage) -> [&'static str; 7] {
+    match language {
+        ChartLanguage::English => ["S", "M", "T", "W", "T", "F", "S"],
+        ChartLanguage::German => ["S", "M", "D", "M", "D", "F", "S"],
+        ChartLanguage::Spanish => ["D", "L", "M", "X", "J", "V", "S"],
+        ChartLanguage::French => ["D", "L", "M", "M", "J", "V", "S"],
+        ChartLanguage::Portuguese => ["D", "S", "T", "Q", "Q", "S", "S"],
+        ChartLanguage::Russian => ["В", "П", "В", "С", "Ч", "П", "С"],
+        ChartLanguage::Hindi => ["र", "सो", "मं", "बु", "गु", "शु", "श"],
+        ChartLanguage::ChineseSimplified => ["日", "一", "二", "三", "四", "五", "六"],
+        ChartLanguage::Japanese => ["日", "月", "火", "水", "木", "金", "土"],
+        ChartLanguage::Korean => ["일", "월", "화", "수", "목", "금", "토"],
+    }
+}
 
 /// the reference's default `localization.dateFormat` (chart-options-defaults.ts:36).
 pub const DEFAULT_DATE_FORMAT: &str = "dd MMM 'yy";
@@ -67,25 +255,15 @@ pub struct MonthNames {
 impl MonthNames {
     /// The built-in English tables (the reference's en-US `toLocaleString` output).
     pub fn english() -> Self {
-        Self {
-            short: MONTHS_SHORT.map(String::from),
-            long: MONTHS_LONG.map(String::from),
-        }
-    }
-
-    /// The built-in Russian tables.
-    pub fn russian() -> Self {
-        Self {
-            short: MONTHS_SHORT_RU.map(String::from),
-            long: MONTHS_LONG_RU.map(String::from),
-        }
+        Self::of(ChartLanguage::English)
     }
 
     /// The built-in tables of a display language.
-    pub fn of(language: crate::language::ChartLanguage) -> Self {
-        match language {
-            crate::language::ChartLanguage::English => Self::english(),
-            crate::language::ChartLanguage::Russian => Self::russian(),
+    pub fn of(language: ChartLanguage) -> Self {
+        let [short, long] = builtin_month_names(language);
+        Self {
+            short: short.map(String::from),
+            long: long.map(String::from),
         }
     }
 }
@@ -98,17 +276,15 @@ impl Default for MonthNames {
 
 /// The shared English tables (allocated once) for callers that never install a locale.
 pub fn english_months() -> &'static MonthNames {
-    static ENGLISH: LazyLock<MonthNames> = LazyLock::new(MonthNames::english);
-    &ENGLISH
+    language_months(ChartLanguage::English)
 }
 
 /// The shared tables of a display language (each allocated once).
-pub fn language_months(language: crate::language::ChartLanguage) -> &'static MonthNames {
-    static RUSSIAN: LazyLock<MonthNames> = LazyLock::new(MonthNames::russian);
-    match language {
-        crate::language::ChartLanguage::English => english_months(),
-        crate::language::ChartLanguage::Russian => &RUSSIAN,
-    }
+pub fn language_months(language: ChartLanguage) -> &'static MonthNames {
+    static TABLES: LazyLock<[MonthNames; 10]> =
+        LazyLock::new(|| ChartLanguage::ALL.map(MonthNames::of));
+    // `ChartLanguage::ALL` lists the variants in declaration order.
+    &TABLES[language as usize]
 }
 
 /// Port of `TickMarkType`.
@@ -492,5 +668,50 @@ mod tests {
         );
         // The default stays English.
         assert_eq!(format_date_pattern(TS, "MMMM", english_months()), "June");
+    }
+
+    #[test]
+    fn every_language_has_complete_builtin_date_tables() {
+        for (index, language) in ChartLanguage::ALL.into_iter().enumerate() {
+            assert_eq!(language as usize, index, "{language:?}");
+            let months = language_months(language);
+            assert_eq!(*months, MonthNames::of(language));
+            assert!(
+                months
+                    .short
+                    .iter()
+                    .chain(&months.long)
+                    .all(|name| !name.is_empty()),
+                "{language:?}"
+            );
+            assert!(
+                weekday_initials(language).iter().all(|day| !day.is_empty()),
+                "{language:?}"
+            );
+        }
+        assert_eq!(language_months(ChartLanguage::Russian).short[0], "Янв");
+        assert_eq!(language_months(ChartLanguage::Russian).long[11], "Декабрь");
+        assert_eq!(language_months(ChartLanguage::German).long[2], "März");
+        assert_eq!(
+            language_months(ChartLanguage::ChineseSimplified).long[10],
+            "十一月"
+        );
+        let tag = |language| {
+            format_date_pattern(
+                TS,
+                numeric_date_pattern(language),
+                language_months(language),
+            )
+        };
+        assert_eq!(tag(ChartLanguage::English), "6/25/2018");
+        assert_eq!(tag(ChartLanguage::German), "25.6.2018");
+        assert_eq!(tag(ChartLanguage::Russian), "25.6.2018");
+        assert_eq!(tag(ChartLanguage::French), "25/6/2018");
+        assert_eq!(tag(ChartLanguage::Japanese), "2018/6/25");
+        assert_eq!(tag(ChartLanguage::Korean), "2018. 6. 25.");
+        assert_eq!(
+            weekday_initials(ChartLanguage::Japanese),
+            ["日", "月", "火", "水", "木", "金", "土"]
+        );
     }
 }

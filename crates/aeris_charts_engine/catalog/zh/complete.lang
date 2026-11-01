@@ -1,0 +1,5 @@
+# 仅完整版构建包含的图表类型的文本。
+from = 从 {value}
+to = 到 {value}
+hexbin_cell = 六边形分箱单元
+samples[other] = {count} 个样本

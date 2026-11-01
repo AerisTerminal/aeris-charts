@@ -3428,9 +3428,12 @@ impl ChartEngine {
                 continue;
             }
             if let Some(entry) = self.series_entry(dependent.series_id)
-                && entry.title == text::DELTA.text(previous)
+                && entry.title == text::legend::DELTA.text(previous)
             {
-                retitle.push((dependent.series_id, text::DELTA.text(language).to_string()));
+                retitle.push((
+                    dependent.series_id,
+                    text::legend::DELTA.text(language).to_string(),
+                ));
             }
         }
         let mut studies: Vec<u64> = self
@@ -3446,7 +3449,7 @@ impl ChartEngine {
                 continue;
             };
             for (index, id) in series.into_iter().enumerate() {
-                let phrase = [text::CALLS, text::PUTS][index];
+                let phrase = [text::legend::CALLS, text::legend::PUTS][index];
                 if let Some(entry) = self.series_entry(id)
                     && entry.title == phrase.text(previous)
                 {

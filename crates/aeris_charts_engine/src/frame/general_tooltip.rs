@@ -10,7 +10,6 @@ use crate::chart_input::FocusTooltipKey;
 use crate::general_axes::general_kind_uses_axis_hover;
 use crate::{
     AxisDimension, GeneralLayoutHit, GeneralRowDetail, GeneralSeriesKind, GeneralTooltipSnapshot,
-    GeneralWaterfallMark,
 };
 
 /// Recharts `Tooltip` default `offset`: the gap between the anchor and the box. The box flips
@@ -59,6 +58,7 @@ fn format_value(value: f64) -> String {
 /// The value text of one tooltip row; the browser `create_general_tooltip` default formats the
 /// same fields in the same order.
 fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage) -> String {
+    use crate::text::general;
     let optional = |value: Option<f64>| value.map_or_else(|| "—".to_owned(), format_value);
     let mut parts = Vec::new();
     if let Some(value) = item.value {
@@ -68,37 +68,25 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage)
         parts.push(format!("{}–{}", optional(item.low), optional(item.high)));
     }
     if item.q1.is_some() || item.q3.is_some() {
-        parts.push(format!(
-            "Q1 {} · Q3 {}",
-            optional(item.q1),
-            optional(item.q3)
+        parts.push(general::QUARTILES.format(
+            language,
+            &[("q1", &optional(item.q1)), ("q3", &optional(item.q3))],
         ));
     }
     if let Some(size) = item.size {
-        parts.push(format!(
-            "{} {}",
-            crate::text::TOOLTIP_SIZE.text(language),
-            format_value(size)
-        ));
+        parts.push(general::SIZE.format(language, &[("value", &format_value(size))]));
     }
     if let Some(label) = &item.y_label {
         parts.push(label.clone());
     }
     match item.detail {
         Some(GeneralRowDetail::Waterfall { mark, start, end }) => {
-            let name = crate::text::waterfall_mark(language, mark);
-            match mark {
-                GeneralWaterfallMark::Increase | GeneralWaterfallMark::Decrease => {
-                    parts.push(format!(
-                        "{name} {} → {}",
-                        format_value(start),
-                        format_value(end)
-                    ));
-                }
-                GeneralWaterfallMark::Subtotal | GeneralWaterfallMark::Total => {
-                    parts.push(name.to_owned());
-                }
-            }
+            parts.push(crate::text::waterfall_detail(
+                language,
+                mark,
+                &format_value(start),
+                &format_value(end),
+            ));
         }
         Some(GeneralRowDetail::Bullet {
             target,
@@ -106,52 +94,32 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage)
             bands,
         }) => {
             if let Some(target) = target {
-                parts.push(format!(
-                    "{} {}",
-                    crate::text::TOOLTIP_TARGET.text(language),
-                    format_value(target)
-                ));
+                parts.push(general::TARGET.format(language, &[("value", &format_value(target))]));
             }
             if let Some(comparative) = comparative {
-                parts.push(format!(
-                    "{} {}",
-                    crate::text::TOOLTIP_COMPARATIVE.text(language),
-                    format_value(comparative)
-                ));
+                parts.push(
+                    general::COMPARATIVE.format(language, &[("value", &format_value(comparative))]),
+                );
             }
             let bands: Vec<String> = bands.into_iter().flatten().map(format_value).collect();
             if !bands.is_empty() {
-                parts.push(format!(
-                    "{} {}",
-                    crate::text::TOOLTIP_BANDS.text(language),
-                    bands.join(" / ")
-                ));
+                parts.push(general::BANDS.format(language, &[("values", &bands.join(" / "))]));
             }
         }
         Some(GeneralRowDetail::Rank(rank)) => {
-            parts.push(format!(
-                "{} {rank}",
-                crate::text::TOOLTIP_RANK.text(language)
-            ));
+            parts.push(general::RANK.format(language, &[("rank", &rank)]));
         }
         #[cfg(feature = "complete")]
         Some(GeneralRowDetail::Stats { count, min, max }) => {
+            use crate::text::complete;
             if count > 0 {
                 parts.push(crate::text::samples_count(language, count));
             }
             if min.is_finite() {
-                parts.push(format!(
-                    "{} {}",
-                    crate::text::TOOLTIP_FROM.text(language),
-                    format_value(min)
-                ));
+                parts.push(complete::FROM.format(language, &[("value", &format_value(min))]));
             }
             if max.is_finite() {
-                parts.push(format!(
-                    "{} {}",
-                    crate::text::TOOLTIP_TO.text(language),
-                    format_value(max)
-                ));
+                parts.push(complete::TO.format(language, &[("value", &format_value(max))]));
             }
         }
         None => {}
@@ -160,7 +128,7 @@ fn tooltip_detail(item: &GeneralTooltipSnapshot, language: crate::ChartLanguage)
         return item
             .label
             .clone()
-            .unwrap_or_else(|| crate::text::NO_VALUE.text(language).to_owned());
+            .unwrap_or_else(|| general::NO_VALUE.text(language).to_owned());
     }
     parts.join(" · ")
 }
@@ -321,7 +289,9 @@ impl ChartEngine {
             (Some(value), Some(detail)) => format!("{} {detail}", format_value(value)),
             (Some(value), None) => format_value(value),
             (None, Some(detail)) => detail,
-            (None, None) => crate::text::NO_VALUE.text(self.language).to_owned(),
+            (None, None) => crate::text::general::NO_VALUE
+                .text(self.language)
+                .to_owned(),
         };
         Some(TooltipContent {
             header: label,

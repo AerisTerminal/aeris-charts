@@ -4677,40 +4677,6 @@ fn momentum_histogram_color(
     color.0
 }
 
-/// The auto-generated indicator name behind the (hidden-by-default) name chip — what
-/// the public reference shows in its indicator legend ("SMA 20", "MACD 12 26 9"). Platforms can read it
-/// via the series options or override it with their own `title`.
-fn indicator_period_word(period: PreviousPeriod, language: ChartLanguage) -> &'static str {
-    match (language, period) {
-        (ChartLanguage::English, PreviousPeriod::Day) => "Day",
-        (ChartLanguage::English, PreviousPeriod::Week) => "Week",
-        (ChartLanguage::English, PreviousPeriod::Month) => "Month",
-        // The genitive the "levels of the previous …" title needs.
-        (ChartLanguage::Russian, PreviousPeriod::Day) => "дня",
-        (ChartLanguage::Russian, PreviousPeriod::Week) => "недели",
-        (ChartLanguage::Russian, PreviousPeriod::Month) => "месяца",
-    }
-}
-
-fn indicator_pivot_word(
-    variant: aeris_charts_indicators::PivotKind,
-    language: ChartLanguage,
-) -> &'static str {
-    use aeris_charts_indicators::PivotKind;
-    match (language, variant) {
-        (ChartLanguage::English, PivotKind::Standard) => "Standard",
-        (ChartLanguage::English, PivotKind::Fibonacci) => "Fibonacci",
-        (ChartLanguage::English, PivotKind::Camarilla) => "Camarilla",
-        (ChartLanguage::English, PivotKind::Woodie) => "Woodie",
-        (ChartLanguage::English, PivotKind::DeMark) => "DeMark",
-        (ChartLanguage::Russian, PivotKind::Standard) => "стандартные",
-        (ChartLanguage::Russian, PivotKind::Fibonacci) => "Фибоначчи",
-        (ChartLanguage::Russian, PivotKind::Camarilla) => "Камарилья",
-        (ChartLanguage::Russian, PivotKind::Woodie) => "Вуди",
-        (ChartLanguage::Russian, PivotKind::DeMark) => "ДеМарк",
-    }
-}
-
 /// An indicator parameter in its compact title form (`2`, `1.5`).
 fn indicator_title_param(d: f64) -> String {
     if d.fract() == 0.0 {
@@ -4720,305 +4686,227 @@ fn indicator_title_param(d: f64) -> String {
     }
 }
 
-/// The auto-generated indicator name in the chart's display language.
+/// The auto-generated indicator name behind the (hidden-by-default) name chip — what
+/// the public reference shows in its indicator legend ("SMA 20", "MACD 12 26 9") — in the
+/// chart's display language. Platforms can read it via the series options or override it with
+/// their own `title`; a custom study keeps its host type id.
 pub(crate) fn indicator_title(kind: &IndicatorKind, language: ChartLanguage) -> String {
-    match language {
-        ChartLanguage::English => indicator_title_english(kind),
-        ChartLanguage::Russian => indicator_title_russian(kind),
-    }
-}
-
-fn indicator_title_english(kind: &IndicatorKind) -> String {
+    use crate::text::indicators as t;
+    use aeris_charts_indicators::PivotKind;
     let params = indicator_title_param;
+    let fixed = |phrase: crate::text::Phrase| phrase.text(language).to_string();
+    let period_only = |template: crate::text::Template, period: &usize| {
+        template.format(language, &[("period", period)])
+    };
     match kind {
-        IndicatorKind::SwingPoints { left, right } => format!("Swing Points {left} {right}"),
-        IndicatorKind::SessionLevels { .. } => "Session Levels".into(),
-        IndicatorKind::PreviousPeriodLevels { period, .. } => format!(
-            "Previous {} Levels",
-            indicator_period_word(*period, ChartLanguage::English)
-        ),
+        IndicatorKind::SwingPoints { left, right } => {
+            t::SWING_POINTS.format(language, &[("left", left), ("right", right)])
+        }
+        IndicatorKind::SessionLevels { .. } => fixed(t::SESSION_LEVELS),
+        IndicatorKind::PreviousPeriodLevels { period, .. } => fixed(match period {
+            PreviousPeriod::Day => t::PREVIOUS_DAY_LEVELS,
+            PreviousPeriod::Week => t::PREVIOUS_WEEK_LEVELS,
+            PreviousPeriod::Month => t::PREVIOUS_MONTH_LEVELS,
+        }),
         IndicatorKind::OpeningRange {
             duration_seconds, ..
-        } => format!("Opening Range {duration_seconds}s"),
-        IndicatorKind::Aroon { period } => format!("Aroon {period}"),
-        IndicatorKind::AwesomeOscillator => "Awesome Oscillator".to_string(),
-        IndicatorKind::Dpo { period } => format!("DPO {period}"),
-        IndicatorKind::ChandeMomentum { period } => format!("CMO {period}"),
-        IndicatorKind::Sma { period } => format!("SMA {period}"),
-        IndicatorKind::Ema { period } => format!("EMA {period}"),
-        IndicatorKind::Dema { period } => format!("DEMA {period}"),
-        IndicatorKind::Tema { period } => format!("TEMA {period}"),
-        IndicatorKind::Smma { period } => format!("SMMA {period}"),
-        IndicatorKind::Hma { period } => format!("HMA {period}"),
-        IndicatorKind::Vwma { period } => format!("VWMA {period}"),
-        IndicatorKind::StandardDeviation { period } => format!("Std Dev {period}"),
-        IndicatorKind::Cci { period } => format!("CCI {period}"),
-        IndicatorKind::WilliamsR { period } => format!("Williams %R {period}"),
+        } => t::OPENING_RANGE.format(language, &[("seconds", duration_seconds)]),
+        IndicatorKind::Aroon { period } => period_only(t::AROON, period),
+        IndicatorKind::AwesomeOscillator => fixed(t::AWESOME_OSCILLATOR),
+        IndicatorKind::Dpo { period } => period_only(t::DPO, period),
+        IndicatorKind::ChandeMomentum { period } => period_only(t::CMO, period),
+        IndicatorKind::Sma { period } => period_only(t::SMA, period),
+        IndicatorKind::Ema { period } => period_only(t::EMA, period),
+        IndicatorKind::Dema { period } => period_only(t::DEMA, period),
+        IndicatorKind::Tema { period } => period_only(t::TEMA, period),
+        IndicatorKind::Smma { period } => period_only(t::SMMA, period),
+        IndicatorKind::Hma { period } => period_only(t::HMA, period),
+        IndicatorKind::Vwma { period } => period_only(t::VWMA, period),
+        IndicatorKind::StandardDeviation { period } => period_only(t::STANDARD_DEVIATION, period),
+        IndicatorKind::Cci { period } => period_only(t::CCI, period),
+        IndicatorKind::WilliamsR { period } => period_only(t::WILLIAMS_R, period),
         IndicatorKind::StochasticRsi {
             rsi_period,
             stochastic_period,
-        } => format!("Stochastic RSI {rsi_period} {stochastic_period}"),
-        IndicatorKind::Momentum { period } => format!("Momentum {period}"),
-        IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
-        IndicatorKind::Donchian { period } => format!("Donchian {period}"),
-        IndicatorKind::PivotPoints { variant } => format!(
-            "Pivot Points {}",
-            indicator_pivot_word(*variant, ChartLanguage::English)
+        } => t::STOCHASTIC_RSI.format(
+            language,
+            &[
+                ("rsi_period", rsi_period),
+                ("stochastic_period", stochastic_period),
+            ],
         ),
+        IndicatorKind::Momentum { period } => period_only(t::MOMENTUM, period),
+        IndicatorKind::RateOfChange { period } => period_only(t::RATE_OF_CHANGE, period),
+        IndicatorKind::Donchian { period } => period_only(t::DONCHIAN, period),
+        IndicatorKind::PivotPoints { variant } => fixed(match variant {
+            PivotKind::Standard => t::PIVOT_POINTS_STANDARD,
+            PivotKind::Fibonacci => t::PIVOT_POINTS_FIBONACCI,
+            PivotKind::Camarilla => t::PIVOT_POINTS_CAMARILLA,
+            PivotKind::Woodie => t::PIVOT_POINTS_WOODIE,
+            PivotKind::DeMark => t::PIVOT_POINTS_DEMARK,
+        }),
         IndicatorKind::ZigZag { deviation_percent } => {
-            format!("ZigZag {deviation_percent}%")
+            t::ZIGZAG.format(language, &[("deviation", deviation_percent)])
         }
-        IndicatorKind::Keltner { period, multiplier } => {
-            format!("Keltner {period} {}", params(*multiplier))
-        }
-        IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
-        IndicatorKind::ParabolicSar => "Parabolic SAR".to_string(),
-        IndicatorKind::SuperTrend { period, multiplier } => {
-            format!("SuperTrend {period} {}", params(*multiplier))
-        }
-        IndicatorKind::Ichimoku => "Ichimoku".to_string(),
-        IndicatorKind::Bollinger { period, deviation } => {
-            format!("Bollinger {period} {}", params(*deviation))
-        }
-        IndicatorKind::BollingerMetrics { period, deviation } => {
-            format!("Bollinger Metrics {period} {}", params(*deviation))
-        }
+        IndicatorKind::Keltner { period, multiplier } => t::KELTNER.format(
+            language,
+            &[("period", period), ("multiplier", &params(*multiplier))],
+        ),
+        IndicatorKind::AdxDmi { period } => period_only(t::ADX_DMI, period),
+        IndicatorKind::ParabolicSar => fixed(t::PARABOLIC_SAR),
+        IndicatorKind::SuperTrend { period, multiplier } => t::SUPERTREND.format(
+            language,
+            &[("period", period), ("multiplier", &params(*multiplier))],
+        ),
+        IndicatorKind::Ichimoku => fixed(t::ICHIMOKU),
+        IndicatorKind::Bollinger { period, deviation } => t::BOLLINGER.format(
+            language,
+            &[("period", period), ("deviation", &params(*deviation))],
+        ),
+        IndicatorKind::BollingerMetrics { period, deviation } => t::BOLLINGER_METRICS.format(
+            language,
+            &[("period", period), ("deviation", &params(*deviation))],
+        ),
         IndicatorKind::Envelopes {
             period,
             percent,
             exponential,
-        } => format!(
-            "Envelopes {} {period} {}%",
-            if *exponential { "EMA" } else { "SMA" },
-            params(*percent)
+        } => t::ENVELOPES.format(
+            language,
+            &[
+                ("average", &if *exponential { "EMA" } else { "SMA" }),
+                ("period", period),
+                ("percent", &params(*percent)),
+            ],
         ),
         IndicatorKind::Alma {
             period,
             offset,
             sigma,
-        } => format!("ALMA {period} {} {}", params(*offset), params(*sigma)),
-        IndicatorKind::Rsi { period } => format!("RSI {period}"),
-        IndicatorKind::Macd { fast, slow, signal } => format!("MACD {fast} {slow} {signal}"),
+        } => t::ALMA.format(
+            language,
+            &[
+                ("period", period),
+                ("offset", &params(*offset)),
+                ("sigma", &params(*sigma)),
+            ],
+        ),
+        IndicatorKind::Rsi { period } => period_only(t::RSI, period),
+        IndicatorKind::Macd { fast, slow, signal } => t::MACD.format(
+            language,
+            &[("fast", fast), ("slow", slow), ("signal", signal)],
+        ),
         IndicatorKind::Stochastic { k_period, d_period } => {
-            format!("Stochastic {k_period} {d_period}")
+            t::STOCHASTIC.format(language, &[("k_period", k_period), ("d_period", d_period)])
         }
-        IndicatorKind::Atr { period } => format!("ATR {period}"),
-        IndicatorKind::Vwap => "VWAP".to_string(),
-        IndicatorKind::Obv => "OBV".to_string(),
-        IndicatorKind::AccumulationDistribution => "Accumulation/Distribution".to_string(),
-        IndicatorKind::PriceVolumeTrend => "PVT".to_string(),
+        IndicatorKind::Atr { period } => period_only(t::ATR, period),
+        IndicatorKind::Vwap => fixed(t::VWAP),
+        IndicatorKind::Obv => fixed(t::OBV),
+        IndicatorKind::AccumulationDistribution => fixed(t::ACCUMULATION_DISTRIBUTION),
+        IndicatorKind::PriceVolumeTrend => fixed(t::PRICE_VOLUME_TREND),
         IndicatorKind::ChaikinOscillator { fast, slow } => {
-            format!("Chaikin Oscillator {fast} {slow}")
+            t::CHAIKIN_OSCILLATOR.format(language, &[("fast", fast), ("slow", slow)])
         }
-        IndicatorKind::Klinger { fast, slow, signal } => {
-            format!("Klinger {fast} {slow} {signal}")
-        }
-        IndicatorKind::Kama { period, fast, slow } => format!("KAMA {period} {fast} {slow}"),
-        IndicatorKind::McGinley { period } => format!("McGinley {period}"),
-        IndicatorKind::LinearRegression { period, deviation } => {
-            format!("Linear Regression {period} {}", params(*deviation))
-        }
-        IndicatorKind::Choppiness { period } => format!("Choppiness {period}"),
-        IndicatorKind::AtrBands { period, multiplier } => {
-            format!("ATR Bands {period} {}", params(*multiplier))
-        }
-        IndicatorKind::RelativeVolume { period } => format!("Relative Volume {period}"),
-        IndicatorKind::VolumeOscillator { fast, slow, signal } => {
-            format!("Volume Oscillator {fast} {slow} {signal}")
-        }
-        IndicatorKind::ElderForce { period } => format!("Elder Force {period}"),
-        IndicatorKind::EaseOfMovement { period, divisor } => {
-            format!("Ease of Movement {period} {}", params(*divisor))
-        }
+        IndicatorKind::Klinger { fast, slow, signal } => t::KLINGER.format(
+            language,
+            &[("fast", fast), ("slow", slow), ("signal", signal)],
+        ),
+        IndicatorKind::Kama { period, fast, slow } => t::KAMA.format(
+            language,
+            &[("period", period), ("fast", fast), ("slow", slow)],
+        ),
+        IndicatorKind::McGinley { period } => period_only(t::MCGINLEY, period),
+        IndicatorKind::LinearRegression { period, deviation } => t::LINEAR_REGRESSION.format(
+            language,
+            &[("period", period), ("deviation", &params(*deviation))],
+        ),
+        IndicatorKind::Choppiness { period } => period_only(t::CHOPPINESS, period),
+        IndicatorKind::AtrBands { period, multiplier } => t::ATR_BANDS.format(
+            language,
+            &[("period", period), ("multiplier", &params(*multiplier))],
+        ),
+        IndicatorKind::RelativeVolume { period } => period_only(t::RELATIVE_VOLUME, period),
+        IndicatorKind::VolumeOscillator { fast, slow, signal } => t::VOLUME_OSCILLATOR.format(
+            language,
+            &[("fast", fast), ("slow", slow), ("signal", signal)],
+        ),
+        IndicatorKind::ElderForce { period } => period_only(t::ELDER_FORCE, period),
+        IndicatorKind::EaseOfMovement { period, divisor } => t::EASE_OF_MOVEMENT.format(
+            language,
+            &[("period", period), ("divisor", &params(*divisor))],
+        ),
         IndicatorKind::HistoricalVolatility {
             period,
             annualization,
-        } => format!("Historical Volatility {period} {}", params(*annualization)),
-        IndicatorKind::Trix { period, signal } => format!("TRIX {period} {signal}"),
+        } => t::HISTORICAL_VOLATILITY.format(
+            language,
+            &[
+                ("period", period),
+                ("annualization", &params(*annualization)),
+            ],
+        ),
+        IndicatorKind::Trix { period, signal } => {
+            t::TRIX.format(language, &[("period", period), ("signal", signal)])
+        }
         IndicatorKind::Kst {
             roc,
             smoothing,
             signal,
-        } => format!(
-            "KST {} {} {} {} / {} {} {} {} / {signal}",
-            roc[0], roc[1], roc[2], roc[3], smoothing[0], smoothing[1], smoothing[2], smoothing[3]
-        ),
+        } => {
+            let join = |periods: &[usize; 4]| {
+                periods
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            t::KST.format(
+                language,
+                &[
+                    ("roc", &join(roc)),
+                    ("smoothing", &join(smoothing)),
+                    ("signal", signal),
+                ],
+            )
+        }
         IndicatorKind::Tsi {
             long,
             short,
             signal,
-        } => format!("TSI {long} {short} {signal}"),
+        } => t::TSI.format(
+            language,
+            &[("long", long), ("short", short), ("signal", signal)],
+        ),
         IndicatorKind::MassIndex {
             ema_period,
             sum_period,
-        } => format!("Mass Index {ema_period} {sum_period}"),
-        IndicatorKind::Vortex { period } => format!("Vortex {period}"),
+        } => t::MASS_INDEX.format(
+            language,
+            &[("ema_period", ema_period), ("sum_period", sum_period)],
+        ),
+        IndicatorKind::Vortex { period } => period_only(t::VORTEX, period),
         IndicatorKind::CoppockCurve {
             long,
             short,
             smoothing,
-        } => format!("Coppock Curve {long} {short} {smoothing}"),
-        IndicatorKind::FisherTransform { period } => format!("Fisher Transform {period}"),
+        } => t::COPPOCK_CURVE.format(
+            language,
+            &[("long", long), ("short", short), ("smoothing", smoothing)],
+        ),
+        IndicatorKind::FisherTransform { period } => period_only(t::FISHER_TRANSFORM, period),
         IndicatorKind::UltimateOscillator {
             short,
             medium,
             long,
-        } => format!("Ultimate Oscillator {short} {medium} {long}"),
-        IndicatorKind::Cmf { period } => format!("CMF {period}"),
-        IndicatorKind::Mfi { period } => format!("MFI {period}"),
-        IndicatorKind::Volume { .. } => "Volume".to_string(),
-        IndicatorKind::VwapBands { .. } => "VWAP Bands".to_string(),
-        IndicatorKind::Wma { period } => format!("WMA {period}"),
-        IndicatorKind::Custom { type_id, .. } => type_id.clone(),
-    }
-}
-
-fn indicator_title_russian(kind: &IndicatorKind) -> String {
-    let params = indicator_title_param;
-    match kind {
-        IndicatorKind::SwingPoints { left, right } => format!("Свинг-точки {left} {right}"),
-        IndicatorKind::SessionLevels { .. } => "Уровни сессии".into(),
-        IndicatorKind::PreviousPeriodLevels { period, .. } => format!(
-            "Уровни предыдущего {}",
-            indicator_period_word(*period, ChartLanguage::Russian)
+        } => t::ULTIMATE_OSCILLATOR.format(
+            language,
+            &[("short", short), ("medium", medium), ("long", long)],
         ),
-        IndicatorKind::OpeningRange {
-            duration_seconds, ..
-        } => format!("Диапазон открытия {duration_seconds}с"),
-        IndicatorKind::Aroon { period } => format!("Арун {period}"),
-        IndicatorKind::AwesomeOscillator => "Чудесный осциллятор".to_string(),
-        IndicatorKind::Dpo { period } => format!("DPO {period}"),
-        IndicatorKind::ChandeMomentum { period } => format!("CMO {period}"),
-        IndicatorKind::Sma { period } => format!("SMA {period}"),
-        IndicatorKind::Ema { period } => format!("EMA {period}"),
-        IndicatorKind::Dema { period } => format!("DEMA {period}"),
-        IndicatorKind::Tema { period } => format!("TEMA {period}"),
-        IndicatorKind::Smma { period } => format!("SMMA {period}"),
-        IndicatorKind::Hma { period } => format!("HMA {period}"),
-        IndicatorKind::Vwma { period } => format!("VWMA {period}"),
-        IndicatorKind::StandardDeviation { period } => {
-            format!("Стандартное отклонение {period}")
-        }
-        IndicatorKind::Cci { period } => format!("CCI {period}"),
-        IndicatorKind::WilliamsR { period } => format!("Williams %R {period}"),
-        IndicatorKind::StochasticRsi {
-            rsi_period,
-            stochastic_period,
-        } => format!("Стохастик RSI {rsi_period} {stochastic_period}"),
-        IndicatorKind::Momentum { period } => format!("Моментум {period}"),
-        IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
-        IndicatorKind::Donchian { period } => format!("Канал Дончиана {period}"),
-        IndicatorKind::PivotPoints { variant } => format!(
-            "Точки пивот: {}",
-            indicator_pivot_word(*variant, ChartLanguage::Russian)
-        ),
-        IndicatorKind::ZigZag { deviation_percent } => {
-            format!("Зигзаг {deviation_percent}%")
-        }
-        IndicatorKind::Keltner { period, multiplier } => {
-            format!("Каналы Кельтнера {period} {}", params(*multiplier))
-        }
-        IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
-        IndicatorKind::ParabolicSar => "Параболик SAR".to_string(),
-        IndicatorKind::SuperTrend { period, multiplier } => {
-            format!("Супертренд {period} {}", params(*multiplier))
-        }
-        IndicatorKind::Ichimoku => "Ишимоку".to_string(),
-        IndicatorKind::Bollinger { period, deviation } => {
-            format!("Полосы Боллинджера {period} {}", params(*deviation))
-        }
-        IndicatorKind::BollingerMetrics { period, deviation } => {
-            format!("Метрики Боллинджера {period} {}", params(*deviation))
-        }
-        IndicatorKind::Envelopes {
-            period,
-            percent,
-            exponential,
-        } => format!(
-            "Конверты {} {period} {}%",
-            if *exponential { "EMA" } else { "SMA" },
-            params(*percent)
-        ),
-        IndicatorKind::Alma {
-            period,
-            offset,
-            sigma,
-        } => format!("ALMA {period} {} {}", params(*offset), params(*sigma)),
-        IndicatorKind::Rsi { period } => format!("RSI {period}"),
-        IndicatorKind::Macd { fast, slow, signal } => format!("MACD {fast} {slow} {signal}"),
-        IndicatorKind::Stochastic { k_period, d_period } => {
-            format!("Стохастик {k_period} {d_period}")
-        }
-        IndicatorKind::Atr { period } => format!("ATR {period}"),
-        IndicatorKind::Vwap => "VWAP".to_string(),
-        IndicatorKind::Obv => "OBV".to_string(),
-        IndicatorKind::AccumulationDistribution => "Накопление/распределение".to_string(),
-        IndicatorKind::PriceVolumeTrend => "PVT".to_string(),
-        IndicatorKind::ChaikinOscillator { fast, slow } => {
-            format!("Осциллятор Чайкина {fast} {slow}")
-        }
-        IndicatorKind::Klinger { fast, slow, signal } => {
-            format!("Осциллятор Клингера {fast} {slow} {signal}")
-        }
-        IndicatorKind::Kama { period, fast, slow } => format!("KAMA {period} {fast} {slow}"),
-        IndicatorKind::McGinley { period } => format!("Макгинли {period}"),
-        IndicatorKind::LinearRegression { period, deviation } => {
-            format!("Линейная регрессия {period} {}", params(*deviation))
-        }
-        IndicatorKind::Choppiness { period } => format!("Переменчивость {period}"),
-        IndicatorKind::AtrBands { period, multiplier } => {
-            format!("Полосы ATR {period} {}", params(*multiplier))
-        }
-        IndicatorKind::RelativeVolume { period } => format!("Относительный объём {period}"),
-        IndicatorKind::VolumeOscillator { fast, slow, signal } => {
-            format!("Осциллятор объёма {fast} {slow} {signal}")
-        }
-        IndicatorKind::ElderForce { period } => format!("Индекс силы Элдера {period}"),
-        IndicatorKind::EaseOfMovement { period, divisor } => {
-            format!("Лёгкость движения {period} {}", params(*divisor))
-        }
-        IndicatorKind::HistoricalVolatility {
-            period,
-            annualization,
-        } => format!(
-            "Историческая волатильность {period} {}",
-            params(*annualization)
-        ),
-        IndicatorKind::Trix { period, signal } => format!("TRIX {period} {signal}"),
-        IndicatorKind::Kst {
-            roc,
-            smoothing,
-            signal,
-        } => format!(
-            "KST {} {} {} {} / {} {} {} {} / {signal}",
-            roc[0], roc[1], roc[2], roc[3], smoothing[0], smoothing[1], smoothing[2], smoothing[3]
-        ),
-        IndicatorKind::Tsi {
-            long,
-            short,
-            signal,
-        } => format!("TSI {long} {short} {signal}"),
-        IndicatorKind::MassIndex {
-            ema_period,
-            sum_period,
-        } => format!("Индекс массы {ema_period} {sum_period}"),
-        IndicatorKind::Vortex { period } => format!("Вортекс {period}"),
-        IndicatorKind::CoppockCurve {
-            long,
-            short,
-            smoothing,
-        } => format!("Кривая Коппока {long} {short} {smoothing}"),
-        IndicatorKind::FisherTransform { period } => format!("Преобразование Фишера {period}"),
-        IndicatorKind::UltimateOscillator {
-            short,
-            medium,
-            long,
-        } => format!("Окончательный осциллятор {short} {medium} {long}"),
-        IndicatorKind::Cmf { period } => format!("CMF {period}"),
-        IndicatorKind::Mfi { period } => format!("MFI {period}"),
-        IndicatorKind::Volume { .. } => "Объём".to_string(),
-        IndicatorKind::VwapBands { .. } => "Полосы VWAP".to_string(),
-        IndicatorKind::Wma { period } => format!("WMA {period}"),
+        IndicatorKind::Cmf { period } => period_only(t::CMF, period),
+        IndicatorKind::Mfi { period } => period_only(t::MFI, period),
+        IndicatorKind::Volume { .. } => fixed(t::VOLUME),
+        IndicatorKind::VwapBands { .. } => fixed(t::VWAP_BANDS),
+        IndicatorKind::Wma { period } => period_only(t::WMA, period),
         IndicatorKind::Custom { type_id, .. } => type_id.clone(),
     }
 }
@@ -5029,78 +4917,120 @@ pub(crate) fn indicator_output_title(
     output_index: usize,
     language: ChartLanguage,
 ) -> String {
+    use crate::text::indicators as t;
     match kind {
-        IndicatorKind::Aroon { period } => match language {
-            ChartLanguage::English => {
-                format!("Aroon {} {period}", ["Up", "Down"][output_index])
-            }
-            ChartLanguage::Russian => {
-                format!("{} {period}", ["Арун вверх", "Арун вниз"][output_index])
-            }
-        },
+        IndicatorKind::Aroon { period } => {
+            let title = if output_index == 0 {
+                t::AROON_UP
+            } else {
+                t::AROON_DOWN
+            };
+            title.format(language, &[("period", period)])
+        }
         IndicatorKind::Volume {
             period,
             exponential,
-        } if output_index == 1 => {
-            let average = if *exponential { "EMA" } else { "SMA" };
-            match language {
-                ChartLanguage::English => format!("Volume {average} {period}"),
-                ChartLanguage::Russian => format!("Объём {average} {period}"),
-            }
-        }
+        } if output_index == 1 => t::VOLUME_AVERAGE.format(
+            language,
+            &[
+                ("average", &if *exponential { "EMA" } else { "SMA" }),
+                ("period", period),
+            ],
+        ),
         _ => indicator_title(kind, language),
     }
 }
 
 /// The localized display label of one output (`"Upper"`/`"Верхняя"`, `"Signal"`/`"Сигнал"`),
 /// for legends and host chrome in the chart's display language. This is a presentation string:
-/// the stable schema identifier stays [`IndicatorOutputDescriptor::name`]. Acronyms and
-/// single-output labels are language-neutral and pass through.
+/// the stable schema identifier stays [`IndicatorOutputDescriptor::name`], and English shows
+/// that identifier itself. Acronym labels (`RSI`, `%K`, `R1`) are language-neutral and pass
+/// through.
 pub fn indicator_output_label(
     kind: &IndicatorKind,
     output_index: usize,
     language: ChartLanguage,
 ) -> String {
-    if language == ChartLanguage::English {
-        return indicator_output_name(kind, output_index).to_string();
-    }
-    let label = match kind {
-        IndicatorKind::SwingPoints { .. } => ["Свинг-хай", "Свинг-лоу"][output_index],
-        IndicatorKind::SessionLevels { .. } => ["Максимум", "Минимум"][output_index],
-        IndicatorKind::PreviousPeriodLevels { .. } => {
-            ["Максимум", "Минимум", "Закрытие"][output_index]
+    use crate::text::indicators as t;
+    let phrase = match (kind, output_index) {
+        (IndicatorKind::SwingPoints { .. }, 0) => t::OUTPUT_SWING_HIGH,
+        (IndicatorKind::SwingPoints { .. }, 1) => t::OUTPUT_SWING_LOW,
+        (
+            IndicatorKind::SessionLevels { .. }
+            | IndicatorKind::PreviousPeriodLevels { .. }
+            | IndicatorKind::OpeningRange { .. },
+            0,
+        ) => t::OUTPUT_HIGH,
+        (
+            IndicatorKind::SessionLevels { .. }
+            | IndicatorKind::PreviousPeriodLevels { .. }
+            | IndicatorKind::OpeningRange { .. },
+            1,
+        ) => t::OUTPUT_LOW,
+        (IndicatorKind::PreviousPeriodLevels { .. }, 2) => t::OUTPUT_CLOSE,
+        (IndicatorKind::OpeningRange { .. }, 2) => t::OUTPUT_MID,
+        (IndicatorKind::Aroon { .. }, 0) => t::OUTPUT_AROON_UP,
+        (IndicatorKind::Aroon { .. }, 1) => t::OUTPUT_AROON_DOWN,
+        (
+            IndicatorKind::Donchian { .. }
+            | IndicatorKind::Keltner { .. }
+            | IndicatorKind::Bollinger { .. }
+            | IndicatorKind::Envelopes { .. }
+            | IndicatorKind::AtrBands { .. },
+            index,
+        ) if index < 3 => [t::OUTPUT_UPPER, t::OUTPUT_BASIS, t::OUTPUT_LOWER][index],
+        (IndicatorKind::PivotPoints { .. }, 0) => t::OUTPUT_PIVOT,
+        (IndicatorKind::Ichimoku, index) if index < 5 => [
+            t::OUTPUT_CONVERSION,
+            t::OUTPUT_BASE,
+            t::OUTPUT_LEADING_A,
+            t::OUTPUT_LEADING_B,
+            t::OUTPUT_LAGGING,
+        ][index],
+        (IndicatorKind::BollingerMetrics { .. }, 1) => t::OUTPUT_BAND_WIDTH,
+        (IndicatorKind::Macd { .. } | IndicatorKind::VolumeOscillator { .. }, 1) => {
+            t::OUTPUT_SIGNAL
         }
-        IndicatorKind::OpeningRange { .. } => ["Максимум", "Минимум", "Середина"][output_index],
-        IndicatorKind::Aroon { .. } => ["Арун вверх", "Арун вниз"][output_index],
-        IndicatorKind::Donchian { .. }
-        | IndicatorKind::Keltner { .. }
-        | IndicatorKind::Bollinger { .. }
-        | IndicatorKind::Envelopes { .. }
-        | IndicatorKind::AtrBands { .. } => ["Верхняя", "Базис", "Нижняя"][output_index],
-        IndicatorKind::PivotPoints { .. } => ["Пивот", "R1", "S1", "R2", "S2"][output_index],
-        IndicatorKind::Ichimoku => [
-            "Конверсионная",
-            "Базовая",
-            "Опережающая A",
-            "Опережающая B",
-            "Запаздывающая",
-        ][output_index],
-        IndicatorKind::BollingerMetrics { .. } => ["%B", "Ширина полос"][output_index],
-        IndicatorKind::Macd { .. } => ["MACD", "Сигнал", "Гистограмма"][output_index],
-        IndicatorKind::Klinger { .. } => ["Клингер", "Сигнал"][output_index],
-        IndicatorKind::LinearRegression { .. } => ["Кривая", "Верхняя", "Нижняя"][output_index],
-        IndicatorKind::VolumeOscillator { .. } => ["PVO", "Сигнал", "Гистограмма"][output_index],
-        IndicatorKind::Trix { .. } => ["TRIX", "Сигнал"][output_index],
-        IndicatorKind::Kst { .. } => ["KST", "Сигнал"][output_index],
-        IndicatorKind::Tsi { .. } => ["TSI", "Сигнал"][output_index],
-        IndicatorKind::FisherTransform { .. } => ["Фишер", "Триггер"][output_index],
-        IndicatorKind::Volume { .. } => ["Объём", "MA"][output_index],
-        IndicatorKind::VwapBands { .. } => {
-            ["Базис", "СКО верх", "СКО низ", "% верх", "% низ"][output_index]
+        (IndicatorKind::Macd { .. } | IndicatorKind::VolumeOscillator { .. }, 2) => {
+            t::OUTPUT_HISTOGRAM
         }
+        (IndicatorKind::Klinger { .. }, 0) => t::OUTPUT_KLINGER,
+        (
+            IndicatorKind::Klinger { .. }
+            | IndicatorKind::Trix { .. }
+            | IndicatorKind::Kst { .. }
+            | IndicatorKind::Tsi { .. },
+            1,
+        ) => t::OUTPUT_SIGNAL,
+        (IndicatorKind::LinearRegression { .. }, 0) => t::OUTPUT_CURVE,
+        (IndicatorKind::LinearRegression { .. }, 1) => t::OUTPUT_UPPER,
+        (IndicatorKind::LinearRegression { .. }, 2) => t::OUTPUT_LOWER,
+        (IndicatorKind::FisherTransform { .. }, 0) => t::OUTPUT_FISHER,
+        (IndicatorKind::FisherTransform { .. }, 1) => t::OUTPUT_TRIGGER,
+        (IndicatorKind::Volume { .. }, 0) => t::OUTPUT_VOLUME,
+        (IndicatorKind::VwapBands { .. }, index) if index < 5 => [
+            t::OUTPUT_BASIS,
+            t::OUTPUT_STD_UPPER,
+            t::OUTPUT_STD_LOWER,
+            t::OUTPUT_PERCENT_UPPER,
+            t::OUTPUT_PERCENT_LOWER,
+        ][index],
+        (IndicatorKind::StandardDeviation { .. }, 0) => t::OUTPUT_STD_DEV,
+        (IndicatorKind::StochasticRsi { .. }, 0) => t::OUTPUT_STOCH_RSI,
+        (IndicatorKind::Momentum { .. }, 0) => t::OUTPUT_MOMENTUM,
+        (IndicatorKind::ZigZag { .. }, 0) => t::OUTPUT_ZIGZAG,
+        (IndicatorKind::SuperTrend { .. }, 0) => t::OUTPUT_SUPERTREND,
+        (IndicatorKind::ChaikinOscillator { .. }, 0) => t::OUTPUT_CHAIKIN_OSCILLATOR,
+        (IndicatorKind::McGinley { .. }, 0) => t::OUTPUT_MCGINLEY,
+        (IndicatorKind::Choppiness { .. }, 0) => t::OUTPUT_CHOPPINESS,
+        (IndicatorKind::RelativeVolume { .. }, 0) => t::OUTPUT_RELATIVE_VOLUME,
+        (IndicatorKind::ElderForce { .. }, 0) => t::OUTPUT_ELDER_FORCE,
+        (IndicatorKind::MassIndex { .. }, 0) => t::OUTPUT_MASS_INDEX,
+        (IndicatorKind::CoppockCurve { .. }, 0) => t::OUTPUT_COPPOCK_CURVE,
+        (IndicatorKind::UltimateOscillator { .. }, 0) => t::OUTPUT_ULTIMATE_OSCILLATOR,
         _ => return indicator_output_name(kind, output_index).to_string(),
     };
-    label.to_string()
+    phrase.text(language).to_string()
 }
 
 pub(crate) fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputStyle {

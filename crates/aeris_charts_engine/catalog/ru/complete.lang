@@ -1,0 +1,7 @@
+# Text of the chart families only the complete build contains.
+from = от {value}
+to = до {value}
+hexbin_cell = шестиугольная ячейка
+samples[one] = {count} наблюдение
+samples[few] = {count} наблюдения
+samples[many] = {count} наблюдений

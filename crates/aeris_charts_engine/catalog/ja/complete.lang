@@ -1,0 +1,5 @@
+# complete ビルドにのみ含まれるチャートファミリーのテキスト。
+from = 開始 {value}
+to = 終了 {value}
+hexbin_cell = 六角形ビンのセル
+samples[other] = サンプル {count} 件

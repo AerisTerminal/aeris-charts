@@ -700,8 +700,8 @@ impl ChartEngine {
 
     fn trading_side_label(&self, side: OrderSide) -> &'static str {
         match side {
-            OrderSide::Buy => crate::text::BUY,
-            OrderSide::Sell => crate::text::SELL,
+            OrderSide::Buy => crate::text::trading::BUY,
+            OrderSide::Sell => crate::text::trading::SELL,
         }
         .text(self.language)
     }
@@ -716,7 +716,9 @@ impl ChartEngine {
         if order.status == OrderStatus::Inactive {
             return (
                 TradingControlSegmentKind::OrderType,
-                crate::text::INACTIVE.text(self.language).to_string(),
+                crate::text::trading::INACTIVE
+                    .text(self.language)
+                    .to_string(),
                 self.trading_style().inactive,
             );
         }
@@ -727,10 +729,10 @@ impl ChartEngine {
             return (TradingControlSegmentKind::Pnl, text, color);
         }
         let kind = match order.kind {
-            crate::OrderKind::Market => crate::text::MARKET,
-            crate::OrderKind::Limit => crate::text::LIMIT,
-            crate::OrderKind::Stop => crate::text::STOP_ORDER,
-            crate::OrderKind::StopLimit => crate::text::STOP_LIMIT,
+            crate::OrderKind::Market => crate::text::trading::MARKET,
+            crate::OrderKind::Limit => crate::text::trading::LIMIT,
+            crate::OrderKind::Stop => crate::text::trading::STOP,
+            crate::OrderKind::StopLimit => crate::text::trading::STOP_LIMIT,
         }
         .text(self.language);
         let text = if self.trading_order_preview(order).is_some() {
@@ -1697,8 +1699,8 @@ impl ChartEngine {
         }
 
         let side = match mark.side {
-            OrderSide::Buy => crate::text::BUY,
-            OrderSide::Sell => crate::text::SELL,
+            OrderSide::Buy => crate::text::trading::BUY,
+            OrderSide::Sell => crate::text::trading::SELL,
         }
         .text(self.language);
         let text = if fills.len() == 1 {
@@ -1717,7 +1719,7 @@ impl ChartEngine {
                     executions[fills[0]].price_scale,
                     notional / quantity
                 ),
-                crate::text::AVG_PRICE.text(self.language),
+                crate::text::trading::AVERAGE_PRICE.text(self.language),
                 crate::text::fills_count(self.language, fills.len())
             )
         };
@@ -1790,7 +1792,7 @@ impl ChartEngine {
                 lines.push(Prim::Text {
                     x: (x * hpr) as f32,
                     y: ((pane.top + 12.0) * vpr) as f32,
-                    text: crate::text::REPLAY.text(self.language).to_string(),
+                    text: crate::text::trading::REPLAY.text(self.language).to_string(),
                     color,
                     size: (self.options.get().layout.font_size * vpr) as f32,
                     family: self.options.get().layout.font_family.clone(),
@@ -1985,7 +1987,9 @@ impl ChartEngine {
                             .is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
                     {
                         tooltip = Some(TradingTooltip {
-                            text: crate::text::CLOSE_POSITION.text(self.language).to_string(),
+                            text: crate::text::trading::CLOSE_POSITION
+                                .text(self.language)
+                                .to_string(),
                             layout: TradingChipLayout {
                                 x: cluster.start() + cluster.width()
                                     - self.trading_close_width() / 2.0,
@@ -2196,12 +2200,12 @@ impl ChartEngine {
                             None
                         }
                         (OrderRole::TakeProfit, _) => Some(
-                            crate::text::CANCEL_TAKE_PROFIT
+                            crate::text::trading::CANCEL_TAKE_PROFIT
                                 .text(self.language)
                                 .to_string(),
                         ),
                         (OrderRole::StopLoss, _) => Some(
-                            crate::text::CANCEL_STOP_LOSS
+                            crate::text::trading::CANCEL_STOP_LOSS
                                 .text(self.language)
                                 .to_string(),
                         ),
@@ -2211,9 +2215,11 @@ impl ChartEngine {
                                 &self.format_trading_quantity(remaining),
                             ))
                         }
-                        (OrderRole::Working, _) => {
-                            Some(crate::text::CANCEL_ORDER.text(self.language).to_string())
-                        }
+                        (OrderRole::Working, _) => Some(
+                            crate::text::trading::CANCEL_ORDER
+                                .text(self.language)
+                                .to_string(),
+                        ),
                     };
                     if let Some(text) = cancel_label.filter(|_| {
                         self.trading_state.tooltip_armed
@@ -2625,10 +2631,13 @@ mod language_tests {
         assert_eq!(chart.trading_side_label(OrderSide::Buy), "Покупка");
         assert_eq!(chart.trading_side_label(OrderSide::Sell), "Продажа");
         assert_eq!(
-            crate::text::CLOSE_POSITION.text(chart.language()),
+            crate::text::trading::CLOSE_POSITION.text(chart.language()),
             "Закрыть позицию"
         );
-        assert_eq!(crate::text::REPLAY.text(chart.language()), "Повтор");
+        assert_eq!(
+            crate::text::trading::REPLAY.text(chart.language()),
+            "Повтор"
+        );
         assert_eq!(
             crate::text::cancel_remaining(chart.language(), "0.25"),
             "Отменить оставшиеся 0.25"

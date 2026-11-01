@@ -1,0 +1,7 @@
+# Duration units of measure statistics and the bar-close countdown.
+duration_days = {value}д
+duration_hours = {value}ч
+duration_minutes = {value}м
+duration_seconds = {value}с
+# The countdown beyond its largest shown day count.
+countdown_overflow = {days}д+

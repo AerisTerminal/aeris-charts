@@ -1,0 +1,6 @@
+# Text of the chart families only the complete build contains.
+from = {value} से
+to = {value} तक
+hexbin_cell = हेक्सबिन सेल
+samples[one] = {count} सैंपल
+samples[other] = {count} सैंपल

@@ -1,0 +1,15 @@
+# Linhas da legenda de gráficos financeiros e gerais.
+ohlc_open = Abe
+ohlc_high = Máx
+ohlc_low = Mín
+ohlc_close = Fec
+# O marcador de linhas recolhidas das legendas e dicas.
+more_rows[one] = +{count} mais
+more_rows[other] = +{count} mais
+# O título padrão de uma série geral sem título.
+series_fallback = Série {number}
+asset = Ativo
+options_volume = Volume de opções
+calls = Calls
+puts = Puts
+delta = Delta

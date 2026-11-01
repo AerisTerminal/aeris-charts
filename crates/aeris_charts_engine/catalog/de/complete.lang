@@ -1,0 +1,6 @@
+# Texte der Chartfamilien, die nur der vollständige Build enthält.
+from = von {value}
+to = bis {value}
+hexbin_cell = Hexbin-Zelle
+samples[one] = {count} Stichprobe
+samples[other] = {count} Stichproben

@@ -3551,6 +3551,75 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
     ]
 }
 
+/// English output labels are the persisted output names, and every language titles and labels
+/// every built-in study output with non-empty text.
+#[test]
+fn every_language_titles_and_labels_every_indicator_output() {
+    use aeris_charts_indicators::PivotKind;
+    let calendar = StudyCalendarPolicy::Utc;
+    let mut kinds = all_engine_indicator_kinds();
+    kinds.extend([
+        IndicatorKind::SwingPoints { left: 1, right: 1 },
+        IndicatorKind::SessionLevels { calendar },
+        IndicatorKind::OpeningRange {
+            duration_seconds: 3_600,
+            calendar,
+        },
+    ]);
+    kinds.extend(
+        [
+            PreviousPeriod::Day,
+            PreviousPeriod::Week,
+            PreviousPeriod::Month,
+        ]
+        .map(|period| IndicatorKind::PreviousPeriodLevels { period, calendar }),
+    );
+    kinds.extend(
+        [
+            PivotKind::Fibonacci,
+            PivotKind::Camarilla,
+            PivotKind::Woodie,
+            PivotKind::DeMark,
+        ]
+        .map(|variant| IndicatorKind::PivotPoints { variant }),
+    );
+    for kind in &kinds {
+        let schema = ChartEngine::indicator_schema(kind);
+        for output in &schema.outputs {
+            assert_eq!(
+                indicator_output_label(kind, output.index, ChartLanguage::English),
+                output.name,
+                "{kind:?} output {}",
+                output.index
+            );
+        }
+        for language in ChartLanguage::ALL {
+            assert!(
+                !indicators::indicator_title(kind, language)
+                    .trim()
+                    .is_empty(),
+                "{kind:?} {language:?}"
+            );
+            for output in &schema.outputs {
+                assert!(
+                    !indicator_output_label(kind, output.index, language)
+                        .trim()
+                        .is_empty(),
+                    "{kind:?} output {} {language:?}",
+                    output.index
+                );
+                assert!(
+                    !indicators::indicator_output_title(kind, output.index, language)
+                        .trim()
+                        .is_empty(),
+                    "{kind:?} output {} {language:?}",
+                    output.index
+                );
+            }
+        }
+    }
+}
+
 /// A settled chart with swinging bars (strong legs confirm swing points) and a hidden volume
 /// series for volume-based studies.
 fn selectable_indicator_chart(kind: &IndicatorKind) -> (ChartEngine, Vec<SeriesId>) {

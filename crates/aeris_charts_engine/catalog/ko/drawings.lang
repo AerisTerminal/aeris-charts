@@ -1,0 +1,37 @@
+# 드로잉 도구가 차트에 그리는 텍스트와 설정의 기준점 이름.
+
+# 측정 통계. `{count}`는 서식이 적용된 값이며 음수 부호가 붙을 수 있습니다.
+bars[other] = {count}봉
+# 소수 봉 수. `{value}`는 소수점 두 자리입니다.
+bars_fraction = {value}봉
+range = 범위
+distance = 거리: {pixels} px
+
+# 롱 및 숏 포지션 도구. `{percent}`는 소수점 세 자리입니다.
+position_target = 목표가: {price} ({percent}%) {ticks}, 금액: {amount}
+position_stop = 스톱: {price} ({percent}%) {ticks}, 금액: {amount}
+position_open_pnl = 평가 손익: {pnl}, 수량: {quantity}
+position_closed_pnl = 실현 손익: {pnl}, 수량: {quantity}
+risk_reward = 손익비: {ratio}
+
+# 드로잉 설정의 기준점 이름.
+anchor_entry = 진입
+anchor_target = 목표가
+anchor_stop = 스톱
+anchor_point = 점
+anchor_numbered_point = 점 {number}
+
+# 빈 텍스트 드로잉의 안내 문구.
+line_text_placeholder = + 텍스트 추가
+annotation_placeholder = 텍스트 추가
+
+# 엘리엇 파동 등급.
+wave_degree_subminuette = 서브미뉴엣
+wave_degree_minuette = 미뉴엣
+wave_degree_minute = 미뉴트
+wave_degree_minor = 마이너
+wave_degree_intermediate = 인터미디엇
+wave_degree_primary = 프라이머리
+wave_degree_cycle = 사이클
+wave_degree_supercycle = 슈퍼사이클
+wave_degree_grand_supercycle = 그랜드 슈퍼사이클

@@ -1,0 +1,16 @@
+# Tooltips and accessibility labels of general (non-financial) charts.
+no_value = कोई मान नहीं
+quartiles = Q1 {q1} · Q3 {q3}
+size = साइज़ {value}
+target = टारगेट {value}
+comparative = तुलनात्मक {value}
+bands = बैंड {values}
+rank = रैंक {rank}
+waterfall_increase = वृद्धि {start} → {end}
+waterfall_decrease = कमी {start} → {end}
+waterfall_subtotal = उप-योग
+waterfall_total = कुल
+gantt_task = {start} – {end} · {percent}% पूरा
+gantt_milestone = माइलस्टोन {date}
+# `{share}` has one decimal.
+mosaic_cell = {column}, {segment}, कॉलम का {share}%

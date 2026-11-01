@@ -1,0 +1,21 @@
+# The trading overlay: order and position chips, buttons and execution markers.
+buy = खरीदें
+sell = बेचें
+market = मार्केट
+limit = लिमिट
+stop = स्टॉप
+stop_limit = स्टॉप लिमिट
+inactive = निष्क्रिय
+replay = रीप्ले
+close_position = पोजीशन बंद करें
+cancel_take_profit = टेक प्रॉफ़िट रद्द करें
+cancel_stop_loss = स्टॉप लॉस रद्द करें
+cancel_order = ऑर्डर रद्द करें
+cancel_remaining = बाकी {quantity} रद्द करें
+trigger = ट्रिगर {quantity}
+# The average-price marker of an aggregated execution tooltip.
+average_price = औसत
+fills[one] = {count} फ़िल
+fills[other] = {count} फ़िल
+bid = बिड
+ask = आस्क

@@ -1535,7 +1535,11 @@ impl ChartEngine {
                         let y = y_scale.invert(plot.y + bin.cy)?;
                         Some(format!("({x:.4}, {y:.4})"))
                     })
-                    .unwrap_or_else(|| crate::text::HEXBIN_CELL.text(self.language).to_owned());
+                    .unwrap_or_else(|| {
+                        crate::text::complete::HEXBIN_CELL
+                            .text(self.language)
+                            .to_owned()
+                    });
                 GeneralTooltipSnapshot {
                     x_label: center,
                     value: Some(bin.count as f64),

@@ -1,0 +1,7 @@
+# 計測統計とバー確定までのカウントダウンで使う期間の単位。
+duration_days = {value}日
+duration_hours = {value}時間
+duration_minutes = {value}分
+duration_seconds = {value}秒
+# 表示できる最大日数を超えたときのカウントダウン。
+countdown_overflow = {days}日+

@@ -1,0 +1,16 @@
+# 一般（金融以外）のチャートのツールチップとアクセシビリティラベル。
+no_value = 値なし
+quartiles = Q1 {q1} · Q3 {q3}
+size = サイズ {value}
+target = 目標 {value}
+comparative = 比較 {value}
+bands = 範囲 {values}
+rank = 順位 {rank}
+waterfall_increase = 増加 {start} → {end}
+waterfall_decrease = 減少 {start} → {end}
+waterfall_subtotal = 小計
+waterfall_total = 合計
+gantt_task = {start} – {end} · {percent}% 完了
+gantt_milestone = マイルストーン {date}
+# `{share}` は小数点以下 1 桁です。
+mosaic_cell = {column}、{segment}、列の {share}%

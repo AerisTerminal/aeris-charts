@@ -1,0 +1,38 @@
+# Text the drawing tools paint on the chart, and the anchor names of their settings.
+
+# Measure statistics. `{count}` arrives formatted and can carry a minus sign.
+bars[one] = {count} बार
+bars[other] = {count} बार
+# A fractional bar count; `{value}` has two decimals.
+bars_fraction = {value} बार
+range = रेंज
+distance = दूरी: {pixels} px
+
+# Long and short position tools. `{percent}` has three decimals.
+position_target = टारगेट: {price} ({percent}%) {ticks}, राशि: {amount}
+position_stop = स्टॉप: {price} ({percent}%) {ticks}, राशि: {amount}
+position_open_pnl = ओपन P&L: {pnl}, मात्रा: {quantity}
+position_closed_pnl = क्लोज़्ड P&L: {pnl}, मात्रा: {quantity}
+risk_reward = रिस्क/रिवॉर्ड अनुपात: {ratio}
+
+# Anchor names in the drawing settings.
+anchor_entry = एंट्री
+anchor_target = टारगेट
+anchor_stop = स्टॉप
+anchor_point = पॉइंट
+anchor_numbered_point = पॉइंट {number}
+
+# Prompts of empty text drawings.
+line_text_placeholder = + टेक्स्ट जोड़ें
+annotation_placeholder = टेक्स्ट जोड़ें
+
+# Elliott wave degrees. English shows the stored identifier itself.
+wave_degree_subminuette = सबमिन्यूएट
+wave_degree_minuette = मिन्यूएट
+wave_degree_minute = मिनट
+wave_degree_minor = माइनर
+wave_degree_intermediate = इंटरमीडिएट
+wave_degree_primary = प्राइमरी
+wave_degree_cycle = साइकिल
+wave_degree_supercycle = सुपरसाइकिल
+wave_degree_grand_supercycle = ग्रैंड सुपरसाइकिल

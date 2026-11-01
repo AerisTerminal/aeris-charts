@@ -1,0 +1,15 @@
+# Legend rows of financial and general charts.
+ohlc_open = O
+ohlc_high = H
+ohlc_low = L
+ohlc_close = C
+# The collapsed-rows marker of legends and tooltips.
+more_rows[one] = +{count} और
+more_rows[other] = +{count} और
+# The fallback title of an untitled general series.
+series_fallback = सीरीज़ {number}
+asset = एसेट
+options_volume = ऑप्शंस वॉल्यूम
+calls = कॉल
+puts = पुट
+delta = डेल्टा

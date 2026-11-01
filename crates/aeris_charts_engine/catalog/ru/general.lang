@@ -1,0 +1,16 @@
+# Tooltips and accessibility labels of general (non-financial) charts.
+no_value = Нет значения
+quartiles = Q1 {q1} · Q3 {q3}
+size = размер {value}
+target = цель {value}
+comparative = сравнение {value}
+bands = диапазоны {values}
+rank = ранг {rank}
+waterfall_increase = рост {start} → {end}
+waterfall_decrease = снижение {start} → {end}
+waterfall_subtotal = промежуточный итог
+waterfall_total = итог
+gantt_task = {start} – {end} · выполнено {percent}%
+gantt_milestone = Веха {date}
+# `{share}` has one decimal.
+mosaic_cell = {column}, {segment}, {share}% столбца

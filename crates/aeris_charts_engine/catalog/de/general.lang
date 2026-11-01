@@ -1,0 +1,16 @@
+# Tooltips und Barrierefreiheitsbeschriftungen allgemeiner (nicht finanzieller) Charts.
+no_value = Kein Wert
+quartiles = Q1 {q1} · Q3 {q3}
+size = Größe {value}
+target = Ziel {value}
+comparative = Vergleich {value}
+bands = Bänder {values}
+rank = Rang {rank}
+waterfall_increase = Anstieg {start} → {end}
+waterfall_decrease = Rückgang {start} → {end}
+waterfall_subtotal = Zwischensumme
+waterfall_total = Summe
+gantt_task = {start} – {end} · {percent}% abgeschlossen
+gantt_milestone = Meilenstein {date}
+# `{share}` hat eine Dezimalstelle.
+mosaic_cell = {column}, {segment}, {share}% der Spalte

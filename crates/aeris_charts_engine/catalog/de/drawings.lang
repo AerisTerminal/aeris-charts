@@ -1,0 +1,38 @@
+# Text, den die Zeichenwerkzeuge in den Chart malen, und die Ankernamen ihrer Einstellungen.
+
+# Messstatistiken. `{count}` kommt formatiert an und kann ein Minuszeichen tragen.
+bars[one] = {count} Balken
+bars[other] = {count} Balken
+# Eine gebrochene Balkenzahl; `{value}` hat zwei Dezimalstellen.
+bars_fraction = {value} Balken
+range = Spanne
+distance = Abstand: {pixels} px
+
+# Long- und Short-Positionswerkzeuge. `{percent}` hat drei Dezimalstellen.
+position_target = Ziel: {price} ({percent}%) {ticks}, Betrag: {amount}
+position_stop = Stop: {price} ({percent}%) {ticks}, Betrag: {amount}
+position_open_pnl = Offene GuV: {pnl}, Menge: {quantity}
+position_closed_pnl = Geschlossene GuV: {pnl}, Menge: {quantity}
+risk_reward = Chance-Risiko-Verhältnis: {ratio}
+
+# Ankernamen in den Zeichnungseinstellungen.
+anchor_entry = Einstieg
+anchor_target = Ziel
+anchor_stop = Stop
+anchor_point = Punkt
+anchor_numbered_point = Punkt {number}
+
+# Hinweise leerer Textzeichnungen.
+line_text_placeholder = + Text hinzufügen
+annotation_placeholder = Text hinzufügen
+
+# Elliott-Wellengrade.
+wave_degree_subminuette = Subminuette
+wave_degree_minuette = Minuette
+wave_degree_minute = Minute
+wave_degree_minor = Minor
+wave_degree_intermediate = Intermediär
+wave_degree_primary = Primär
+wave_degree_cycle = Zyklus
+wave_degree_supercycle = Superzyklus
+wave_degree_grand_supercycle = Großer Superzyklus

@@ -1,0 +1,7 @@
+# Unidades de duração das estatísticas de medição e da contagem até o fechamento da barra.
+duration_days = {value}d
+duration_hours = {value}h
+duration_minutes = {value}min
+duration_seconds = {value}s
+# A contagem além do maior número de dias exibido.
+countdown_overflow = {days}d+

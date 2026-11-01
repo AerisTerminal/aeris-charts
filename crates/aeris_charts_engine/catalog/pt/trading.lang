@@ -1,0 +1,21 @@
+# A sobreposição de negociação: chips de ordens e posições, botões e marcadores de execução.
+buy = Compra
+sell = Venda
+market = Mercado
+limit = Limitada
+stop = Stop
+stop_limit = Stop limitada
+inactive = Inativa
+replay = Replay
+close_position = Fechar posição
+cancel_take_profit = Cancelar take profit
+cancel_stop_loss = Cancelar stop loss
+cancel_order = Cancelar ordem
+cancel_remaining = Cancelar restante {quantity}
+trigger = Disparar {quantity}
+# O marcador de preço médio da dica de uma execução agregada.
+average_price = méd
+fills[one] = {count} execução
+fills[other] = {count} execuções
+bid = Bid
+ask = Ask

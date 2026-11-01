@@ -1,0 +1,20 @@
+# 트레이딩 오버레이: 주문 및 포지션 칩, 버튼, 체결 표시.
+buy = 매수
+sell = 매도
+market = 시장가
+limit = 지정가
+stop = 스톱
+stop_limit = 스톱 지정가
+inactive = 비활성
+replay = 리플레이
+close_position = 포지션 청산
+cancel_take_profit = 익절 취소
+cancel_stop_loss = 손절 취소
+cancel_order = 주문 취소
+cancel_remaining = 잔량 {quantity} 취소
+trigger = 발동 {quantity}
+# 집계된 체결 툴팁의 평균 가격 표시.
+average_price = 평균
+fills[other] = 체결 {count}건
+bid = 매수호가
+ask = 매도호가

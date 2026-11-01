@@ -1,0 +1,15 @@
+# Filas de la leyenda de los gráficos financieros y generales.
+ohlc_open = Ap
+ohlc_high = Máx
+ohlc_low = Mín
+ohlc_close = Cie
+# El marcador de filas contraídas de leyendas y descripciones emergentes.
+more_rows[one] = +{count} más
+more_rows[other] = +{count} más
+# El título de reserva de una serie general sin título.
+series_fallback = Serie {number}
+asset = Activo
+options_volume = Volumen de opciones
+calls = Calls
+puts = Puts
+delta = Delta

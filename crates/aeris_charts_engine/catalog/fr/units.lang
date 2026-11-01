@@ -1,0 +1,7 @@
+# Unités de durée des statistiques de mesure et du compte à rebours de clôture de barre.
+duration_days = {value}j
+duration_hours = {value}h
+duration_minutes = {value}min
+duration_seconds = {value}s
+# Le compte à rebours au-delà du plus grand nombre de jours affiché.
+countdown_overflow = {days}j+

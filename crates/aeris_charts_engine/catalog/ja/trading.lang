@@ -1,0 +1,20 @@
+# 取引オーバーレイ：注文とポジションのチップ、ボタン、約定マーカー。
+buy = 買い
+sell = 売り
+market = 成行
+limit = 指値
+stop = 逆指値
+stop_limit = 逆指値（指値）
+inactive = 無効
+replay = リプレイ
+close_position = ポジションを決済
+cancel_take_profit = 利確を取消
+cancel_stop_loss = 損切りを取消
+cancel_order = 注文を取消
+cancel_remaining = 残り {quantity} を取消
+trigger = 発動 {quantity}
+# 集約された約定のツールチップに表示する平均価格のマーカー。
+average_price = 平均
+fills[other] = 約定 {count} 件
+bid = 買気配
+ask = 売気配

@@ -1,0 +1,6 @@
+# Texto de las familias de gráficos que solo contiene la compilación completa.
+from = desde {value}
+to = hasta {value}
+hexbin_cell = celda hexagonal
+samples[one] = {count} muestra
+samples[other] = {count} muestras

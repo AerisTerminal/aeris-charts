@@ -1,0 +1,16 @@
+# 일반(비금융) 차트의 툴팁과 접근성 라벨.
+no_value = 값 없음
+quartiles = Q1 {q1} · Q3 {q3}
+size = 크기 {value}
+target = 목표 {value}
+comparative = 비교 {value}
+bands = 구간 {values}
+rank = 순위 {rank}
+waterfall_increase = 증가 {start} → {end}
+waterfall_decrease = 감소 {start} → {end}
+waterfall_subtotal = 소계
+waterfall_total = 합계
+gantt_task = {start} – {end} · {percent}% 완료
+gantt_milestone = 마일스톤 {date}
+# `{share}`는 소수점 한 자리입니다.
+mosaic_cell = {column}, {segment}, 열의 {share}%

@@ -1,0 +1,37 @@
+# 绘图工具在图表上绘制的文本，以及其设置中的锚点名称。
+
+# 测量统计。`{count}` 已格式化，可能带负号。
+bars[other] = {count} 根 K 线
+# 小数形式的 K 线数量；`{value}` 保留两位小数。
+bars_fraction = {value} 根 K 线
+range = 区间
+distance = 距离：{pixels} px
+
+# 多头和空头持仓工具。`{percent}` 保留三位小数。
+position_target = 目标：{price}（{percent}%）{ticks}，金额：{amount}
+position_stop = 止损：{price}（{percent}%）{ticks}，金额：{amount}
+position_open_pnl = 浮动盈亏：{pnl}，数量：{quantity}
+position_closed_pnl = 已平仓盈亏：{pnl}，数量：{quantity}
+risk_reward = 风险回报比：{ratio}
+
+# 绘图设置中的锚点名称。
+anchor_entry = 入场
+anchor_target = 目标
+anchor_stop = 止损
+anchor_point = 点
+anchor_numbered_point = 点 {number}
+
+# 空文本绘图的提示文字。
+line_text_placeholder = + 添加文本
+annotation_placeholder = 添加文本
+
+# 艾略特波浪级别。英文直接显示存储的标识符。
+wave_degree_subminuette = 次微浪
+wave_degree_minuette = 微浪
+wave_degree_minute = 细浪
+wave_degree_minor = 小浪
+wave_degree_intermediate = 中浪
+wave_degree_primary = 基本浪
+wave_degree_cycle = 循环浪
+wave_degree_supercycle = 超级循环浪
+wave_degree_grand_supercycle = 特大超级循环浪

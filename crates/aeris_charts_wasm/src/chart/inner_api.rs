@@ -2280,8 +2280,9 @@ impl ChartInner {
     }
 
     /// reference `localization.locale` (default the browser language): switch the engine's display
-    /// language from the BCP 47 tag (`ru`, `ru-RU`, … select Russian; anything else selects
-    /// English), then regenerate the engine's month-name tables (12 short + 12 long) from
+    /// language from the primary subtag of the BCP 47 tag, case-insensitively (`en`, `de`,
+    /// `es`, `fr`, `pt`, `ru`, `hi`, `zh`, `ja` or `ko`, so `pt-BR` selects Portuguese and
+    /// `zh-Hans-CN` Simplified Chinese; any other tag selects English), then regenerate the engine's month-name tables (12 short + 12 long) from
     /// `Intl.DateTimeFormat` so the date-format `MMM`/`MMMM` tokens and the month tick labels
     /// follow the exact browser locale. An invalid/unsupported tag still switches the engine
     /// language, then warns and keeps the language's built-in month tables.

@@ -3565,7 +3565,7 @@ impl ChartEngine {
                         })
                         .unwrap_or_default(),
                     crate::DrawingLabelMetric::DateTimeRange => {
-                        catalog::RANGE.text(self.language).to_string()
+                        catalog::drawings::RANGE.text(self.language).to_string()
                     }
                     crate::DrawingLabelMetric::Duration => drawing
                         .points

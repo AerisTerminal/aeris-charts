@@ -1,0 +1,16 @@
+# Dicas e rótulos de acessibilidade de gráficos gerais (não financeiros).
+no_value = Sem valor
+quartiles = Q1 {q1} · Q3 {q3}
+size = tamanho {value}
+target = meta {value}
+comparative = comparativo {value}
+bands = faixas {values}
+rank = posição {rank}
+waterfall_increase = aumento {start} → {end}
+waterfall_decrease = redução {start} → {end}
+waterfall_subtotal = subtotal
+waterfall_total = total
+gantt_task = {start} – {end} · {percent}% concluído
+gantt_milestone = Marco {date}
+# `{share}` tem uma casa decimal.
+mosaic_cell = {column}, {segment}, {share}% da coluna

@@ -1,0 +1,21 @@
+# La capa de trading: etiquetas de órdenes y posiciones, botones y marcadores de ejecución.
+buy = Comprar
+sell = Vender
+market = Mercado
+limit = Limitada
+stop = Stop
+stop_limit = Stop limitada
+inactive = Inactiva
+replay = Repetición
+close_position = Cerrar posición
+cancel_take_profit = Cancelar take profit
+cancel_stop_loss = Cancelar stop loss
+cancel_order = Cancelar orden
+cancel_remaining = Cancelar restantes {quantity}
+trigger = Activar {quantity}
+# El marcador de precio medio de la descripción de una ejecución agregada.
+average_price = prom.
+fills[one] = {count} ejecución
+fills[other] = {count} ejecuciones
+bid = Bid
+ask = Ask

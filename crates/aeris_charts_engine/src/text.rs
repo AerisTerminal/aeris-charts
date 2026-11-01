@@ -1,82 +1,132 @@
-//! The engine-owned text catalog: every user-visible string the engine generates is a
-//! [`Phrase`] or a small function here, looked up by the chart's [`ChartLanguage`]. A phrase
-//! carries every supported language, so a missing translation fails to compile. Persisted
-//! identifiers (drawing property and enum names, indicator output names, wave-degree ids) never
-//! come from this catalog, and host-supplied strings are never translated.
+//! The engine-owned text catalog. Every user-visible string the engine generates is a key of
+//! the compiled catalog under `catalog/<language>/<area>.lang` (compiled by `build.rs` into
+//! the typed `text::<area>::<KEY>` constants), looked up by the chart's [`ChartLanguage`], or a
+//! small function here that fills a key's placeholders. The build fails when a language lacks a
+//! key, a placeholder or a plural form its grammar needs. Persisted identifiers (drawing
+//! property and enum names, indicator output names, wave-degree ids) never come from this
+//! catalog, and host-supplied strings are never translated.
 
-use aeris_charts_core::language::ChartLanguage;
+use std::fmt::{Display, Write as _};
 
-/// One user-visible string in every supported language.
+use aeris_charts_core::language::{ChartLanguage, PluralCategory};
+
+include!(concat!(env!("OUT_DIR"), "/catalog.rs"));
+
+/// One named value substituted for a `{name}` placeholder.
+pub(crate) type Argument<'a> = (&'a str, &'a dyn Display);
+
+/// A catalog text without placeholders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Phrase {
-    pub english: &'static str,
-    pub russian: &'static str,
-}
+pub(crate) struct Phrase(u16);
 
 impl Phrase {
-    pub(crate) const fn new(english: &'static str, russian: &'static str) -> Self {
-        Self { english, russian }
-    }
-
-    pub(crate) const fn text(self, language: ChartLanguage) -> &'static str {
-        match language {
-            ChartLanguage::English => self.english,
-            ChartLanguage::Russian => self.russian,
-        }
+    pub(crate) fn text(self, language: ChartLanguage) -> &'static str {
+        PHRASES[usize::from(self.0)][column(language)]
     }
 }
 
-/// The Russian plural form of a countable noun: one (1, 21, …), few (2-4, 22-24, …) or many.
-pub(crate) fn russian_plural<'a>(count: i64, one: &'a str, few: &'a str, many: &'a str) -> &'a str {
-    let n = count.unsigned_abs();
-    if (11..=14).contains(&(n % 100)) {
-        return many;
+/// A catalog text with `{name}` placeholders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Template(u16);
+
+impl Template {
+    pub(crate) fn format(self, language: ChartLanguage, arguments: &[Argument<'_>]) -> String {
+        substitute(TEMPLATES[usize::from(self.0)][column(language)], arguments)
     }
-    match n % 10 {
-        1 => one,
-        2..=4 => few,
-        _ => many,
+}
+
+/// A count-dependent catalog text with one form per CLDR plural category.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Plural(u16);
+
+impl Plural {
+    /// The form for `count`, the magnitude of the counted value, with its placeholders filled
+    /// in. `{count}` is an ordinary argument, so a caller can pass it pre-formatted.
+    pub(crate) fn format(
+        self,
+        language: ChartLanguage,
+        count: u64,
+        arguments: &[Argument<'_>],
+    ) -> String {
+        let form = match language.plural_category(count) {
+            PluralCategory::One => 0,
+            PluralCategory::Few => 1,
+            PluralCategory::Many => 2,
+            PluralCategory::Other => 3,
+        };
+        substitute(
+            PLURALS[usize::from(self.0)][column(language)][form],
+            arguments,
+        )
     }
+}
+
+/// The catalog column of a language: the build emits one column per language in
+/// [`ChartLanguage::ALL`] order, which is the variant declaration order.
+const fn column(language: ChartLanguage) -> usize {
+    language as usize
+}
+
+fn substitute(text: &str, arguments: &[Argument<'_>]) -> String {
+    let mut output = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(position) = rest.find(['{', '}']) {
+        output.push_str(&rest[..position]);
+        let tail = &rest[position..];
+        if tail.starts_with("{{") || tail.starts_with("}}") {
+            output.push_str(&tail[..1]);
+            rest = &tail[2..];
+            continue;
+        }
+        let Some(end) = tail.find('}').filter(|_| tail.starts_with('{')) else {
+            output.push_str(&tail[..1]);
+            rest = &tail[1..];
+            continue;
+        };
+        let name = &tail[1..end];
+        let value = arguments.iter().find(|(argument, _)| *argument == name);
+        debug_assert!(
+            value.is_some(),
+            "no value for the `{{{name}}}` placeholder in {text:?}"
+        );
+        match value {
+            Some((_, value)) => {
+                if write!(output, "{value}").is_err() {
+                    output.push('?');
+                }
+            }
+            None => output.push_str(&tail[..=end]),
+        }
+        rest = &tail[end + 1..];
+    }
+    output.push_str(rest);
+    output
 }
 
 /// `{count} bar(s)` with the language's plural rules; the count arrives pre-formatted (it can
 /// carry the typographic minus of the drawing statistics).
 pub(crate) fn bars_count(language: ChartLanguage, formatted: &str, count: i64) -> String {
-    match language {
-        ChartLanguage::English => {
-            format!("{formatted} {}", if count == 1 { "bar" } else { "bars" })
-        }
-        ChartLanguage::Russian => {
-            format!(
-                "{formatted} {}",
-                russian_plural(count, "бар", "бара", "баров")
-            )
-        }
-    }
+    drawings::BARS.format(language, count.unsigned_abs(), &[("count", &formatted)])
 }
 
-/// A fractional bar count (`{:.2} bars`): a Russian fraction takes the genitive singular.
+/// A fractional bar count with two decimals.
 pub(crate) fn bars_fraction(language: ChartLanguage, value: f64) -> String {
-    match language {
-        ChartLanguage::English => format!("{value:.2} bars"),
-        ChartLanguage::Russian => format!("{value:.2} бара"),
-    }
+    drawings::BARS_FRACTION.format(language, &[("value", &format!("{value:.2}"))])
 }
 
 /// `{n} fill(s)` of an aggregated execution marker.
 pub(crate) fn fills_count(language: ChartLanguage, count: usize) -> String {
-    match language {
-        ChartLanguage::English => format!("{count} {}", if count == 1 { "fill" } else { "fills" }),
-        ChartLanguage::Russian => format!(
-            "{count} {}",
-            russian_plural(count as i64, "сделка", "сделки", "сделок")
-        ),
-    }
+    trading::FILLS.format(language, count as u64, &[("count", &count)])
 }
 
 /// Elapsed time as its two most significant non-zero units (`1d 4h`, `45m`, `30s`).
 pub(crate) fn measure_duration(language: ChartLanguage, seconds: i64) -> String {
-    let units: [&Phrase; 4] = [&UNIT_DAY, &UNIT_HOUR, &UNIT_MINUTE, &UNIT_SECOND];
+    let units = [
+        units::DURATION_DAYS,
+        units::DURATION_HOURS,
+        units::DURATION_MINUTES,
+        units::DURATION_SECONDS,
+    ];
     let magnitude = seconds.unsigned_abs();
     let parts = [
         magnitude / 86_400,
@@ -96,14 +146,11 @@ pub(crate) fn measure_duration(language: ChartLanguage, seconds: i64) -> String 
         if written == 1 {
             text.push(' ');
         }
-        text.push_str(&format!("{value}{}", unit.text(language)));
+        text.push_str(&unit.format(language, &[("value", &value)]));
         written += 1;
     }
     if written == 0 {
-        return match language {
-            ChartLanguage::English => "0s".to_string(),
-            ChartLanguage::Russian => "0с".to_string(),
-        };
+        return units::DURATION_SECONDS.format(language, &[("value", &0)]);
     }
     text
 }
@@ -124,83 +171,54 @@ pub(crate) fn countdown(language: ChartLanguage, remaining: f64) -> String {
     } else {
         let days = secs / 86400;
         if days > 9999 {
-            match language {
-                ChartLanguage::English => "9999d+".to_string(),
-                ChartLanguage::Russian => "9999д+".to_string(),
-            }
+            units::COUNTDOWN_OVERFLOW.format(language, &[("days", &9999)])
         } else {
             format!(
-                "{}{} {}{}",
-                days,
-                UNIT_DAY.text(language),
-                secs % 86400 / 3600,
-                UNIT_HOUR.text(language)
+                "{} {}",
+                units::DURATION_DAYS.format(language, &[("value", &days)]),
+                units::DURATION_HOURS.format(language, &[("value", &(secs % 86400 / 3600))])
             )
         }
     }
 }
 
-/// The date pattern of the axis month tag under each bar (reference `M/d/yyyy`; the Russian
-/// convention is day-first numeric).
-pub(crate) const fn bar_month_tag_pattern(language: ChartLanguage) -> &'static str {
-    match language {
-        ChartLanguage::English => "M/d/yyyy",
-        ChartLanguage::Russian => "d.M.yyyy",
-    }
-}
-
-/// The one-letter weekday headers (Sunday first) a calendar chart falls back to without host
-/// labels.
-pub(crate) fn default_day_labels(language: ChartLanguage) -> [&'static str; 7] {
-    match language {
-        ChartLanguage::English => ["S", "M", "T", "W", "T", "F", "S"],
-        ChartLanguage::Russian => ["В", "П", "В", "С", "Ч", "П", "С"],
-    }
-}
-
-/// The display form of a persisted Elliott wave-degree id (`subminuette`..`grand_supercycle`).
-/// English keeps the id itself; an unknown id passes through in every language.
+/// The display form of a persisted Elliott wave-degree id (`subminuette`..`grand_supercycle`);
+/// an unknown id passes through in every language.
 pub(crate) fn wave_degree(language: ChartLanguage, id: &str) -> String {
-    if language == ChartLanguage::English {
-        return id.to_string();
-    }
-    match id {
-        "subminuette" => "субминуэтка",
-        "minuette" => "минуэтка",
-        "minute" => "минутка",
-        "minor" => "младшая",
-        "intermediate" => "промежуточная",
-        "primary" => "первичная",
-        "cycle" => "цикловая",
-        "supercycle" => "суперцикловая",
-        "grand_supercycle" => "гранд-суперцикловая",
-        other => other,
-    }
-    .to_string()
+    let phrase = match id {
+        "subminuette" => drawings::WAVE_DEGREE_SUBMINUETTE,
+        "minuette" => drawings::WAVE_DEGREE_MINUETTE,
+        "minute" => drawings::WAVE_DEGREE_MINUTE,
+        "minor" => drawings::WAVE_DEGREE_MINOR,
+        "intermediate" => drawings::WAVE_DEGREE_INTERMEDIATE,
+        "primary" => drawings::WAVE_DEGREE_PRIMARY,
+        "cycle" => drawings::WAVE_DEGREE_CYCLE,
+        "supercycle" => drawings::WAVE_DEGREE_SUPERCYCLE,
+        "grand_supercycle" => drawings::WAVE_DEGREE_GRAND_SUPERCYCLE,
+        other => return other.to_string(),
+    };
+    phrase.text(language).to_string()
 }
 
 /// The open/high/low/close column labels of the financial legend.
 pub(crate) fn ohlc_labels(language: ChartLanguage) -> [&'static str; 4] {
-    match language {
-        ChartLanguage::English => ["O", "H", "L", "C"],
-        ChartLanguage::Russian => ["Откр", "Макс", "Мин", "Закр"],
-    }
+    [
+        legend::OHLC_OPEN,
+        legend::OHLC_HIGH,
+        legend::OHLC_LOW,
+        legend::OHLC_CLOSE,
+    ]
+    .map(|phrase| phrase.text(language))
 }
 
 /// The collapsed-rows marker of legends and tooltips (`+3 more`).
 pub(crate) fn more_rows(language: ChartLanguage, hidden: usize) -> String {
-    match language {
-        ChartLanguage::English => format!("+{hidden} more"),
-        ChartLanguage::Russian => format!("ещё {hidden}"),
-    }
+    legend::MORE_ROWS.format(language, hidden as u64, &[("count", &hidden)])
 }
 
 /// The fallback title of an untitled general series (`Series 3`).
 pub(crate) fn series_fallback(language: ChartLanguage, number: usize) -> String {
-    match language {
-        ChartLanguage::English => format!("Series {number}"),
-        ChartLanguage::Russian => format!("Серия {number}"),
-    }
+    legend::SERIES_FALLBACK.format(language, &[("number", &number)])
 }
 
 /// The long position tool's target line.
@@ -211,14 +229,15 @@ pub(crate) fn position_target_line(
     ticks: &str,
     amount: &str,
 ) -> String {
-    match language {
-        ChartLanguage::English => {
-            format!("Target: {price} ({reward_percent:.3}%) {ticks}, Amount: {amount}")
-        }
-        ChartLanguage::Russian => {
-            format!("Цель: {price} ({reward_percent:.3}%) {ticks}, Сумма: {amount}")
-        }
-    }
+    drawings::POSITION_TARGET.format(
+        language,
+        &[
+            ("price", &price),
+            ("percent", &format!("{reward_percent:.3}")),
+            ("ticks", &ticks),
+            ("amount", &amount),
+        ],
+    )
 }
 
 /// The position tool's stop line.
@@ -229,14 +248,15 @@ pub(crate) fn position_stop_line(
     ticks: &str,
     amount: &str,
 ) -> String {
-    match language {
-        ChartLanguage::English => {
-            format!("Stop: {price} ({risk_percent:.3}%) {ticks}, Amount: {amount}")
-        }
-        ChartLanguage::Russian => {
-            format!("Стоп: {price} ({risk_percent:.3}%) {ticks}, Сумма: {amount}")
-        }
-    }
+    drawings::POSITION_STOP.format(
+        language,
+        &[
+            ("price", &price),
+            ("percent", &format!("{risk_percent:.3}")),
+            ("ticks", &ticks),
+            ("amount", &amount),
+        ],
+    )
 }
 
 /// The position tool's open/closed P&L line.
@@ -246,43 +266,32 @@ pub(crate) fn position_pnl_line(
     pnl: &str,
     quantity: &str,
 ) -> String {
-    let status = if closed { CLOSED } else { OPEN }.text(language);
-    match language {
-        ChartLanguage::English => format!("{status} P&L: {pnl}, Qty: {quantity}"),
-        ChartLanguage::Russian => format!("{status} P&L: {pnl}, Кол-во: {quantity}"),
-    }
+    let template = if closed {
+        drawings::POSITION_CLOSED_PNL
+    } else {
+        drawings::POSITION_OPEN_PNL
+    };
+    template.format(language, &[("pnl", &pnl), ("quantity", &quantity)])
 }
 
 /// The position tool's risk/reward line.
 pub(crate) fn risk_reward_line(language: ChartLanguage, ratio: &str) -> String {
-    match language {
-        ChartLanguage::English => format!("Risk/reward ratio: {ratio}"),
-        ChartLanguage::Russian => format!("Соотношение риск/прибыль: {ratio}"),
-    }
+    drawings::RISK_REWARD.format(language, &[("ratio", &ratio)])
 }
 
 /// The cancel-button tooltip of a partially filled working order.
 pub(crate) fn cancel_remaining(language: ChartLanguage, quantity: &str) -> String {
-    match language {
-        ChartLanguage::English => format!("Cancel remaining {quantity}"),
-        ChartLanguage::Russian => format!("Отменить оставшиеся {quantity}"),
-    }
+    trading::CANCEL_REMAINING.format(language, &[("quantity", &quantity)])
 }
 
 /// The stop-limit trigger marker.
 pub(crate) fn trigger_quantity(language: ChartLanguage, quantity: &str) -> String {
-    match language {
-        ChartLanguage::English => format!("Trigger {quantity}"),
-        ChartLanguage::Russian => format!("Триггер {quantity}"),
-    }
+    trading::TRIGGER.format(language, &[("quantity", &quantity)])
 }
 
 /// The Info Line's pixel-distance row.
 pub(crate) fn distance_px(language: ChartLanguage, px: i64) -> String {
-    match language {
-        ChartLanguage::English => format!("distance: {px} px"),
-        ChartLanguage::Russian => format!("расстояние: {px} пикс."),
-    }
+    drawings::DISTANCE.format(language, &[("pixels", &px)])
 }
 
 /// The gantt task span summary.
@@ -292,18 +301,15 @@ pub(crate) fn gantt_task_span(
     end: &str,
     percent: f64,
 ) -> String {
-    match language {
-        ChartLanguage::English => format!("{start} – {end} · {percent}% complete"),
-        ChartLanguage::Russian => format!("{start} – {end} · выполнено {percent}%"),
-    }
+    general::GANTT_TASK.format(
+        language,
+        &[("start", &start), ("end", &end), ("percent", &percent)],
+    )
 }
 
 /// A gantt milestone with its date.
 pub(crate) fn gantt_milestone(language: ChartLanguage, date: &str) -> String {
-    match language {
-        ChartLanguage::English => format!("Milestone {date}"),
-        ChartLanguage::Russian => format!("Веха {date}"),
-    }
+    general::GANTT_MILESTONE.format(language, &[("date", &date)])
 }
 
 /// The mosaic accessibility label of one cell.
@@ -313,20 +319,24 @@ pub(crate) fn mosaic_cell(
     segment: &str,
     share: f64,
 ) -> String {
-    match language {
-        ChartLanguage::English => format!("{column}, {segment}, {share:.1}% of column"),
-        ChartLanguage::Russian => format!("{column}, {segment}, {share:.1}% столбца"),
-    }
+    general::MOSAIC_CELL.format(
+        language,
+        &[
+            ("column", &column),
+            ("segment", &segment),
+            ("share", &format!("{share:.1}")),
+        ],
+    )
 }
 
 /// The prompt an empty line-text drawing shows while selected.
 pub(crate) fn line_text_placeholder(language: ChartLanguage) -> &'static str {
-    LINE_TEXT_PLACEHOLDER.text(language)
+    drawings::LINE_TEXT_PLACEHOLDER.text(language)
 }
 
 /// The prompt an empty annotation shows.
 pub(crate) fn annotation_placeholder(language: ChartLanguage) -> &'static str {
-    ANNOTATION_PLACEHOLDER.text(language)
+    drawings::ANNOTATION_PLACEHOLDER.text(language)
 }
 
 /// The label of one anchor of a drawing kind in its property schema.
@@ -336,207 +346,40 @@ pub(crate) fn anchor_label(
     index: usize,
 ) -> String {
     use crate::DrawingKind;
-    match (kind, index) {
-        (DrawingKind::LongPosition | DrawingKind::ShortPosition, 0) => {
-            ENTRY.text(language).to_string()
+    let phrase = match (kind, index) {
+        (DrawingKind::LongPosition | DrawingKind::ShortPosition, 0) => drawings::ANCHOR_ENTRY,
+        (DrawingKind::LongPosition | DrawingKind::ShortPosition, 1) => drawings::ANCHOR_TARGET,
+        (DrawingKind::LongPosition | DrawingKind::ShortPosition, _) => drawings::ANCHOR_STOP,
+        _ if kind.anchor_count() == 1 => drawings::ANCHOR_POINT,
+        _ => {
+            return drawings::ANCHOR_NUMBERED_POINT.format(language, &[("number", &(index + 1))]);
         }
-        (DrawingKind::LongPosition | DrawingKind::ShortPosition, 1) => {
-            TARGET.text(language).to_string()
-        }
-        (DrawingKind::LongPosition | DrawingKind::ShortPosition, _) => {
-            STOP.text(language).to_string()
-        }
-        _ if kind.anchor_count() == 1 => POINT.text(language).to_string(),
-        _ => match language {
-            ChartLanguage::English => format!("Point {}", index + 1),
-            ChartLanguage::Russian => format!("Точка {}", index + 1),
-        },
-    }
+    };
+    phrase.text(language).to_string()
 }
-
-const UNIT_DAY: Phrase = Phrase::new("d", "д");
-const UNIT_HOUR: Phrase = Phrase::new("h", "ч");
-const UNIT_MINUTE: Phrase = Phrase::new("m", "м");
-const UNIT_SECOND: Phrase = Phrase::new("s", "с");
-
-const OPEN: Phrase = Phrase::new("Open", "Открыта");
-const CLOSED: Phrase = Phrase::new("Closed", "Закрыта");
-const ENTRY: Phrase = Phrase::new("Entry", "Вход");
-const TARGET: Phrase = Phrase::new("Target", "Цель");
-const STOP: Phrase = Phrase::new("Stop", "Стоп");
-const POINT: Phrase = Phrase::new("Point", "Точка");
-const LINE_TEXT_PLACEHOLDER: Phrase = Phrase::new("+ Add text", "+ Добавить текст");
-const ANNOTATION_PLACEHOLDER: Phrase = Phrase::new("Add text", "Добавить текст");
-
-pub(crate) const BUY: Phrase = Phrase::new("Buy", "Покупка");
-pub(crate) const SELL: Phrase = Phrase::new("Sell", "Продажа");
-pub(crate) const MARKET: Phrase = Phrase::new("Market", "Рынок");
-pub(crate) const LIMIT: Phrase = Phrase::new("Limit", "Лимит");
-pub(crate) const STOP_ORDER: Phrase = Phrase::new("Stop", "Стоп");
-pub(crate) const STOP_LIMIT: Phrase = Phrase::new("Stop Limit", "Стоп-лимит");
-pub(crate) const INACTIVE: Phrase = Phrase::new("Inactive", "Неактивен");
-pub(crate) const REPLAY: Phrase = Phrase::new("Replay", "Повтор");
-pub(crate) const CLOSE_POSITION: Phrase = Phrase::new("Close position", "Закрыть позицию");
-pub(crate) const CANCEL_TAKE_PROFIT: Phrase =
-    Phrase::new("Cancel take profit", "Отменить тейк-профит");
-pub(crate) const CANCEL_STOP_LOSS: Phrase = Phrase::new("Cancel stop loss", "Отменить стоп-лосс");
-pub(crate) const CANCEL_ORDER: Phrase = Phrase::new("Cancel order", "Отменить ордер");
-pub(crate) const AVG_PRICE: Phrase = Phrase::new("avg", "ср.");
-
-pub(crate) const BID: Phrase = Phrase::new("Bid", "Бид");
-pub(crate) const ASK: Phrase = Phrase::new("Ask", "Аск");
-
-pub(crate) const ASSET: Phrase = Phrase::new("Asset", "Актив");
-pub(crate) const OPTIONS_VOLUME: Phrase = Phrase::new("Options Volume", "Объём опционов");
-pub(crate) const CALLS: Phrase = Phrase::new("Calls", "Коллы");
-pub(crate) const PUTS: Phrase = Phrase::new("Puts", "Путы");
-pub(crate) const DELTA: Phrase = Phrase::new("Delta", "Дельта");
-
-pub(crate) const NO_VALUE: Phrase = Phrase::new("No value", "Нет значения");
-pub(crate) const RANGE: Phrase = Phrase::new("range", "диапазон");
-pub(crate) const TOOLTIP_SIZE: Phrase = Phrase::new("size", "размер");
-pub(crate) const TOOLTIP_TARGET: Phrase = Phrase::new("target", "цель");
-pub(crate) const TOOLTIP_COMPARATIVE: Phrase = Phrase::new("comparative", "сравнение");
-pub(crate) const TOOLTIP_BANDS: Phrase = Phrase::new("bands", "диапазоны");
-pub(crate) const TOOLTIP_RANK: Phrase = Phrase::new("rank", "ранг");
-#[cfg(feature = "complete")]
-pub(crate) const TOOLTIP_FROM: Phrase = Phrase::new("from", "от");
-#[cfg(feature = "complete")]
-pub(crate) const TOOLTIP_TO: Phrase = Phrase::new("to", "до");
-#[cfg(feature = "complete")]
-pub(crate) const HEXBIN_CELL: Phrase = Phrase::new("hexbin cell", "шестиугольная ячейка");
 
 /// `{count} sample(s)` in a statistics tooltip, with the language's plural rules.
 #[cfg(feature = "complete")]
 pub(crate) fn samples_count(language: ChartLanguage, count: u32) -> String {
-    match language {
-        ChartLanguage::English => {
-            format!("{count} {}", if count == 1 { "sample" } else { "samples" })
-        }
-        ChartLanguage::Russian => format!(
-            "{count} {}",
-            russian_plural(i64::from(count), "наблюдение", "наблюдения", "наблюдений")
-        ),
-    }
+    complete::SAMPLES.format(language, u64::from(count), &[("count", &count)])
 }
 
-/// The display name of a waterfall bar's role (increase/decrease/subtotal/total).
-pub(crate) fn waterfall_mark(
+/// The tooltip detail of a waterfall bar's role: an increase or decrease with its span, or the
+/// subtotal/total name.
+pub(crate) fn waterfall_detail(
     language: ChartLanguage,
     mark: crate::GeneralWaterfallMark,
-) -> &'static str {
+    start: &str,
+    end: &str,
+) -> String {
     use crate::GeneralWaterfallMark as Mark;
-    match (language, mark) {
-        (ChartLanguage::English, _) => mark.name(),
-        (ChartLanguage::Russian, Mark::Increase) => "рост",
-        (ChartLanguage::Russian, Mark::Decrease) => "снижение",
-        (ChartLanguage::Russian, Mark::Subtotal) => "промежуточный итог",
-        (ChartLanguage::Russian, Mark::Total) => "итог",
-    }
-}
-
-/// The drawing settings labels, one phrase per property label the schema can emit.
-pub(crate) mod drawing_labels {
-    use super::Phrase;
-
-    pub(crate) const ACCOUNT_SIZE: Phrase = Phrase::new("Account size", "Размер счёта");
-    pub(crate) const RISK_PERCENT: Phrase = Phrase::new("Risk %", "Риск %");
-    pub(crate) const DEVIATION: Phrase = Phrase::new("Deviation", "Отклонение");
-    pub(crate) const ROWS: Phrase = Phrase::new("Rows", "Строки");
-    pub(crate) const VALUE_AREA_PERCENT: Phrase = Phrase::new("Value area %", "Зона стоимости %");
-    pub(crate) const LINE: Phrase = Phrase::new("Line", "Линия");
-    pub(crate) const WIDTH: Phrase = Phrase::new("Width", "Толщина");
-    pub(crate) const LINE_STYLE: Phrase = Phrase::new("Line style", "Стиль линии");
-    pub(crate) const LINE_START: Phrase = Phrase::new("Line start", "Начало линии");
-    pub(crate) const LINE_END: Phrase = Phrase::new("Line end", "Конец линии");
-    pub(crate) const EXTEND_LEFT: Phrase = Phrase::new("Extend left", "Продлить влево");
-    pub(crate) const EXTEND_RIGHT: Phrase = Phrase::new("Extend right", "Продлить вправо");
-    pub(crate) const MIDDLE_POINT: Phrase = Phrase::new("Middle point", "Средняя точка");
-    pub(crate) const PRICE_LABELS: Phrase = Phrase::new("Price labels", "Метки цены");
-    pub(crate) const STATS: Phrase = Phrase::new("Stats", "Статистика");
-    pub(crate) const STATS_POSITION: Phrase = Phrase::new("Stats position", "Положение статистики");
-    pub(crate) const ALWAYS_SHOW_STATS: Phrase =
-        Phrase::new("Always show stats", "Всегда показывать статистику");
-    pub(crate) const PROFIT: Phrase = Phrase::new("Profit", "Прибыль");
-    pub(crate) const STOP: Phrase = Phrase::new("Stop", "Стоп");
-    pub(crate) const FIT_BOX: Phrase = Phrase::new(
-        "Fit box to traded range",
-        "Вписать рамку в торгуемый диапазон",
-    );
-    pub(crate) const WIDTH_PERCENT: Phrase = Phrase::new("Width %", "Ширина %");
-    pub(crate) const VALUE_AREA: Phrase = Phrase::new("Value area", "Зона стоимости");
-    pub(crate) const VOLUME: Phrase = Phrase::new("Volume", "Объём");
-    pub(crate) const DELTA_PROFILE: Phrase = Phrase::new("Delta profile", "Дельта-профиль");
-    pub(crate) const POSITIVE_DELTA: Phrase = Phrase::new("Positive delta", "Положительная дельта");
-    pub(crate) const NEGATIVE_DELTA: Phrase = Phrase::new("Negative delta", "Отрицательная дельта");
-    pub(crate) const POINT_OF_CONTROL: Phrase = Phrase::new("Point of control", "Точка контроля");
-    pub(crate) const POC_COLOR: Phrase = Phrase::new("POC color", "Цвет POC");
-    pub(crate) const VALUE_AREA_LINES: Phrase =
-        Phrase::new("Value area lines", "Линии зоны стоимости");
-    pub(crate) const EXTEND_LEVELS_RIGHT: Phrase =
-        Phrase::new("Extend levels right", "Продлить уровни вправо");
-    pub(crate) const BORDER: Phrase = Phrase::new("Border", "Граница");
-    pub(crate) const MIDDLE_LINE: Phrase = Phrase::new("Middle line", "Средняя линия");
-    pub(crate) const MIDDLE_LINE_COLOR: Phrase =
-        Phrase::new("Middle line color", "Цвет средней линии");
-    pub(crate) const MIDDLE_LINE_WIDTH: Phrase =
-        Phrase::new("Middle line width", "Толщина средней линии");
-    pub(crate) const MIDDLE_LINE_STYLE: Phrase =
-        Phrase::new("Middle line style", "Стиль средней линии");
-    pub(crate) const BACKGROUND: Phrase = Phrase::new("Background", "Фон");
-    pub(crate) const BACKGROUND_COLOR: Phrase = Phrase::new("Background color", "Цвет фона");
-    pub(crate) const PRICE_AND_TIME_LABELS: Phrase =
-        Phrase::new("Price and time labels", "Метки цены и времени");
-    pub(crate) const AXIS_HIGHLIGHT: Phrase = Phrase::new("Axis highlight", "Подсветка оси");
-    pub(crate) const LABEL_BACKGROUND: Phrase = Phrase::new("Label background", "Фон метки");
-    pub(crate) const LABEL_TEXT: Phrase = Phrase::new("Label text", "Текст метки");
-    pub(crate) const PRICE_LABEL_TEXT: Phrase = Phrase::new("Price label text", "Текст метки цены");
-    pub(crate) const TREND_LINE: Phrase = Phrase::new("Trend line", "Линия тренда");
-    pub(crate) const LEVELS: Phrase = Phrase::new("Levels", "Уровни");
-    pub(crate) const FANS: Phrase = Phrase::new("Fans", "Веера");
-    pub(crate) const ARCS: Phrase = Phrase::new("Arcs", "Дуги");
-    pub(crate) const REVERSE: Phrase = Phrase::new("Reverse", "Обратный порядок");
-    pub(crate) const PRICES: Phrase = Phrase::new("Prices", "Цены");
-    pub(crate) const VALUES: Phrase = Phrase::new("Values", "Значения");
-    pub(crate) const PERCENTS: Phrase = Phrase::new("Percents", "Проценты");
-    pub(crate) const FIB_LOG_SCALE: Phrase = Phrase::new(
-        "Fib levels based on log scale",
-        "Уровни Фибоначчи по лог. шкале",
-    );
-    pub(crate) const LABELS: Phrase = Phrase::new("Labels", "Подписи");
-    pub(crate) const LABELS_VERTICAL: Phrase =
-        Phrase::new("Labels vertical", "Подписи по вертикали");
-    pub(crate) const DEGREE: Phrase = Phrase::new("Degree", "Степень");
-    pub(crate) const SIZE: Phrase = Phrase::new("Size", "Размер");
-    pub(crate) const MODE: Phrase = Phrase::new("Mode", "Режим");
-    pub(crate) const FLIP_HORIZONTALLY: Phrase =
-        Phrase::new("Flip horizontally", "Отразить по горизонтали");
-    pub(crate) const FLIP_VERTICALLY: Phrase =
-        Phrase::new("Flip vertically", "Отразить по вертикали");
-    pub(crate) const TEXT_COLOR: Phrase = Phrase::new("Text color", "Цвет текста");
-    pub(crate) const FONT_SIZE: Phrase = Phrase::new("Font size", "Размер шрифта");
-    pub(crate) const BOLD: Phrase = Phrase::new("Bold", "Жирный");
-    pub(crate) const ITALIC: Phrase = Phrase::new("Italic", "Курсив");
-    pub(crate) const TEXT: Phrase = Phrase::new("Text", "Текст");
-    pub(crate) const VERTICAL_ALIGNMENT: Phrase =
-        Phrase::new("Vertical alignment", "Выравнивание по вертикали");
-    pub(crate) const HORIZONTAL_ALIGNMENT: Phrase =
-        Phrase::new("Horizontal alignment", "Выравнивание по горизонтали");
-    pub(crate) const BORDER_WIDTH: Phrase = Phrase::new("Border width", "Толщина границы");
-    pub(crate) const HORIZONTAL_POSITION: Phrase =
-        Phrase::new("Horizontal position", "Положение по горизонтали");
-    pub(crate) const VERTICAL_POSITION: Phrase =
-        Phrase::new("Vertical position", "Положение по вертикали");
-    pub(crate) const INTERVALS: Phrase = Phrase::new("Intervals", "Интервалы");
-    pub(crate) const NAME: Phrase = Phrase::new("Name", "Имя");
-    pub(crate) const VISIBLE: Phrase = Phrase::new("Visible", "Видимость");
-    pub(crate) const LOCKED: Phrase = Phrase::new("Locked", "Заблокировано");
-    pub(crate) const GROUP: Phrase = Phrase::new("Group", "Группа");
-    pub(crate) const ORDER: Phrase = Phrase::new("Order", "Порядок");
-    pub(crate) const MAGNET: Phrase = Phrase::new("Magnet", "Магнит");
-    pub(crate) const PRICE_SCALE: Phrase = Phrase::new("Price scale", "Ценовая шкала");
-    pub(crate) const SOURCE: Phrase = Phrase::new("Source", "Источник");
-    pub(crate) const ICON: Phrase = Phrase::new("Icon", "Значок");
+    let span = match mark {
+        Mark::Increase => general::WATERFALL_INCREASE,
+        Mark::Decrease => general::WATERFALL_DECREASE,
+        Mark::Subtotal => return general::WATERFALL_SUBTOTAL.text(language).to_string(),
+        Mark::Total => return general::WATERFALL_TOTAL.text(language).to_string(),
+    };
+    span.format(language, &[("start", &start), ("end", &end)])
 }
 
 #[cfg(test)]
@@ -544,22 +387,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn catalog_columns_follow_the_language_order() {
+        assert_eq!(CATALOG_LANGUAGES.len(), ChartLanguage::ALL.len());
+        for (index, language) in ChartLanguage::ALL.into_iter().enumerate() {
+            assert_eq!(CATALOG_LANGUAGES[index], language.code());
+            assert_eq!(column(language), index);
+        }
+    }
+
+    #[test]
+    fn every_language_resolves_every_key_and_plural_form() {
+        for language in ChartLanguage::ALL {
+            let column = column(language);
+            for row in PHRASES.iter().chain(&TEMPLATES) {
+                assert!(!row[column].trim().is_empty(), "{language:?} {row:?}");
+            }
+            for row in &PLURALS {
+                for form in row[column] {
+                    assert!(!form.trim().is_empty(), "{language:?} {row:?}");
+                }
+            }
+            // Every count selects a non-empty form through the language's plural rule.
+            for count in [0, 1, 2, 5, 11, 21, 22, 25] {
+                for index in 0..PLURALS.len() {
+                    let plural = Plural(index as u16);
+                    assert!(
+                        !plural
+                            .format(language, count, &[("count", &count)])
+                            .is_empty()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn placeholders_take_named_values_and_braces_escape() {
+        assert_eq!(
+            substitute(
+                "Buy {quantity} at {price}",
+                &[("quantity", &3), ("price", &"1.5")]
+            ),
+            "Buy 3 at 1.5"
+        );
+        assert_eq!(substitute("{{literal}}", &[]), "{literal}");
+    }
+
+    #[test]
     fn russian_plurals_follow_the_one_few_many_rule() {
-        let form = |n| russian_plural(n, "бар", "бара", "баров");
+        let russian = |n: i64| bars_count(ChartLanguage::Russian, &n.to_string(), n);
         for n in [1, 21, 31, 101] {
-            assert_eq!(form(n), "бар", "{n}");
+            assert_eq!(russian(n), format!("{n} бар"), "{n}");
         }
         for n in [2, 3, 4, 22, 54] {
-            assert_eq!(form(n), "бара", "{n}");
+            assert_eq!(russian(n), format!("{n} бара"), "{n}");
         }
         for n in [0, 5, 11, 12, 14, 25, 111] {
-            assert_eq!(form(n), "баров", "{n}");
+            assert_eq!(russian(n), format!("{n} баров"), "{n}");
         }
         assert_eq!(bars_count(ChartLanguage::Russian, "1", 1), "1 бар");
         assert_eq!(bars_count(ChartLanguage::Russian, "3", 3), "3 бара");
         assert_eq!(bars_count(ChartLanguage::Russian, "12", 12), "12 баров");
         assert_eq!(bars_count(ChartLanguage::English, "1", 1), "1 bar");
         assert_eq!(bars_count(ChartLanguage::English, "2", 2), "2 bars");
+        // The plural operand is the magnitude, so a leftward measure of one bar is singular.
+        assert_eq!(bars_count(ChartLanguage::English, "−1", -1), "−1 bar");
+        assert_eq!(bars_count(ChartLanguage::Russian, "−2", -2), "−2 бара");
+        assert_eq!(fills_count(ChartLanguage::Russian, 2), "2 сделки");
+        assert_eq!(fills_count(ChartLanguage::English, 1), "1 fill");
+        assert_eq!(bars_fraction(ChartLanguage::Russian, 1.5), "1.50 бара");
     }
 
     #[test]
@@ -570,20 +466,63 @@ mod tests {
         assert_eq!(countdown(ChartLanguage::English, 91_800.0), "1d 1h");
         assert_eq!(countdown(ChartLanguage::Russian, 91_800.0), "1д 1ч");
         assert_eq!(countdown(ChartLanguage::Russian, 59.0), "00:59");
+        assert_eq!(countdown(ChartLanguage::English, 1e12), "9999d+");
+        assert_eq!(countdown(ChartLanguage::Russian, 1e12), "9999д+");
     }
 
     #[test]
     fn trading_phrases_localize() {
-        assert_eq!(BUY.text(ChartLanguage::Russian), "Покупка");
-        assert_eq!(SELL.text(ChartLanguage::Russian), "Продажа");
-        assert_eq!(STOP_LIMIT.text(ChartLanguage::Russian), "Стоп-лимит");
+        assert_eq!(trading::BUY.text(ChartLanguage::Russian), "Покупка");
+        assert_eq!(trading::SELL.text(ChartLanguage::Russian), "Продажа");
+        assert_eq!(
+            trading::STOP_LIMIT.text(ChartLanguage::Russian),
+            "Стоп-лимит"
+        );
         assert_eq!(
             risk_reward_line(ChartLanguage::Russian, "2.50"),
             "Соотношение риск/прибыль: 2.50"
         );
         assert_eq!(
-            CLOSE_POSITION.text(ChartLanguage::Russian),
+            trading::CLOSE_POSITION.text(ChartLanguage::Russian),
             "Закрыть позицию"
+        );
+    }
+
+    #[test]
+    fn whole_sentence_keys_keep_the_english_and_russian_text() {
+        let (en, ru) = (ChartLanguage::English, ChartLanguage::Russian);
+        assert_eq!(
+            position_target_line(en, "1.5", 2.0, "15", "1,000.00"),
+            "Target: 1.5 (2.000%) 15, Amount: 1,000.00"
+        );
+        assert_eq!(
+            position_stop_line(ru, "1.5", 2.0, "15", "1,000.00"),
+            "Стоп: 1.5 (2.000%) 15, Сумма: 1,000.00"
+        );
+        assert_eq!(
+            position_pnl_line(en, true, "5", "2"),
+            "Closed P&L: 5, Qty: 2"
+        );
+        assert_eq!(
+            position_pnl_line(ru, false, "5", "2"),
+            "Открыта P&L: 5, Кол-во: 2"
+        );
+        assert_eq!(distance_px(ru, 12), "расстояние: 12 пикс.");
+        assert_eq!(more_rows(en, 3), "+3 more");
+        assert_eq!(more_rows(ru, 3), "ещё 3");
+        assert_eq!(mosaic_cell(en, "A", "B", 12.345), "A, B, 12.3% of column");
+        assert_eq!(gantt_task_span(ru, "1", "2", 50.0), "1 – 2 · выполнено 50%");
+        assert_eq!(wave_degree(en, "grand_supercycle"), "grand_supercycle");
+        assert_eq!(wave_degree(ru, "minor"), "младшая");
+        assert_eq!(wave_degree(ru, "custom"), "custom");
+        assert_eq!(ohlc_labels(en), ["O", "H", "L", "C"]);
+        assert_eq!(
+            waterfall_detail(en, crate::GeneralWaterfallMark::Increase, "1", "2"),
+            "increase 1 → 2"
+        );
+        assert_eq!(
+            waterfall_detail(ru, crate::GeneralWaterfallMark::Total, "1", "2"),
+            "итог"
         );
     }
 }

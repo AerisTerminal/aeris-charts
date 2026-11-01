@@ -1,0 +1,20 @@
+# 交易叠加层：订单和持仓标签、按钮及成交标记。
+buy = 买入
+sell = 卖出
+market = 市价
+limit = 限价
+stop = 止损
+stop_limit = 止损限价
+inactive = 未激活
+replay = 回放
+close_position = 平仓
+cancel_take_profit = 取消止盈
+cancel_stop_loss = 取消止损
+cancel_order = 撤单
+cancel_remaining = 撤销剩余 {quantity}
+trigger = 触发 {quantity}
+# 聚合成交提示中的均价标记。
+average_price = 均价
+fills[other] = {count} 笔成交
+bid = 买价
+ask = 卖价

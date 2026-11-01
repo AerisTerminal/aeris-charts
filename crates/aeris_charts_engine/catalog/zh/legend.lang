@@ -1,0 +1,14 @@
+# 金融图表和通用图表的图例行。
+ohlc_open = 开
+ohlc_high = 高
+ohlc_low = 低
+ohlc_close = 收
+# 图例和提示中折叠行的标记。
+more_rows[other] = 另有 {count} 项
+# 未命名通用序列的备用标题。
+series_fallback = 序列 {number}
+asset = 资产
+options_volume = 期权成交量
+calls = 看涨期权
+puts = 看跌期权
+delta = Delta

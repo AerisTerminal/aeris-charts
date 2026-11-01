@@ -626,7 +626,7 @@ pub fn drawing_property_schema(
     kind: DrawingKind,
     language: ChartLanguage,
 ) -> DrawingPropertySchema {
-    use crate::text::drawing_labels as label;
+    use crate::text::drawing_properties as label;
     use DrawingPropertyGroup::{Coordinates, General, Inputs, Style, Text, Visibility};
     use DrawingPropertyType::{Boolean, Color, Enum, Integer, IntervalSet, Labels, Levels, Number};
     let defaults = crate::drawings::Drawing::new(0, kind, 0, Vec::new());

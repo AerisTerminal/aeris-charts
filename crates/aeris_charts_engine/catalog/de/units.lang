@@ -1,0 +1,7 @@
+# Dauereinheiten der Messstatistiken und des Countdowns bis Balkenschluss.
+duration_days = {value}T
+duration_hours = {value}h
+duration_minutes = {value}m
+duration_seconds = {value}s
+# Der Countdown jenseits seiner größten angezeigten Tageszahl.
+countdown_overflow = {days}T+

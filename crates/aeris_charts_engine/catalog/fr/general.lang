@@ -1,0 +1,16 @@
+# Infobulles et libellés d'accessibilité des graphiques généraux (non financiers).
+no_value = Aucune valeur
+quartiles = Q1 {q1} · Q3 {q3}
+size = taille {value}
+target = objectif {value}
+comparative = comparatif {value}
+bands = bandes {values}
+rank = rang {rank}
+waterfall_increase = hausse {start} → {end}
+waterfall_decrease = baisse {start} → {end}
+waterfall_subtotal = sous-total
+waterfall_total = total
+gantt_task = {start} – {end} · {percent}% terminé
+gantt_milestone = Jalon {date}
+# `{share}` a une décimale.
+mosaic_cell = {column}, {segment}, {share}% de la colonne

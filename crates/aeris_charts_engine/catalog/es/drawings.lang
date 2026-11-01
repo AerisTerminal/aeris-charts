@@ -1,0 +1,38 @@
+# Texto que las herramientas de dibujo pintan en el gráfico y nombres de los anclajes en su configuración.
+
+# Estadísticas de medición. `{count}` llega formateado y puede llevar signo menos.
+bars[one] = {count} barra
+bars[other] = {count} barras
+# Un número fraccionario de barras; `{value}` tiene dos decimales.
+bars_fraction = {value} barras
+range = rango
+distance = distancia: {pixels} px
+
+# Herramientas de posición larga y corta. `{percent}` tiene tres decimales.
+position_target = Objetivo: {price} ({percent}%) {ticks}, Importe: {amount}
+position_stop = Stop: {price} ({percent}%) {ticks}, Importe: {amount}
+position_open_pnl = P&L abierto: {pnl}, Cant.: {quantity}
+position_closed_pnl = P&L cerrado: {pnl}, Cant.: {quantity}
+risk_reward = Relación riesgo/beneficio: {ratio}
+
+# Nombres de los anclajes en la configuración del dibujo.
+anchor_entry = Entrada
+anchor_target = Objetivo
+anchor_stop = Stop
+anchor_point = Punto
+anchor_numbered_point = Punto {number}
+
+# Indicaciones de los dibujos de texto vacíos.
+line_text_placeholder = + Añadir texto
+annotation_placeholder = Añadir texto
+
+# Grados de las ondas de Elliott.
+wave_degree_subminuette = subminueto
+wave_degree_minuette = minueto
+wave_degree_minute = minuto
+wave_degree_minor = menor
+wave_degree_intermediate = intermedio
+wave_degree_primary = primario
+wave_degree_cycle = ciclo
+wave_degree_supercycle = superciclo
+wave_degree_grand_supercycle = gran superciclo

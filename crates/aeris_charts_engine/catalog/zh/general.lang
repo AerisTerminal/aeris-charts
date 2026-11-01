@@ -1,0 +1,16 @@
+# 通用（非金融）图表的提示和无障碍标签。
+no_value = 无数值
+quartiles = Q1 {q1} · Q3 {q3}
+size = 大小 {value}
+target = 目标 {value}
+comparative = 对比 {value}
+bands = 区间 {values}
+rank = 排名 {rank}
+waterfall_increase = 增加 {start} → {end}
+waterfall_decrease = 减少 {start} → {end}
+waterfall_subtotal = 小计
+waterfall_total = 合计
+gantt_task = {start} – {end} · 已完成 {percent}%
+gantt_milestone = 里程碑 {date}
+# `{share}` 保留一位小数。
+mosaic_cell = {column}，{segment}，占该列 {share}%

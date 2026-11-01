@@ -79,7 +79,7 @@ impl ChartEngine {
                 pane: primary.pane_index,
                 title: if request.primary_title.is_empty() {
                     if primary.title.is_empty() {
-                        crate::text::ASSET.text(self.language).to_string()
+                        crate::text::legend::ASSET.text(self.language).to_string()
                     } else {
                         primary.title.clone()
                     }
@@ -224,7 +224,9 @@ impl ChartEngine {
                 first_series_id: first_output.series_id,
                 pane: first_series.pane_index,
                 title: if self.is_options_volume_study(output.study_id) {
-                    crate::text::OPTIONS_VOLUME.text(self.language).to_owned()
+                    crate::text::legend::OPTIONS_VOLUME
+                        .text(self.language)
+                        .to_owned()
                 } else {
                     first_series.title.clone()
                 },

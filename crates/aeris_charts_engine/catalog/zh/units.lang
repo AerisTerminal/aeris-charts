@@ -1,0 +1,7 @@
+# 测量统计和 K 线收盘倒计时的时长单位。
+duration_days = {value}天
+duration_hours = {value}小时
+duration_minutes = {value}分
+duration_seconds = {value}秒
+# 超出最大显示天数时的倒计时。
+countdown_overflow = {days}天+

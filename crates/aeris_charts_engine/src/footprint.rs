@@ -2622,7 +2622,7 @@ impl ChartEngine {
         self.set_series_pane(id, pane_index, None);
         let language = self.language;
         if let Some(series) = self.series_entry_mut(id) {
-            series.title = crate::text::DELTA.text(language).to_string();
+            series.title = crate::text::legend::DELTA.text(language).to_string();
             series.delta_histogram = true;
         }
         self.apply_trade_study_colors(id, options);

@@ -1,0 +1,15 @@
+# Lignes de légende des graphiques financiers et généraux.
+ohlc_open = O
+ohlc_high = H
+ohlc_low = B
+ohlc_close = C
+# Le marqueur des lignes repliées des légendes et infobulles.
+more_rows[one] = +{count} autre
+more_rows[other] = +{count} autres
+# Le titre de repli d'une série générale sans titre.
+series_fallback = Série {number}
+asset = Actif
+options_volume = Volume des options
+calls = Calls
+puts = Puts
+delta = Delta

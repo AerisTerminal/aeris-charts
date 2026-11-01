@@ -1,0 +1,39 @@
+# Text the drawing tools paint on the chart, and the anchor names of their settings.
+
+# Measure statistics. `{count}` arrives formatted and can carry a minus sign.
+bars[one] = {count} бар
+bars[few] = {count} бара
+bars[many] = {count} баров
+# A fractional bar count; `{value}` has two decimals.
+bars_fraction = {value} бара
+range = диапазон
+distance = расстояние: {pixels} пикс.
+
+# Long and short position tools. `{percent}` has three decimals.
+position_target = Цель: {price} ({percent}%) {ticks}, Сумма: {amount}
+position_stop = Стоп: {price} ({percent}%) {ticks}, Сумма: {amount}
+position_open_pnl = Открыта P&L: {pnl}, Кол-во: {quantity}
+position_closed_pnl = Закрыта P&L: {pnl}, Кол-во: {quantity}
+risk_reward = Соотношение риск/прибыль: {ratio}
+
+# Anchor names in the drawing settings.
+anchor_entry = Вход
+anchor_target = Цель
+anchor_stop = Стоп
+anchor_point = Точка
+anchor_numbered_point = Точка {number}
+
+# Prompts of empty text drawings.
+line_text_placeholder = + Добавить текст
+annotation_placeholder = Добавить текст
+
+# Elliott wave degrees.
+wave_degree_subminuette = субминуэтка
+wave_degree_minuette = минуэтка
+wave_degree_minute = минутка
+wave_degree_minor = младшая
+wave_degree_intermediate = промежуточная
+wave_degree_primary = первичная
+wave_degree_cycle = цикловая
+wave_degree_supercycle = суперцикловая
+wave_degree_grand_supercycle = гранд-суперцикловая

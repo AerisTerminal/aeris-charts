@@ -1,0 +1,6 @@
+# Text of the chart families only the complete build contains.
+from = from {value}
+to = to {value}
+hexbin_cell = hexbin cell
+samples[one] = {count} sample
+samples[other] = {count} samples

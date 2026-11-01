@@ -22,8 +22,8 @@ const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
 
 const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
-    (crate::text::CALLS, MarketTone::Up),
-    (crate::text::PUTS, MarketTone::Down),
+    (crate::text::legend::CALLS, MarketTone::Up),
+    (crate::text::legend::PUTS, MarketTone::Down),
 ];
 const OPTIONS_VOLUME_PRECISION: u32 = 1;
 
@@ -965,7 +965,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             row.title,
-            crate::text::OPTIONS_VOLUME.text(crate::ChartLanguage::English)
+            crate::text::legend::OPTIONS_VOLUME.text(crate::ChartLanguage::English)
         );
         let market = chart.market_colors();
         assert_eq!(

@@ -1,0 +1,6 @@
+# Texte des familles de graphiques présentes uniquement dans la version complète.
+from = de {value}
+to = à {value}
+hexbin_cell = cellule hexagonale
+samples[one] = {count} échantillon
+samples[other] = {count} échantillons
