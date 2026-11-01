@@ -14,7 +14,8 @@ How to read this file:
 2. **How work is delivered** — the batch, gate and commit rules.
 3. **Delivered work** — what is implemented, with evidence.
 4. **Known gaps** — source-confirmed problems and the phase that fixes each.
-5. **Phases R0–R8** — remaining work as checklists, with exit criteria.
+5. **Phases R0–R8** — remaining work as checklists, with exit criteria; **R9–R14** extend the
+   catalog beyond the Recharts baseline.
 6. **Parity coverage matrix** — the capability rows that define parity.
 7. **Scope, architecture rules, verification and completion** — the standing rules.
 
@@ -24,7 +25,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-10-31. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-11-01. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -37,6 +38,12 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
 | G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
+| G9 | R9 | Two builds and business/comparison charts | **Planned** | — | Two-build packaging, ECharts reference, waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap, marimekko |
+| G10 | R10 | Financial chart styles | **Planned** | Visible-range volume profiles already exist | Heikin-Ashi, derived-sequence foundation, Renko, Kagi, Point & Figure, Line Break |
+| G11 | R11 | Statistics (complete build) | **Planned** | — | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
+| G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
+| G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
+| G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
 
 Notes:
 
@@ -47,8 +54,9 @@ Notes:
   The scales/axes and responsive-layout matrix rows are Verified. Other rows remain Partial
   because they include later-phase behavior.
 
-Seven of eight delivery batches are complete. G8's automated work is complete; its phase
-closure waits on the manual evidence listed under R8. Batch completion does not imply full
+Seven of eight baseline batches are complete. G8's automated work is complete; its phase
+closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G14 are planned
+and proceed in order while that manual evidence is collected. Batch completion does not imply full
 parity-matrix verification.
 
 ## How work is delivered
@@ -1185,6 +1193,183 @@ semantic alternative that satisfies the user task. No required family remains de
 Publish capability claims only for verified behavior, with measured startup, size, frame, input and
 memory results and known limits.
 
+## Catalog expansion phases R9–R14
+
+On 2026-11-01 the maintainer extended the program beyond the Recharts baseline to five chart
+groups: business and comparison, financial chart styles, statistics, relationships and hierarchy,
+and maps and 3D. Gauge, network, geographic and 3D charts therefore move from out of scope to
+planned. The groups are delivered in the order below, one batch per phase. Each phase uses the
+existing engine, frame contract, layout panes, interaction controller, accessibility controller,
+persistence and executors. A family that needs host wiring beyond supplying data is incomplete.
+
+**References.** Each family is compared against Recharts 3.10.1 when Recharts has it natively,
+otherwise against the pinned Apache ECharts 6.1.0 release (Apache-2.0), and ECharts GL for 3D.
+G9 adds both as pinned `examples/web_demo` dev dependencies and confirms each license from the
+installed package before use. Where neither library has a native family, the reference is a named,
+versioned algorithm source: d3-contour, d3-hexbin, d3-hierarchy, d3-chord, d3-force and d3-geo
+(ISC), and venn.js (MIT). For financial chart styles it is the published brick and box rules.
+Reference code is read for behaviour; it is not copied.
+
+**Two builds.** The compressed WASM was 1,257,487 bytes against the 1,317,000-byte ceiling on
+2026-10-31, so the new families cannot all fit one build. By maintainer decision the package ships
+two builds of the same crates, with identical behaviour for every family both contain:
+
+- **Standard** (`@aeristerminal/aeris-charts`, `/react`): every current family plus groups A and C.
+  It keeps the existing size ceilings.
+- **Complete** (`@aeristerminal/aeris-charts/complete`, `/complete/react`): standard plus groups B,
+  D and E, with its own measured size ceilings.
+
+The split is one `complete` Cargo feature on `aeris_charts_engine` and `aeris_charts_wasm`. It
+gates whole family modules, not individual options, and Rust hosts (GPUI, native) enable it the
+same way. This is the only feature added. It is justified by the measured size constraint, not
+speculation. Creating a complete-only family through the standard build fails atomically, with a
+typed error naming the `/complete` entry. Both builds run the full gates.
+
+**Map data.** By maintainer decision hosts supply map shapes as GeoJSON or TopoJSON. Aeris bundles
+no world geometry. Tests use the ISC-licensed `world-atlas` package as fixture data.
+
+Every phase also has the standing exit rules of R6/R7. The exit criteria cover:
+
+- deterministic layout and bounded work, memory and caches;
+- validated typed inputs with atomic updates;
+- exact hits, tooltips, legends where applicable, keyboard navigation and announcements;
+- persistence and restore;
+- transitions where the family has a meaningful one;
+- React and framework-neutral authoring;
+- every executor (WebGPU, Canvas2D, GPUI and native);
+- catalog examples, documentation and migration rows;
+- pinned reference pairs, matrix rows and measured performance.
+
+### R9 — Two builds and business/comparison charts (group A)
+
+**Batch:** G9. **Depends on:** R8 automated work. **Status:** planned.
+
+- [ ] Two-build packaging. Add the `complete` feature, the `/complete` and `/complete/react`
+      exports, and pack, size, API and SSR gates for both builds. Add Playwright projects that run
+      the shared suite on both builds, and the typed error for a missing family.
+- [ ] Pinned ECharts 6.1.0 (and ECharts GL) reference page beside the Recharts page, with license
+      checks.
+- [ ] Waterfall: increase, decrease, subtotal and total bars from one value column, running base,
+      connector lines, per-kind colors, both orientations and labels.
+- [ ] Bullet: qualitative bands, measure bar, target marker and comparative measure, both
+      orientations, with multiple bullets per pane.
+- [ ] Lollipop and dumbbell: stem plus marker, and two-endpoint range with marker ends, on category
+      or numeric axes.
+- [ ] Slope and bump: two-period slope lines with end labels, and a rank transform with a
+      declared tie policy for bump lines.
+- [ ] Gantt/timeline: temporal x-range bars on category rows with progress, milestones, dependency
+      arrows, a current-time line, row grouping and bounded row counts.
+- [ ] Calendar heatmap: a calendar coordinate layout (year/month grid, week start, locale, UTC
+      policy) with a color scale and legend.
+- [ ] Marimekko/mosaic: variable-width 100% stacked columns from two categorical dimensions.
+- [ ] G9 full gate green on both builds; batch committed and pushed.
+
+**Exit:** each family meets the standing exit rules on the standard build, with ECharts reference
+pairs. Both builds pass every gate. The standard build stays within its existing size ceilings,
+or the change is recorded with measured evidence and maintainer approval.
+
+### R10 — Financial chart styles (group C)
+
+**Batch:** G10. **Depends on:** R9. **Status:** planned.
+
+- [ ] Heikin-Ashi as a time-preserving bar transform with live tip updates.
+- [ ] A derived-sequence foundation for styles that are not time based. Bricks and boxes get their
+      own logical index. Time labels come from the source rows, many bricks may share one source
+      time, and live updates rebuild only the affected tip within bounded work.
+- [ ] Renko with fixed or ATR box size, wicks policy and reversal rules.
+- [ ] Kagi with absolute or percent reversal, and yin/yang line thickness.
+- [ ] Point & Figure with box size, reversal count, X/O columns and a high/low or close source.
+- [ ] Line Break with a configurable line count.
+- [ ] Declared policies for crosshair, time axis labels, drawings anchored by source time,
+      indicators computed on the derived closes, persistence and export on derived styles.
+- [ ] G10 full gate green; batch committed and pushed.
+
+Visible-range volume profiles already exist and are not repeated here.
+
+**Exit:** each style is deterministic against the published construction rules on fixed fixtures.
+Live updates are bounded and match a fresh rebuild. Financial-only performance targets keep
+passing, and the native perf gate gains a derived-style target.
+
+### R11 — Statistics (group B, complete build)
+
+**Batch:** G11. **Depends on:** R9 two builds. **Status:** planned.
+
+- [ ] Shared engine statistics. Kernel density with Gaussian and Epanechnikov kernels and
+      Scott/Silverman/explicit bandwidth, quantiles, ECDF and 2D binning, with bounded sample
+      counts and documented numeric policy.
+- [ ] Violin, with optional box/quartile overlay and split violins.
+- [ ] Density curve (line or area) and ridgeline (stacked densities on category rows).
+- [ ] Strip and deterministic beeswarm, and Wilkinson dot plot.
+- [ ] ECDF and Q-Q plots.
+- [ ] Hexbin with a color scale and legend.
+- [ ] Contour and 2D density (marching squares over gridded values or density), with filled bands
+      and iso-lines.
+- [ ] Parallel coordinates: a coordinate system of N axes with per-axis brushing.
+- [ ] Scatter-plot matrix as a small-multiples pane grid with linked selection.
+- [ ] G11 full gate green on both builds; batch committed and pushed.
+
+**Exit:** statistics match the named reference algorithms on fixed fixtures within documented
+tolerances, and every family meets the standing exit rules on the complete build.
+
+### R12 — Relationships and hierarchy (group D, complete build)
+
+**Batch:** G12. **Depends on:** R9 two builds. **Status:** planned.
+
+- [ ] Gauge with value ranges, pointer, progress arc, ticks and labels, and value transitions.
+- [ ] Shared graph store: typed nodes and edges, identity, validation and bounded capacity,
+      alongside the existing layout store.
+- [ ] Chord diagram with ribbons, groups and ticks.
+- [ ] Network graph with force (deterministic seed, fixed-step simulation on the engine clock,
+      bounded iterations), circular and fixed layouts; node drag, pan/zoom, and edge and node caps.
+- [ ] Tree and dendrogram, orthogonal and radial, with collapse/expand.
+- [ ] Circle packing and icicle/partition.
+- [ ] Venn/Euler diagrams for up to three sets with area-proportional circles, and labelled
+      approximations beyond that.
+- [ ] Word cloud with deterministic spiral placement from engine text metrics and a bounded word
+      count.
+- [ ] G12 full gate green on both builds; batch committed and pushed.
+
+**Exit:** layouts are deterministic for equal input and seed, with bounded work per frame and
+bounded convergence. Every family meets the standing exit rules on the complete build.
+
+### R13 — Geographic maps (group E, complete build)
+
+**Batch:** G13. **Depends on:** R9 two builds. **Status:** planned.
+
+- [ ] Engine-owned geometry store for host-supplied GeoJSON and TopoJSON, with validation, identity
+      and bounded retained size.
+- [ ] Projections: Mercator, Equal Earth, Natural Earth, orthographic, conic equal-area and identity
+      (pre-projected). Include fit-to-extent, antimeridian clipping and adaptive resampling.
+- [ ] Polygon triangulation into the shared mesh primitive, with cached geometry per view and
+      bounded rebuilds during pan/zoom.
+- [ ] Choropleth with sequential, diverging and quantized color scales and a legend.
+- [ ] Bubble/symbol maps and flow/lines maps with great-circle arcs.
+- [ ] Map pan/zoom through the engine input controller, point-in-polygon hits with a spatial index,
+      tooltips, region keyboard navigation and announcements, and persisted view.
+- [ ] G13 full gate green on both builds; batch committed and pushed.
+
+**Exit:** projections match d3-geo within documented tolerances on fixed fixtures. World-scale
+fixtures stay within frame, memory and size budgets, and every map family meets the standing exit
+rules.
+
+### R14 — 3D charts (group E, complete build)
+
+**Batch:** G14. **Depends on:** R9 two builds. **Status:** planned.
+
+- [ ] Engine-owned camera (orbit, perspective and orthographic) and a 3D axis box with ticks, labels
+      and grid.
+- [ ] Engine projection with deterministic depth ordering (painter's algorithm with a stable
+      tie-break) and engine-computed shading. A per-triangle-colored mesh primitive lets every
+      executor draw the same result without a backend-specific depth buffer. Documented limits
+      cover intersecting surfaces.
+- [ ] 3D bar, scatter, line and surface (grid values or sampled functions with a color map).
+- [ ] Orbit drag, zoom, keyboard rotation, depth-ordered picking, tooltips and announcements.
+- [ ] Bounded triangle counts with level of detail, and measured rotation frame budgets.
+- [ ] G14 full gate green on both builds; batch committed and pushed.
+
+**Exit:** equal camera and data give identical frames on every executor. Rotation stays within its
+measured frame budget at the bounded triangle count, and every 3D family meets the standing exit
+rules.
 ## Parity coverage matrix
 
 Each row must acquire exact versioned reference examples, Aeris API mappings, named automated
@@ -1212,6 +1397,15 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
+| Two builds (standard and complete) | Open | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Business and comparison charts | Open | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
+| Financial chart styles | Open | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
+| Statistical distributions | Open | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
+| 2D density and multivariate | Open | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
+| Gauge, chord and network | Open | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
+| Hierarchy extensions, Venn and word cloud | Open | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
+| Geographic maps | Open | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |
+| 3D charts | Open | Engine camera and depth ordering, 3D bar/scatter/line/surface, orbit interaction and bounded meshes on every executor | R14 |
 
 ## Scope and parity rules
 
@@ -1237,8 +1431,9 @@ quirks, or arbitrary DOM execution inside Rust. Record deliberate semantic diffe
 demonstrate the migration path. An omission cannot be renamed a difference merely to close a
 milestone.
 
-**Out of scope for this baseline.** Gauge, arbitrary graph/network, geographic and 3D visualization.
-They may be added later without postponing any required row. Full competitiveness is a release gate,
+**Scope extension (2026-11-01).** Gauge, graph/network, geographic and 3D visualization were out
+of scope for the Recharts baseline. By maintainer decision they are now planned in R12–R14, with
+the other catalog expansion phases. They do not postpone any required baseline row. Full competitiveness is a release gate,
 not a promise to implement every conceivable visualization.
 
 **References.** Reviewed on 2026-10-10. R0 pins Recharts 3.10.1 at source revision
