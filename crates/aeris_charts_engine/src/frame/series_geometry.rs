@@ -849,12 +849,28 @@ impl ChartEngine {
         );
     }
 
-    /// Series whose bars supply an up/down volume histogram's per-bar direction: the primary
-    /// series (the first visible, non-removed entry, mirroring the reference volume tint) and a
-    /// footprint on its pane, which presents the bars wherever the primary row is whitespace.
-    pub(super) fn volume_direction_sources(&self) -> (Option<SeriesId>, Option<SeriesId>) {
+    /// Series whose bars supply the up/down histogram `histogram`'s per-bar direction, in the
+    /// order they are asked: the candle or bar source a Volume indicator's columns were computed
+    /// from, so the columns follow those bars even while the primary is presented as whitespace;
+    /// the primary series (the first visible, non-removed entry, mirroring the reference volume
+    /// tint); and a footprint on its pane, which presents the bars wherever the primary row is
+    /// whitespace.
+    pub(super) fn volume_direction_sources(&self, histogram: SeriesId) -> [Option<SeriesId>; 3] {
+        let source_bars = self
+            .indicators
+            .iter()
+            .find(|binding| {
+                matches!(binding.kind, crate::IndicatorKind::Volume { .. })
+                    && binding.outputs.first() == Some(&histogram)
+            })
+            .map(|binding| binding.source)
+            .filter(|&source| {
+                self.series_entry(source).is_some_and(|series| {
+                    matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar)
+                })
+            });
         let Some(primary) = self.primary_series() else {
-            return (None, None);
+            return [source_bars, None, None];
         };
         let footprint = self.series.iter().find(|s| {
             !s.removed
@@ -862,7 +878,7 @@ impl ChartEngine {
                 && s.kind == SeriesKind::Footprint
                 && s.pane_index == primary.pane_index
         });
-        (Some(primary.id), footprint.map(|s| s.id))
+        [source_bars, Some(primary.id), footprint.map(|s| s.id)]
     }
 
     /// The color a histogram series draws its column at `index` with; `None` for another series
@@ -879,7 +895,7 @@ impl ChartEngine {
         let row = plot
             .search(index, MismatchDirection::None)
             .filter(|&row| !plot.is_whitespace_row(row))?;
-        let (primary, footprint) = self.volume_direction_sources();
+        let sources = self.volume_direction_sources(id);
         let delta = self.delta_histogram_colors(series);
         let market = self.market_colors();
         Some(histogram_column_color(
@@ -891,9 +907,10 @@ impl ChartEngine {
                 if delta.is_some() {
                     return delta_direction(plot.value_at(row, PlotValueIndex::Close));
                 }
-                primary
-                    .and_then(|id| bar_direction(self.data.plot(id), index))
-                    .or_else(|| footprint.and_then(|id| bar_direction(self.data.plot(id), index)))
+                sources
+                    .into_iter()
+                    .flatten()
+                    .find_map(|source| bar_direction(self.data.plot(source), index))
             },
             histogram_solid_color(series_stroke_color(series, market), market),
         ))
@@ -941,9 +958,9 @@ impl ChartEngine {
         let base = scale.price_to_coordinate(rs.base, rs.base_value);
         let market = self.market_colors();
         let solid = histogram_solid_color(rs.color, market);
-        let (primary, footprint) = self.volume_direction_sources();
-        let main = primary.map(|id| self.data.plot(id));
-        let presented = footprint.map(|id| self.data.plot(id));
+        let direction_plots = self
+            .volume_direction_sources(rs.id)
+            .map(|source| source.map(|id| self.data.plot(id)));
         let point_colors = self.data.point_colors(rs.id);
         let delta = self
             .series_entry(rs.id)
@@ -980,8 +997,10 @@ impl ChartEngine {
                             return delta_direction(c[r]);
                         }
                         let index = plot.index_at(r).expect("histogram row index");
-                        main.and_then(|m| bar_direction(m, index))
-                            .or_else(|| presented.and_then(|m| bar_direction(m, index)))
+                        direction_plots
+                            .iter()
+                            .flatten()
+                            .find_map(|&source| bar_direction(source, index))
                     },
                     solid,
                 );

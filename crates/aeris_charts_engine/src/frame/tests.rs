@@ -18051,6 +18051,105 @@ fn updown_volume_takes_its_direction_from_a_footprint_over_a_whitespace_primary(
 }
 
 #[test]
+fn volume_columns_follow_their_candle_source_where_the_primary_is_whitespace() {
+    let mut chart = ChartEngine::new(1200.0, 600.0, 1.0);
+    let times: Vec<f64> = (0..4).map(|minute| f64::from(minute) * 60.0).collect();
+    let nan = vec![f64::NAN; times.len()];
+    chart
+        .set_series_data(0, &times, &nan, &nan, &nan, &nan)
+        .unwrap();
+    // The host's price bars, hidden while a footprint presents the chart: up, down, down, up.
+    let bars = chart.add_series(SeriesKind::Candlestick);
+    chart
+        .set_series_data(
+            bars,
+            &times,
+            &[10.0, 12.0, 11.0, 9.0],
+            &[13.0; 4],
+            &[8.0; 4],
+            &[11.0, 11.0, 9.0, 12.0],
+        )
+        .unwrap();
+    chart.set_series_visible(bars, false);
+    let weights = chart.add_series(SeriesKind::Histogram);
+    let volumes = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(weights, &times, &volumes, &volumes, &volumes, &volumes)
+        .unwrap();
+    chart.set_series_visible(weights, false);
+    let columns = chart.add_indicator_kind(
+        bars,
+        crate::IndicatorKind::Volume {
+            period: 2,
+            exponential: false,
+        },
+        Some(weights),
+    )[0];
+    let presentation = chart
+        .add_order_flow_presentation(
+            "ES",
+            0,
+            crate::OrderFlowPresentationOptions {
+                aggregation: crate::FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    ticks_per_row: 1,
+                    ..crate::FootprintAggregationOptions::default()
+                },
+                visual: crate::FootprintVisualOptions::default(),
+                show_footprint: true,
+                show_cumulative_delta: false,
+                show_delta_histogram: false,
+                cumulative_delta: crate::TradeStudyOptions::default(),
+                delta_histogram: crate::TradeStudyOptions::default(),
+                big_trades: None,
+            },
+        )
+        .unwrap();
+    let trade = |timestamp_micros: i64, price: f64| crate::FootprintTrade {
+        timestamp_micros,
+        price,
+        volume: 1.0,
+        aggressor: crate::AggressorSide::Buy,
+        bid: None,
+        ask: None,
+        sequence: None,
+        trade_id: None,
+        conditions: 0,
+        session_id: Some(1),
+    };
+    // The tape covers only the third minute, and its footprint closes up against the bar.
+    chart
+        .update_order_flow_presentation(
+            presentation,
+            vec![trade(120_000_000, 100.0), trade(130_000_000, 102.0)],
+            false,
+        )
+        .unwrap();
+    chart.time_scale.set_width(1200.0);
+    chart.fit_content();
+
+    let frame = chart.build_frame();
+    let pane = chart.series_entry(columns).unwrap().pane_index;
+    let segment = chart
+        .frame_series_segments(pane)
+        .iter()
+        .find(|segment| segment.series_id == Some(columns))
+        .unwrap();
+    let colors = frame.panes[pane].main[segment.start..segment.end]
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Rect { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        colors,
+        [VOLUME_UP, VOLUME_DOWN, VOLUME_DOWN, VOLUME_UP],
+        "the columns read the bars that traded them, ahead of a partial footprint"
+    );
+}
+
+#[test]
 fn line_per_point_colors_split_the_stroke_and_color_markers() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Line;

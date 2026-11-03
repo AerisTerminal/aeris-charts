@@ -2592,6 +2592,7 @@ impl ChartEngine {
         self.set_series_pane(id, pane_index, None);
         if let Some(series) = self.series_entry_mut(id) {
             series.title = "CVD".to_string();
+            series.price_format = trade_quantity_format();
         }
         self.apply_trade_study_colors(id, options);
         self.register_trade_dependent(stream_id, TradeStudyKind::CumulativeDelta, id, options);
@@ -2624,6 +2625,7 @@ impl ChartEngine {
         if let Some(series) = self.series_entry_mut(id) {
             series.title = crate::text::legend::DELTA.text(language).to_string();
             series.delta_histogram = true;
+            series.price_format = trade_quantity_format();
         }
         self.apply_trade_study_colors(id, options);
         self.register_trade_dependent(stream_id, TradeStudyKind::DeltaHistogram, id, options);
@@ -4043,6 +4045,15 @@ fn validate_visual_options(options: &FootprintVisualOptions) -> Result<(), Footp
         Ok(())
     } else {
         Err(FootprintError::InvalidVisualOptions)
+    }
+}
+
+/// CVD and delta are signed traded quantities, so their scales, last values and legend read in
+/// the compact volume format instead of falling back to the chart's price format.
+fn trade_quantity_format() -> SeriesPriceFormat {
+    SeriesPriceFormat {
+        kind: PriceFormatKind::Volume,
+        ..SeriesPriceFormat::default()
     }
 }
 
@@ -5964,6 +5975,52 @@ mod tests {
             delta_color(&chart, delta, 0),
             bearish,
             "corrected negative delta uses the theme's bearish token"
+        );
+    }
+
+    #[test]
+    fn cvd_and_delta_read_as_compact_trade_quantities() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:NQ", FootprintAggregationOptions::default())
+            .unwrap();
+        let cvd = chart
+            .add_cvd_series(stream, 1, TradeStudyOptions::default())
+            .unwrap();
+        let delta = chart.add_delta_series(stream, 2).unwrap();
+        for id in [cvd, delta] {
+            assert_eq!(
+                chart.series_entry(id).unwrap().price_format.kind,
+                PriceFormatKind::Volume
+            );
+        }
+        assert_eq!(
+            chart.series_format_price(cvd, -3_330.05).as_deref(),
+            Some("-3.33K")
+        );
+        assert_eq!(
+            chart.series_format_price(delta, -1_578.0).as_deref(),
+            Some("-1.58K")
+        );
+        assert_eq!(
+            chart.series_format_price(delta, 0.49).as_deref(),
+            Some("0.49")
+        );
+        chart
+            .set_trade_study_options(
+                stream,
+                cvd,
+                TradeStudyOptions {
+                    style: CumulativeDeltaStyle::Line,
+                    ..TradeStudyOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(chart.series_kind(cvd), Some(SeriesKind::Line));
+        assert_eq!(
+            chart.series_format_price(cvd, 12_500_000.0).as_deref(),
+            Some("12.5M"),
+            "a restyled CVD keeps its quantity format"
         );
     }
 

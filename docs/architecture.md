@@ -1167,7 +1167,10 @@ style converts the same series in place. The delta histogram is a Histogram seri
 presentation: each column takes its own sign's color (the study's pinned up/down color, else the
 painted theme's bullish/bearish token, resolved at frame time so theme switches retokenize it), columns
 are equal odd-width bars half the bar spacing wide (`HistogramParams::column_width_ratio`) over a
-full-width muted zero line painted beneath them, and its autoscale is symmetric around zero. Every dependent carries the stream revision
+full-width muted zero line painted beneath them, and its autoscale is symmetric around zero. CVD
+and delta are signed traded quantities, so both carry the compact volume price format (K/M/B
+suffixes) on their scale, last value and legend instead of falling back to the chart's price
+format. Every dependent carries the stream revision
 through tip, correction, and retention updates. Stream telemetry attributes retained tape capacity
 and dependent rebuild work.
 Live tip events update only the active derived bar; a late-event or provider-correction batch is
@@ -1360,9 +1363,12 @@ their data, scale participation, and last-value chrome but are not drawn. An ord
 presentation never hides its primary: a host showing a footprint installs the primary as
 whitespace (times only), so it supplies the bar grid and time axis while the footprint series owns
 autoscale, the last-value label, price line, and countdown. A partial live price line (the default extent) runs from the latest bar to the edge where its price scale and last-value label sit, so it follows the scale to the left or right side (`live_price_line_span`); a full line spans the pane. Up/down volume histograms read each
-column's direction from the primary bar and, where that row is whitespace, from the visible
-footprint bar in the same slot. Bars the tape does not cover stay empty
-rather than falling back to OHLC, and their volume columns keep the series' solid color. Automatic rows (`ticks_per_row == 0`) keep levels at the
+column's direction from the candle or bar series a Volume indicator was computed from, then from
+the primary bar and, where that row is whitespace, from the visible footprint bar in the same slot.
+A host that presents a footprint can therefore keep its OHLC bars in a hidden candle series as the
+Volume source, so every column keeps its direction. Footprint bars the tape does not cover stay
+empty rather than falling back to OHLC, and a volume column with no direction source keeps the
+series' solid color. Automatic rows (`ticks_per_row == 0`) keep levels at the
 instrument tick and merge them per frame in 1-2-5 steps into legible display rows, recomputing
 imbalances and POC on the merged rows at the configured text size; unmerged dense rows shrink cell
 text to an 8 px floor before dropping to cells. Footprint autoscale caps a stored row at 1.6 font
@@ -1690,7 +1696,9 @@ and must not infer provenance by comparing resolved CSS strings, create dummy en
 or send empty-string color sentinels to clear series overrides.
 
 The engine also projects the ordered financial legend model from its canonical value snapshot. It
-owns primary OHLC formatting and tone, native indicator output grouping, external-study grouping,
+owns primary OHLC formatting and tone, native indicator output grouping (each binding's outputs in
+output order, so a binding's row is titled after its first output whatever storage slots the
+outputs reuse), external-study grouping,
 visibility, pane placement, output labels and colors. Hosts may describe a bounded set of genuinely
 product-owned series roles (for example Terminal's reusable volume series) and then map the returned
 typed identities to their UI controls; they must not rebuild engine-owned groups by walking series.

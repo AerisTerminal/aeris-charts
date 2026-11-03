@@ -112,16 +112,19 @@ impl ChartEngine {
             if !emitted_bindings.insert(info.binding_id) {
                 continue;
             }
+            // Output order, not storage-slot order: a reinstalled binding can reuse freed slots
+            // in any order, and the row is titled after its first output.
             let outputs = self
-                .series_entries()
+                .indicators
                 .iter()
-                .filter(|series| {
-                    !series.removed
-                        && self
-                            .indicator_info(series.id)
-                            .is_some_and(|output| output.binding_id == info.binding_id)
-                })
-                .collect::<Vec<_>>();
+                .find(|binding| binding.outputs.first() == Some(&info.binding_id))
+                .map_or_else(Vec::new, |binding| {
+                    binding
+                        .outputs
+                        .iter()
+                        .filter_map(|&output| self.series_entry(output))
+                        .collect::<Vec<_>>()
+                });
             let Some(first) = outputs.first() else {
                 continue;
             };
@@ -537,6 +540,61 @@ mod tests {
         );
         let rising = volume_row(&chart, Some(2));
         assert_eq!(rising.values[0].color.as_deref(), Some("#00ff00"));
+    }
+
+    #[test]
+    fn a_reinstalled_volume_indicator_is_titled_after_its_columns() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = [1.0, 2.0];
+        chart
+            .set_series_data(
+                0,
+                &times,
+                &[10.0, 12.0],
+                &[12.0, 13.0],
+                &[9.0, 10.0],
+                &[11.0, 11.0],
+            )
+            .unwrap();
+        let weights = chart.add_series(SeriesKind::Histogram);
+        let volume = [100.0, 120.0];
+        chart
+            .set_series_data(weights, &times, &volume, &volume, &volume, &volume)
+            .unwrap();
+        let kind = crate::IndicatorKind::Volume {
+            period: 20,
+            exponential: false,
+        };
+        let replaced = chart.add_indicator_kind(0, kind.clone(), Some(weights));
+        assert!(chart.remove_indicator_binding(replaced[0]));
+        let outputs = chart.add_indicator_kind(0, kind, Some(weights));
+        let [columns, average] = outputs[..] else {
+            panic!("volume has a column and an average output");
+        };
+        let slot = |id| chart.series_entries().iter().position(|s| s.id == id);
+        assert!(
+            slot(average) < slot(columns),
+            "freed slots are reused last-in first-out, so the average takes the lower slot"
+        );
+        let mut style = chart.indicator_info(average).unwrap().style;
+        style.visible = false;
+        assert!(chart.set_indicator_output_style(average, style));
+
+        let row = chart
+            .financial_legend(FinancialLegendRequest {
+                logical_index: None,
+                primary_title: "BTC",
+                show_primary_ohlc: true,
+                primary_values_series: None,
+                leading_series: &[],
+                trailing_series: &[],
+            })
+            .into_iter()
+            .find(|row| row.identity == FinancialLegendIdentity::Indicator(columns))
+            .expect("volume legend row");
+        assert_eq!(row.title, "Volume");
+        assert_eq!(row.first_series_id, columns);
+        assert_eq!(row.values.len(), 1, "a hidden average adds no value");
     }
 
     #[test]

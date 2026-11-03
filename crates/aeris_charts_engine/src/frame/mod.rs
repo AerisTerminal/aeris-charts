@@ -1409,8 +1409,7 @@ impl ChartEngine {
         {
             return own;
         }
-        let (primary, footprint) = self.volume_direction_sources();
-        [primary, footprint]
+        self.volume_direction_sources(id)
             .into_iter()
             .flatten()
             .map(|source| self.frame_invalidation.series_generation(source))
