@@ -59,6 +59,42 @@ pub struct ReplaySnapshot {
     pub can_step_forward: bool,
 }
 
+/// A bar replay a host carries from one chart to another, such as the chart a timeframe or
+/// symbol change builds. The clock is a moment in time, so the session resumes on any bar
+/// interval; [`ChartEngine::resume_replay`] restores it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReplaySession {
+    phase: ReplayPhase,
+    /// `None` only while the trim cursor chooses a first start bar; a cancelled selection with
+    /// a clock returns to the paused replay.
+    clock_micros: Option<i64>,
+    entry_clock_micros: Option<i64>,
+    speed: f64,
+    step: ReplayStep,
+}
+
+impl ReplaySession {
+    pub fn phase(&self) -> ReplayPhase {
+        self.phase
+    }
+
+    /// The replay clock; `None` while the trim cursor chooses a first start bar.
+    pub fn clock_micros(&self) -> Option<i64> {
+        self.clock_micros
+    }
+}
+
+/// Where a resumed replay landed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplayResume {
+    /// The chart shows its bars up to the carried clock.
+    AtClock,
+    /// No bar of this chart opens at or before the clock, so the chart shows none and replay
+    /// pauses. Older rows the host adds later appear up to the clock; when none can arrive,
+    /// [`ChartEngine::replay_select_time`] at the clock moves replay to the earliest bar.
+    BeforeHistory,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplayState {
     phase: ReplayPhase,
@@ -114,8 +150,10 @@ impl ChartEngine {
         }
     }
 
+    /// The rows themselves decide, not the bars the clock leaves visible: a resumed replay may
+    /// sit before every bar and still select one.
     fn ensure_replay_supported(&self) -> Result<(), ChartError> {
-        if self.data.merged_times().is_empty() || !self.pane_uses_financial_time(0) {
+        if self.replay_bounds().is_none() || !self.pane_uses_financial_time(0) {
             return Err(ChartError::new(
                 ErrorCode::UnsupportedOperation,
                 "bar replay needs bars on a financial time pane",
@@ -165,6 +203,65 @@ impl ChartEngine {
         self.replay.next_step_ms = None;
         self.note_replay_changed();
         Ok(())
+    }
+
+    /// The replay to carry to another chart; `None` while replay is off.
+    pub fn replay_session(&self) -> Option<ReplaySession> {
+        if self.replay.phase == ReplayPhase::Off {
+            return None;
+        }
+        // A first start-bar selection has no replay clock yet; the clock is the host's own.
+        let choosing_first_start = self.replay.phase == ReplayPhase::Selecting
+            && self.replay.selection_return == ReplayPhase::Off;
+        Some(ReplaySession {
+            phase: self.replay.phase,
+            clock_micros: (!choosing_first_start)
+                .then(|| self.replay_clock_micros())
+                .flatten(),
+            entry_clock_micros: self.replay.entry_clock_micros,
+            speed: self.replay.speed,
+            step: self.replay.step,
+        })
+    }
+
+    /// Continue a replay carried from another chart at the same moment, with its phase, speed,
+    /// step and the host clock exit restores. Playback keeps playing when this chart has a bar
+    /// at the clock; a clock before every bar pauses ([`ReplayResume::BeforeHistory`]).
+    pub fn resume_replay(&mut self, session: ReplaySession) -> Result<ReplayResume, ChartError> {
+        self.ensure_replay_supported()?;
+        let (start, _) = self.replay_bounds().ok_or_else(no_bars)?;
+        if session.phase == ReplayPhase::Off {
+            return Err(not_active());
+        }
+        let mut resume = ReplayResume::AtClock;
+        self.replay.speed = session.speed;
+        self.replay.step = session.step;
+        self.replay.next_step_ms = None;
+        self.replay.entry_clock_micros = session.entry_clock_micros;
+        match session.clock_micros {
+            None => {
+                self.replay.selection_return = ReplayPhase::Off;
+                self.replay.phase = ReplayPhase::Selecting;
+            }
+            Some(clock) => {
+                self.apply_replay_clock(Some(clock))?;
+                let before_history = clock < start;
+                if before_history {
+                    resume = ReplayResume::BeforeHistory;
+                }
+                self.replay.selection_return = ReplayPhase::Paused;
+                self.replay.phase = match session.phase {
+                    ReplayPhase::Selecting => ReplayPhase::Selecting,
+                    ReplayPhase::Playing if !before_history => ReplayPhase::Playing,
+                    _ => ReplayPhase::Paused,
+                };
+            }
+        }
+        if self.replay.phase == ReplayPhase::Selecting {
+            self.cancel_drawing_tool();
+        }
+        self.note_replay_changed();
+        Ok(resume)
     }
 
     /// Leave the trim cursor without choosing a bar. Returns whether a selection was armed.
@@ -973,5 +1070,102 @@ mod tests {
         chart.set_replay_clock_micros(None).unwrap();
         assert_eq!(chart.resampled_bars(target).unwrap().len(), 2);
         assert_eq!(chart.resampled_bars(target).unwrap()[0].high, 14.0);
+    }
+
+    fn chart_from(first: i64, step: i64, count: i64) -> ChartEngine {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times: Vec<f64> = (0..count).map(|i| (first + i * step) as f64).collect();
+        let open: Vec<f64> = (0..count).map(|i| 100.0 + i as f64).collect();
+        chart
+            .set_series_data(0, &times, &open, &open, &open, &open)
+            .unwrap();
+        chart.recompute_layout_with_measure(true, |_, _| 48.0, |_, _| 48.0);
+        chart.fit_content();
+        chart
+    }
+
+    #[test]
+    fn a_carried_session_resumes_on_another_interval_at_the_same_moment() {
+        let mut minute = chart();
+        minute.set_replay_clock_micros(Some(time(15) * M)).unwrap();
+        minute.replay_select_time(time(5) * M).unwrap();
+        minute.set_replay_speed(2.0).unwrap();
+        minute
+            .set_replay_step(ReplayStep::Interval { micros: 30 * M })
+            .unwrap();
+        minute.replay_play().unwrap();
+        let session = minute.replay_session().unwrap();
+        assert_eq!(session.phase(), ReplayPhase::Playing);
+        assert_eq!(session.clock_micros(), Some(time(6) * M - 1));
+
+        // Five-minute bars open at 1_000 and 1_300; the clock sits inside the second one.
+        let mut five = chart_from(1_000, 300, 6);
+        assert_eq!(five.resume_replay(session).unwrap(), ReplayResume::AtClock);
+        let state = five.replay_state();
+        assert_eq!(state.phase, ReplayPhase::Playing);
+        assert_eq!(state.clock_micros, Some(time(6) * M - 1));
+        assert_eq!(state.speed, 2.0);
+        assert_eq!(state.step, ReplayStep::Interval { micros: 30 * M });
+        assert_eq!(bars(&five), 2);
+        assert!(
+            five.take_input_events()
+                .contains(&ChartInputEvent::ReplayChanged)
+        );
+        assert_eq!(five.replay_session(), Some(session));
+        five.replay_exit().unwrap();
+        assert_eq!(five.replay_clock_micros(), Some(time(15) * M));
+        assert_eq!(chart().replay_session(), None);
+    }
+
+    #[test]
+    fn a_clock_before_every_bar_waits_for_older_rows_or_moves_to_the_earliest_bar() {
+        let mut minute = chart();
+        minute.replay_select_time(time(3) * M).unwrap();
+        minute.replay_play().unwrap();
+        let session = minute.replay_session().unwrap();
+
+        let mut later = chart_from(time(10), 60, 10);
+        assert_eq!(
+            later.resume_replay(session).unwrap(),
+            ReplayResume::BeforeHistory
+        );
+        assert_eq!(later.replay_state().phase, ReplayPhase::Paused);
+        assert_eq!(bars(&later), 0);
+        // Older rows the host pages in appear up to the carried clock.
+        let older = chart_from(time(0), 60, 20);
+        let (times, columns) = older.data.series_data(0).unwrap();
+        let (times, open) = (
+            times.iter().map(|&time| time as f64).collect::<Vec<_>>(),
+            columns[0].to_vec(),
+        );
+        later
+            .set_series_data(0, &times, &open, &open, &open, &open)
+            .unwrap();
+        assert_eq!(later.replay_clock_micros(), Some(time(4) * M - 1));
+        assert_eq!(bars(&later), 4);
+
+        let mut short = chart_from(time(10), 60, 10);
+        short.resume_replay(session).unwrap();
+        short.replay_select_time(time(4) * M - 1).unwrap();
+        assert_eq!(short.replay_state().phase, ReplayPhase::Paused);
+        assert_eq!(short.replay_clock_micros(), Some(time(11) * M - 1));
+        assert_eq!(bars(&short), 1);
+    }
+
+    #[test]
+    fn a_first_start_selection_carries_without_a_clock() {
+        let mut minute = chart();
+        minute.set_replay_clock_micros(Some(time(15) * M)).unwrap();
+        minute.replay_select_start().unwrap();
+        let session = minute.replay_session().unwrap();
+        assert_eq!(session.clock_micros(), None);
+
+        let mut five = chart_from(1_000, 300, 6);
+        five.set_replay_clock_micros(Some(time(15) * M)).unwrap();
+        assert_eq!(five.resume_replay(session).unwrap(), ReplayResume::AtClock);
+        assert_eq!(five.replay_state().phase, ReplayPhase::Selecting);
+        assert!(five.input_key_down(ChartKey::Escape, InputModifiers::default(), false, 0.0));
+        assert_eq!(five.replay_state().phase, ReplayPhase::Off);
+        assert_eq!(five.replay_clock_micros(), Some(time(15) * M));
     }
 }

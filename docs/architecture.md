@@ -1290,6 +1290,15 @@ logic. Jump to real time clears the clock; exit restores the clock the host had 
 began. The dashed host-clock marker is hidden while the mode is on, because the chart already ends
 at the replay clock.
 
+Replay mode lives in one chart, so a host that builds a new chart for the same pane (another
+interval or symbol) carries it: `replay_session()` reads the phase, clock, speed, step and the
+host clock exit restores, and `resume_replay()` applies them to the new chart. The clock is a
+moment in time, so the new chart shows its own bars up to that moment and keeps playing. A clock
+before every bar of the new chart pauses with no bar shown and reports
+`ReplayResume::BeforeHistory`; rows the host adds later appear up to the clock, and when no older
+row can arrive the host calls `replay_select_time` at the clock, which trims at the earliest bar.
+Replay availability depends on the chart's rows, not on the bars the clock leaves visible.
+
 Moving the clock forward applies newly revealed canonical events through the ordinary live path.
 Backward trade seeks restore the nearest retained aggregation checkpoint, replay only the reported
 suffix, and produce the same bars as a fresh load to that clock. Checkpoints are recorded every

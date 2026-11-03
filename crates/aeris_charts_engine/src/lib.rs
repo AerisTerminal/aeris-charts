@@ -279,8 +279,8 @@ pub use profiles::{
     TpoPresentationOptions, TpoRequest, TpoRowSnapshot, TpoSnapshot,
 };
 pub use replay::{
-    MAX_REPLAY_INTERVAL_MICROS, MAX_REPLAY_SPEED, MIN_REPLAY_SPEED, ReplayPhase, ReplaySnapshot,
-    ReplayStep,
+    MAX_REPLAY_INTERVAL_MICROS, MAX_REPLAY_SPEED, MIN_REPLAY_SPEED, ReplayPhase, ReplayResume,
+    ReplaySession, ReplaySnapshot, ReplayStep,
 };
 pub use resampling::{
     MAX_RESAMPLE_BOUNDARIES, MAX_RESAMPLED_SERIES, ResampleBoundary, ResampleError,
