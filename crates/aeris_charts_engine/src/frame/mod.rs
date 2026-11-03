@@ -1502,13 +1502,15 @@ impl ChartEngine {
 
     pub fn set_crosshair_at(&mut self, x: f64, y: f64) {
         let next = Some((x, y));
-        if self.crosshair != next {
+        if self.crosshair != next || self.crosshair_is_linked() {
             self.crosshair = next;
+            self.crosshair_source = crate::CrosshairSource::Local;
             self.invalidate_frame_overlay();
         }
     }
 
     pub fn clear_crosshair_at(&mut self) {
+        self.crosshair_source = crate::CrosshairSource::Local;
         if self.crosshair.take().is_some() {
             self.invalidate_frame_overlay();
         }

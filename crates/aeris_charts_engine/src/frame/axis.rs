@@ -2967,6 +2967,7 @@ impl ChartEngine {
         let ch = &options.crosshair;
         if ch.horz_line.label_visible
             && !trim
+            && self.crosshair_shows_price()
             && let Some(pi) = self
                 .panes
                 .iter()

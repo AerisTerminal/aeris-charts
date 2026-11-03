@@ -526,6 +526,8 @@ pub(crate) struct InputController {
     touch_longpress_deadline_ms: Option<f64>,
     touch_tracking: Option<TouchTracking>,
     hover: ChartHover,
+    /// The pointer crosshair was published to linked charts, so leaving must clear it there.
+    crosshair_published: bool,
     drawing_edit: Option<DrawingEditSession>,
     events: VecDeque<ChartInputEvent>,
     /// Input changed chart state since the last prepared frame.
@@ -754,6 +756,20 @@ impl ChartEngine {
     /// caret's blink, and bar replay playback. Hosts call this
     /// once per prepared frame and when a wake deadline passes. Returns whether state changed.
     pub fn input_tick(&mut self, now_ms: f64) -> bool {
+        self.publishing_time_range(|chart| chart.handle_input_tick(now_ms))
+    }
+
+    /// Runs one input handler and publishes the visible time range for linked charts when the
+    /// handler moved it. Only user input publishes: a range the host set, a data load or a
+    /// linked chart's range never does, so linked charts cannot echo each other.
+    fn publishing_time_range<R>(&mut self, handle: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.visible_logical_range();
+        let result = handle(self);
+        self.publish_user_time_range(before);
+        result
+    }
+
+    fn handle_input_tick(&mut self, now_ms: f64) -> bool {
         let mut changed = false;
         if self.input.kinetic_active {
             if self.kinetic_finished(now_ms) {
@@ -871,6 +887,10 @@ impl ChartEngine {
 
     /// Primary-button press. `click_count` is the platform's multi-click count.
     pub fn input_pointer_down(&mut self, input: PointerInput, click_count: u32) {
+        self.publishing_time_range(|chart| chart.handle_pointer_down(input, click_count));
+    }
+
+    fn handle_pointer_down(&mut self, input: PointerInput, click_count: u32) {
         // A pinch has exactly two members. After its primary leaves, ignore new touches until
         // the remaining member lifts too; it cannot silently become a fresh press.
         if input.device == InputDevice::Touch
@@ -1004,6 +1024,10 @@ impl ChartEngine {
 
     /// Pointer motion. `primary_pressed` reports whether the primary button is held.
     pub fn input_pointer_move(&mut self, input: PointerInput, primary_pressed: bool) {
+        self.publishing_time_range(|chart| chart.handle_pointer_move(input, primary_pressed));
+    }
+
+    fn handle_pointer_move(&mut self, input: PointerInput, primary_pressed: bool) {
         if input.device == InputDevice::Touch
             && self.input.resolver.state() == GestureState::Pinching
         {
@@ -1183,6 +1207,10 @@ impl ChartEngine {
 
     /// Primary-button release.
     pub fn input_pointer_up(&mut self, input: PointerInput) {
+        self.publishing_time_range(|chart| chart.handle_pointer_up(input));
+    }
+
+    fn handle_pointer_up(&mut self, input: PointerInput) {
         if input.device == InputDevice::Touch
             && self.input.resolver.state() == GestureState::Pinching
         {
@@ -1535,6 +1563,10 @@ impl ChartEngine {
     /// up positive). Returns whether the chart consumed it; an unconsumed wheel may scroll the
     /// host page.
     pub fn input_wheel(&mut self, sample: WheelSample) -> bool {
+        self.publishing_time_range(|chart| chart.handle_wheel(sample))
+    }
+
+    fn handle_wheel(&mut self, sample: WheelSample) -> bool {
         let options = self.input.options;
         let intent = sample.intent(options.wheel_behavior);
         // Auto pans only on the horizontal axis; explicit modes pan along the dominant axis.
@@ -1611,6 +1643,10 @@ impl ChartEngine {
     /// Pinching is direct manipulation, so it always zooms around the pinch point regardless of the
     /// wheel's right-edge policy. Returns whether the chart consumed it.
     pub fn input_pinch(&mut self, x: f64, y: f64, scale_delta: f64, timestamp_ms: f64) -> bool {
+        self.publishing_time_range(|chart| chart.handle_pinch(x, y, scale_delta, timestamp_ms))
+    }
+
+    fn handle_pinch(&mut self, x: f64, y: f64, scale_delta: f64, timestamp_ms: f64) -> bool {
         if !self.input.options.pinch_zoom || !scale_delta.is_finite() || scale_delta == 0.0 {
             return false;
         }
@@ -1628,6 +1664,16 @@ impl ChartEngine {
     /// key conventions are platform-specific. Only [`CHART_KEY_BINDINGS`] are processed; Escape is
     /// consumed only when it cancelled something. Returns whether the chart consumed the key.
     pub fn input_key_down(
+        &mut self,
+        key: ChartKey,
+        modifiers: InputModifiers,
+        repeat: bool,
+        now_ms: f64,
+    ) -> bool {
+        self.publishing_time_range(|chart| chart.handle_key_down(key, modifiers, repeat, now_ms))
+    }
+
+    fn handle_key_down(
         &mut self,
         key: ChartKey,
         modifiers: InputModifiers,
@@ -1785,6 +1831,10 @@ impl ChartEngine {
 
     /// Key release. Only a held arrow pan or drawing nudge reacts.
     pub fn input_key_up(&mut self, key: ChartKey) -> bool {
+        self.publishing_time_range(|chart| chart.handle_key_up(key))
+    }
+
+    fn handle_key_up(&mut self, key: ChartKey) -> bool {
         if self
             .input
             .keyboard_nudge
@@ -1819,6 +1869,15 @@ impl ChartEngine {
     ///   nudge 1 px (10 px with Shift), Tab/Shift+Tab cycle the anchor, and Escape restores the
     ///   start. A committed edit is one undo entry. Delete/Backspace remove the drawing.
     pub fn input_target_key_down(
+        &mut self,
+        target: ChartFocusTarget,
+        key: ChartKey,
+        modifiers: InputModifiers,
+    ) -> bool {
+        self.publishing_time_range(|chart| chart.handle_target_key_down(target, key, modifiers))
+    }
+
+    fn handle_target_key_down(
         &mut self,
         target: ChartFocusTarget,
         key: ChartKey,
@@ -2703,9 +2762,10 @@ impl ChartEngine {
 
     fn clear_pointer_hover(&mut self) {
         let was_general = self.input.hover == ChartHover::General;
+        let published = std::mem::take(&mut self.input.crosshair_published);
         self.clear_crosshair_at();
         self.clear_hover();
-        if was_general {
+        if was_general || published {
             self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
         }
     }
@@ -2860,8 +2920,12 @@ impl ChartEngine {
             {
                 self.queue_sync_event(ChartSyncEventKind::GeneralCrosshair { position });
             }
-        } else if was_general {
-            self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+        } else {
+            if was_general {
+                self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+            }
+            self.publish_pointer_crosshair();
+            self.input.crosshair_published = true;
         }
         // A live measure or an armed tool claims every press, so trading objects show no hover
         // feedback that would promise a drag or click they will not receive. Otherwise only a
@@ -3068,6 +3132,123 @@ mod tests {
             .unwrap();
         relayout(&mut chart);
         chart
+    }
+
+    fn sync_kinds(chart: &mut ChartEngine) -> Vec<ChartSyncEventKind> {
+        chart
+            .take_sync_events()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect()
+    }
+
+    fn line_counts(chart: &mut ChartEngine) -> (usize, usize) {
+        let frame = chart.build_frame();
+        let main = &frame.panes[0].main;
+        (
+            main.iter()
+                .filter(|primitive| matches!(primitive, Prim::VLine { .. }))
+                .count(),
+            main.iter()
+                .filter(|primitive| matches!(primitive, Prim::HLine { .. }))
+                .count(),
+        )
+    }
+
+    #[test]
+    fn hovering_publishes_the_crosshair_once_per_delivery_and_leaving_clears_it() {
+        let mut chart = chart();
+        assert!(sync_kinds(&mut chart).is_empty());
+        chart.input_pointer_move(at(300.0, 200.0), false);
+        chart.input_pointer_move(at(320.0, 210.0), false);
+        let kinds = sync_kinds(&mut chart);
+        assert_eq!(kinds.len(), 1, "undelivered crosshair samples coalesce");
+        let ChartSyncEventKind::Crosshair { position } = &kinds[0] else {
+            panic!("expected a crosshair, got {kinds:?}");
+        };
+        assert_eq!(Some(position.time), chart.coordinate_to_time(320.0));
+        chart.input_pointer_leave();
+        assert_eq!(
+            sync_kinds(&mut chart),
+            vec![ChartSyncEventKind::ClearCrosshair]
+        );
+    }
+
+    #[test]
+    fn panning_and_wheel_zoom_publish_the_visible_time_range_but_host_ranges_do_not() {
+        let mut chart = chart();
+        chart.set_visible_logical_range(10.0, 40.0);
+        assert!(sync_kinds(&mut chart).is_empty());
+        let (x, y) = empty_pane_point(&chart);
+        chart.input_pointer_down(at(x, y), 1);
+        chart.input_pointer_move(at(x - 30.0, y), true);
+        chart.input_pointer_move(at(x - 60.0, y), true);
+        chart.input_pointer_up(at(x - 60.0, y));
+        let (from, to) = chart.visible_time_range().unwrap();
+        let kinds = sync_kinds(&mut chart);
+        assert!(
+            kinds.contains(&ChartSyncEventKind::VisibleTimeRange {
+                range: VisibleTimeRangeSync { from, to }
+            }),
+            "{kinds:?}"
+        );
+        assert!(chart.input_wheel(WheelSample {
+            x: 400.0,
+            y: 200.0,
+            delta_y: 1.0,
+            ..WheelSample::default()
+        }));
+        assert!(
+            sync_kinds(&mut chart)
+                .iter()
+                .any(|kind| matches!(kind, ChartSyncEventKind::VisibleTimeRange { .. }))
+        );
+    }
+
+    #[test]
+    fn a_linked_crosshair_shares_its_price_only_with_the_same_price_series() {
+        let mut source = chart();
+        source.set_sync_price_key(Some("A".into()));
+        source.input_pointer_move(at(300.0, 200.0), false);
+        let kinds = sync_kinds(&mut source);
+
+        let mut same = chart();
+        same.set_sync_price_key(Some("A".into()));
+        let (vertical, horizontal) = line_counts(&mut same);
+        assert!(same.apply_external_sync_event(&kinds[0]));
+        assert_eq!(line_counts(&mut same), (vertical + 1, horizontal + 1));
+
+        let mut other = chart();
+        other.set_sync_price_key(Some("B".into()));
+        assert!(other.apply_external_sync_event(&kinds[0]));
+        assert_eq!(
+            line_counts(&mut other),
+            (vertical + 1, horizontal),
+            "another symbol shows the time line alone"
+        );
+        assert!(
+            sync_kinds(&mut other).is_empty(),
+            "applied events never echo"
+        );
+    }
+
+    #[test]
+    fn a_linked_time_marks_the_bar_that_holds_it() {
+        let mut chart = chart();
+        let position = |time| CrosshairSyncPosition {
+            time,
+            price: 100.0,
+            pane_index: 0,
+            price_key: None,
+        };
+        assert!(chart.apply_external_crosshair(Some(position(1_000.0 + 5.0 * 60.0 + 30.0))));
+        let x = chart.crosshair.unwrap().0;
+        assert!((x - chart.time_scale.index_to_coordinate(5)).abs() < 1e-9);
+        assert!(chart.apply_external_crosshair(Some(position(10.0))));
+        assert_eq!(
+            chart.crosshair, None,
+            "a time before the history has no bar"
+        );
     }
 
     #[test]

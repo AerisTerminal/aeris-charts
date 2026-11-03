@@ -6555,11 +6555,17 @@ mod tests {
         let events = chart.take_sync_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].source, "local");
-        assert!(!chart.apply_external_crosshair(Some(CrosshairSyncPosition {
+        let linked = CrosshairSyncPosition {
             time,
             price: 102.0,
             pane_index: 0,
-        })));
+            price_key: None,
+        };
+        assert!(
+            chart.apply_external_crosshair(Some(linked.clone())),
+            "the same point now follows the linked chart"
+        );
+        assert!(!chart.apply_external_crosshair(Some(linked)));
         assert!(chart.take_sync_events().is_empty());
     }
 

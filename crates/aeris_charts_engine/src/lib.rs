@@ -1834,11 +1834,29 @@ impl Default for Pane {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CrosshairSyncPosition {
     pub time: f64,
     pub price: f64,
     pub pane_index: usize,
+    /// The source chart's [`ChartEngine::set_sync_price_key`]. A receiving chart draws the
+    /// horizontal line and its price label only when its own key is the same; otherwise the
+    /// prices are not comparable and it draws the vertical time line alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_key: Option<String>,
+}
+
+/// Longest accepted [`ChartEngine::set_sync_price_key`], matching the sync source bound.
+const MAX_SYNC_PRICE_KEY_LEN: usize = 128;
+
+/// Whether the crosshair follows this chart's pointer or another chart's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CrosshairSource {
+    #[default]
+    Local,
+    /// Applied from a linked chart; `shares_price` is false when the source shows another
+    /// price series, so only the vertical time line paints.
+    Linked { shares_price: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1889,6 +1907,21 @@ pub enum ChartSyncEventKind {
     GeneralCrosshair {
         position: GeneralCrosshairSyncPosition,
     },
+}
+
+/// Whether `next` supersedes an undelivered `last`: both are financial crosshair updates, or
+/// both are visible-range updates.
+const fn sync_events_coalesce(last: &ChartSyncEventKind, next: &ChartSyncEventKind) -> bool {
+    matches!(
+        (last, next),
+        (
+            ChartSyncEventKind::Crosshair { .. } | ChartSyncEventKind::ClearCrosshair,
+            ChartSyncEventKind::Crosshair { .. } | ChartSyncEventKind::ClearCrosshair
+        ) | (
+            ChartSyncEventKind::VisibleTimeRange { .. },
+            ChartSyncEventKind::VisibleTimeRange { .. }
+        )
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2056,6 +2089,7 @@ pub struct ChartEngine {
     /// Bar replay mode driving `replay_clock_micros`; runtime-only, never persisted.
     replay: replay::ReplayState,
     pub crosshair: Option<(f64, f64)>,
+    pub(crate) crosshair_source: CrosshairSource,
     /// Optional chart-wide time anchor used by percentage/indexed comparison overlays and their
     /// legend. The anchor is a time identity only; each series resolves its own value at that
     /// time and continues to own its canonical rows.
@@ -2070,6 +2104,8 @@ pub struct ChartEngine {
     sync_revision: u64,
     sync_received: VecDeque<(String, u64)>,
     sync_mismatch_policy: SyncMismatchPolicy,
+    /// Identity of the price series the main pane shows; see [`Self::set_sync_price_key`].
+    sync_price_key: Option<String>,
     pub pane_w: f64,
     pub pane_h: f64,
     /// Media-coordinate x offset of the pane after reserving a visible left axis.
@@ -2357,6 +2393,7 @@ impl ChartEngine {
             replay_clock_micros: None,
             replay: replay::ReplayState::default(),
             crosshair: None,
+            crosshair_source: CrosshairSource::Local,
             comparison_anchor: None,
             drawing_interval: None,
             drawings_hidden: false,
@@ -2364,6 +2401,7 @@ impl ChartEngine {
             sync_revision: 0,
             sync_received: VecDeque::new(),
             sync_mismatch_policy: SyncMismatchPolicy::Nearest,
+            sync_price_key: None,
             pane_w: css_width,
             pane_h: css_height,
             pane_left: 0.0,
@@ -5520,6 +5558,7 @@ impl ChartEngine {
         };
         let x = self.time_scale.index_to_coordinate(index);
         self.crosshair = Some((x, y));
+        self.crosshair_source = CrosshairSource::Local;
         self.queue_sync_event(ChartSyncEventKind::Crosshair {
             position: CrosshairSyncPosition {
                 time,
@@ -5527,6 +5566,7 @@ impl ChartEngine {
                 pane_index: self
                     .series_entry(series_id)
                     .map_or(0, |series| series.pane_index),
+                price_key: self.sync_price_key.clone(),
             },
         });
         self.invalidate_frame_overlay();
@@ -5545,6 +5585,15 @@ impl ChartEngine {
 
     pub(crate) fn queue_sync_event(&mut self, kind: ChartSyncEventKind) {
         self.sync_revision = self.sync_revision.wrapping_add(1).max(1);
+        // A pointer sweep or a coast publishes on every sample; a receiver only needs the latest
+        // crosshair and the latest range, so an undelivered one of the same family is replaced.
+        if let Some(last) = self.sync_events.back_mut()
+            && sync_events_coalesce(&last.kind, &kind)
+        {
+            last.revision = self.sync_revision;
+            last.kind = kind;
+            return;
+        }
         if self.sync_events.len() >= 64 {
             self.sync_events.pop_front();
         }
@@ -5559,6 +5608,77 @@ impl ChartEngine {
         self.sync_mismatch_policy = policy;
     }
 
+    /// Names the price series the main pane shows (for example an instrument identity) so a
+    /// linked chart can tell whether its prices are comparable. Linked charts with the same key,
+    /// or both without one, share the whole crosshair; charts with different keys share only
+    /// its time. Keys longer than 128 bytes are treated as absent.
+    pub fn set_sync_price_key(&mut self, key: Option<String>) {
+        self.sync_price_key = key.filter(|key| key.len() <= MAX_SYNC_PRICE_KEY_LEN);
+    }
+
+    /// Whether the painted crosshair carries a price: always for this chart's own pointer, and
+    /// for a linked one only when the source shows the same price series.
+    pub(crate) fn crosshair_shows_price(&self) -> bool {
+        !matches!(
+            self.crosshair_source,
+            CrosshairSource::Linked {
+                shares_price: false
+            }
+        )
+    }
+
+    pub(crate) fn crosshair_is_linked(&self) -> bool {
+        matches!(self.crosshair_source, CrosshairSource::Linked { .. })
+    }
+
+    /// Publishes this chart's pointer crosshair for linked charts.
+    pub(crate) fn publish_pointer_crosshair(&mut self) {
+        if let Some(position) = self.crosshair_sync_position()
+            && self.pane_uses_financial_time(position.pane_index)
+        {
+            self.queue_sync_event(ChartSyncEventKind::Crosshair { position });
+        }
+    }
+
+    /// Publishes the visible time range when user input moved it since `before`. Only input
+    /// publishes: a range the host set, a data load or a linked chart's range never does.
+    pub(crate) fn publish_user_time_range(&mut self, before: Option<(f64, f64)>) {
+        if self.visible_logical_range() != before
+            && let Some((from, to)) = self.visible_time_range()
+        {
+            self.queue_sync_event(ChartSyncEventKind::VisibleTimeRange {
+                range: VisibleTimeRangeSync { from, to },
+            });
+        }
+    }
+
+    /// The bar a linked chart's time lands on. With the nearest policy that is the bar holding
+    /// the time (the last one opening at or before it), so a daily time marks the weekly bar it
+    /// falls in; past the newest bar it follows the projected future slots. A time before this
+    /// chart's history has no bar.
+    fn linked_crosshair_index(&self, time: f64) -> Option<TimePointIndex> {
+        if !matches!(self.sync_mismatch_policy, SyncMismatchPolicy::Nearest) {
+            return self.time_to_index(time, false);
+        }
+        if self.sequence_points().is_some() {
+            return self.time_to_index(time, true);
+        }
+        let time = validate_timestamp(time).ok()?;
+        let times = self.data.merged_times();
+        let after = times.partition_point(|&point| point <= time);
+        let index = after.checked_sub(1)?;
+        let held = TimePointIndex::try_from(index).ok()?;
+        if after < times.len() {
+            return Some(held);
+        }
+        let Some((step, count)) = self.future_time_projection.filter(|(step, _)| *step > 0) else {
+            return Some(held);
+        };
+        let ahead = (time - times[index]) / step;
+        let ahead = ahead.min(i64::try_from(count).unwrap_or(i64::MAX));
+        held.checked_add(ahead)
+    }
+
     #[must_use]
     pub fn crosshair_sync_position(&self) -> Option<CrosshairSyncPosition> {
         let (x, y) = self.crosshair?;
@@ -5570,12 +5690,17 @@ impl ChartEngine {
             time,
             price: pane.price_scale.coordinate_to_price(y - pane.top, 0.0),
             pane_index,
+            price_key: self.sync_price_key.clone(),
         })
     }
 
+    /// Shows another chart's crosshair here: at the bar holding its time, with its price only
+    /// when both charts show the same price series (see [`Self::set_sync_price_key`]). A time
+    /// outside this chart's history clears the crosshair instead of marking an unrelated bar.
     pub fn apply_external_crosshair(&mut self, position: Option<CrosshairSyncPosition>) -> bool {
         let Some(position) = position else {
             let changed = self.crosshair.take().is_some();
+            self.crosshair_source = CrosshairSource::Local;
             if changed {
                 self.invalidate_frame_overlay();
             }
@@ -5584,19 +5709,25 @@ impl ChartEngine {
             self.clear_general_hover();
             return changed || hovered;
         };
-        let Some(index) = self.time_to_index(
-            position.time,
-            matches!(self.sync_mismatch_policy, SyncMismatchPolicy::Nearest),
-        ) else {
-            return false;
+        let Some(index) = self.linked_crosshair_index(position.time) else {
+            return self.apply_external_crosshair(None);
         };
-        let Some(pane) = self.panes.get(position.pane_index) else {
-            return false;
+        let shares_price = position.price_key == self.sync_price_key;
+        let y = match self.panes.get(position.pane_index) {
+            Some(pane) if shares_price => {
+                pane.price_scale.price_to_coordinate(position.price, 0.0) + pane.top
+            }
+            _ => match self.panes.first() {
+                // The time line spans every pane; any point inside the price pane places it.
+                Some(pane) if !shares_price => pane.top + pane.height / 2.0,
+                _ => return false,
+            },
         };
-        let y = pane.price_scale.price_to_coordinate(position.price, 0.0) + pane.top;
         let next = (self.time_scale.index_to_coordinate(index), y);
-        let changed = self.crosshair != Some(next);
+        let source = CrosshairSource::Linked { shares_price };
+        let changed = self.crosshair != Some(next) || self.crosshair_source != source;
         self.crosshair = Some(next);
+        self.crosshair_source = source;
         if changed {
             self.invalidate_frame_overlay();
         }
@@ -5610,7 +5741,7 @@ impl ChartEngine {
     pub fn apply_external_sync_event(&mut self, kind: &ChartSyncEventKind) -> bool {
         match kind {
             ChartSyncEventKind::Crosshair { position } => {
-                self.apply_external_crosshair(Some(*position))
+                self.apply_external_crosshair(Some(position.clone()))
             }
             ChartSyncEventKind::ClearCrosshair => self.apply_external_crosshair(None),
             ChartSyncEventKind::VisibleTimeRange { range } => {

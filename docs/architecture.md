@@ -1051,7 +1051,16 @@ Linked-chart ingress is source-aware. Local mutations publish into the bounded s
 axis viewport state without
 echoing it and without draining unrelated local events already awaiting delivery. Hosts coordinate
 chart groups and transport events, but they never clear the engine queue to manufacture no-echo
-behavior. General axis events use a numeric or temporal interval, or category endpoint identities,
+behavior. Financial linked sync is input-driven: pointer hover publishes the crosshair's time and
+price (coalesced to the newest undelivered sample) and leaving clears it, and every input handler
+that moves the time scale (drag, wheel, pinch, keys, kinetic and keyboard scroll) publishes the
+visible time range. Host-set ranges, data loads and applied external events never publish. A
+receiving chart marks the bar that holds the linked time (the last bar opening at or before it,
+projected into future slots past the newest bar) and clears its crosshair for a time before its
+history. Each chart may name its price series with `set_sync_price_key`; the key travels with the
+crosshair, and a receiver whose key differs paints only the vertical time line and time label,
+without the horizontal line, price label, markers, magnet or alert chip.
+General axis events use a numeric or temporal interval, or category endpoint identities,
 so linked charts can retain their own data rows and categories between shared endpoints. A target
 ignores an axis event when its scale family or required category endpoint is absent. The browser
 package exposes the same ingress with a typed source/revision envelope. The engine keeps a bounded

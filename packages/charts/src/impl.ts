@@ -8726,6 +8726,10 @@ export class chart_impl implements chart_api {
     if (this.wasm.apply_external_crosshair_json(JSON.stringify(position))) this.repaint();
   }
 
+  set_sync_price_key(key: string | null): void {
+    this.wasm.set_sync_price_key(key ?? undefined);
+  }
+
   take_sync_events(): chart_sync_event[] {
     return JSON.parse(this.wasm.take_sync_events_json()) as chart_sync_event[];
   }

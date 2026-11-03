@@ -6680,6 +6680,10 @@ impl AerisChart {
         self.inner.borrow_mut().apply_external_crosshair(position)
     }
 
+    pub fn set_sync_price_key(&mut self, key: Option<String>) {
+        self.inner.borrow_mut().engine.set_sync_price_key(key);
+    }
+
     pub fn take_sync_events_json(&mut self) -> String {
         serde_json::to_string(&self.inner.borrow_mut().take_sync_events())
             .unwrap_or_else(|_| "[]".to_string())

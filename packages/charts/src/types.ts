@@ -3891,6 +3891,8 @@ export interface crosshair_sync_position {
   time: number;
   price: number;
   pane_index: number;
+  /** The source chart's {@link chart_api.set_sync_price_key}; absent when it has none. */
+  price_key?: string;
 }
 export type general_axis_sync_domain =
   | { type: "numeric"; from: number; to: number }
@@ -4687,6 +4689,12 @@ export interface chart_api {
   crosshair_sync_position(): crosshair_sync_position | null;
   /** Apply a coordinator-provided crosshair without generating local pointer input. */
   apply_external_crosshair(position: crosshair_sync_position | null): void;
+  /**
+   * Name the price series this chart shows (for example an instrument identity). Linked charts
+   * with the same key, or both without one, share the whole crosshair; charts with different keys
+   * share only its time line. Keys longer than 128 bytes count as absent.
+   */
+  set_sync_price_key(key: string | null): void;
   /** Drain bounded semantic synchronization events; callers route them with source/revision. */
   take_sync_events(): chart_sync_event[];
   /** Apply a routed semantic event without emitting an echo. */

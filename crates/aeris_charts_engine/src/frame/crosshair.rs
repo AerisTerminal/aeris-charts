@@ -94,7 +94,7 @@ impl ChartEngine {
                 color: vert_color,
             });
         }
-        if self.pane_at_y(y_css) != Some(pane_index) {
+        if self.pane_at_y(y_css) != Some(pane_index) || !self.crosshair_shows_price() {
             return;
         }
         let snap_y = self.crosshair_snap(pane_index, x_css, y_css, from, to).1;
@@ -475,6 +475,11 @@ impl ChartEngine {
     ) -> (f64, f64) {
         let (default_scale, default_base) = self.pane_default_scale(pane_index, from);
         let price = default_scale.coordinate_to_price(y_css, default_base);
+        // A linked crosshair shows its source's price exactly; this chart's magnet would move it
+        // onto a bar the source user is not pointing at.
+        if self.crosshair_is_linked() {
+            return (price, y_css);
+        }
         // The snapped price source: the configured crosshair magnet mode, or, while a drawing is
         // being created or dragged on a Normal-mode crosshair, that drawing's magnet (the
         // Ctrl-held OHLC magnet upgrades it to Strong) so the crosshair lands where the anchor
