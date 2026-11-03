@@ -2967,6 +2967,18 @@ impl ChartInner {
     pub fn set_drawing_group_visibility(&mut self, group_id: &str, visible: bool) -> u32 {
         self.engine.set_drawing_group_visibility(group_id, visible) as u32
     }
+    pub fn set_drawings_hidden(&mut self, hidden: bool) -> bool {
+        self.engine.set_drawings_hidden(hidden)
+    }
+    pub fn drawings_hidden(&self) -> bool {
+        self.engine.drawings_hidden()
+    }
+    pub fn show_hidden_drawings(&mut self) -> u32 {
+        self.engine.show_hidden_drawings() as u32
+    }
+    pub fn hidden_drawing_count(&self) -> u32 {
+        self.engine.hidden_drawing_count() as u32
+    }
     pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> u32 {
         self.engine.set_drawing_group_locked(group_id, locked) as u32
     }

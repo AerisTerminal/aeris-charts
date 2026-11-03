@@ -1018,7 +1018,10 @@ impl ChartEngine {
         F: Fn(&str, bool) -> f64,
     {
         for drawing in &self.drawings {
-            if drawing.kind == DrawingKind::Rectangle && drawing.points.len() == 2 {
+            if drawing.kind == DrawingKind::Rectangle
+                && drawing.points.len() == 2
+                && self.drawing_shown(drawing)
+            {
                 self.append_rectangle_axis_view(
                     drawing,
                     &drawing.points,
@@ -1286,9 +1289,8 @@ impl ChartEngine {
     {
         for drawing in &self.drawings {
             if !drawing.kind.is_volume_profile()
-                || !drawing.visible
+                || !self.drawing_shown(drawing)
                 || !drawing.price_labels_visible
-                || !drawing.interval_visibility.allows(self.drawing_interval)
             {
                 continue;
             }
@@ -1408,8 +1410,7 @@ impl ChartEngine {
             if drawing.kind.is_measure()
                 && drawing.points.len() == 2
                 && self.is_drawing_selected(drawing.id)
-                && drawing.visible
-                && drawing.interval_visibility.allows(self.drawing_interval)
+                && self.drawing_shown(drawing)
             {
                 self.append_measure_axis_view(drawing, out, measure);
             }
@@ -1553,6 +1554,7 @@ impl ChartEngine {
                 drawing.kind,
                 DrawingKind::LongPosition | DrawingKind::ShortPosition
             ) && drawing.points.len() == 3
+                && self.drawing_shown(drawing)
             {
                 self.append_position_axis_view(drawing, &drawing.points, out, measure);
             }
@@ -2262,8 +2264,7 @@ impl ChartEngine {
                         drawing.kind,
                         DrawingKind::HorizontalLine | DrawingKind::HorizontalRay
                     )
-                    || !drawing.visible
-                    || !drawing.interval_visibility.allows(self.drawing_interval)
+                    || !self.drawing_shown(drawing)
                 {
                     continue;
                 }

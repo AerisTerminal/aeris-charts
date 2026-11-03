@@ -466,8 +466,7 @@ impl ChartEngine {
     ) {
         for drawing in &self.drawings {
             if drawing.pane_index != pane_index
-                || !drawing.visible
-                || !drawing.interval_visibility.allows(self.drawing_interval)
+                || !self.drawing_shown(drawing)
                 || !self.drawing_viewport_candidate_reference(drawing)
             {
                 continue;
@@ -507,10 +506,7 @@ impl ChartEngine {
         parts.clear();
         if self.drawing_runtime.borrow().pane_count(pane_index) <= 20 {
             for drawing in &self.drawings {
-                if drawing.pane_index != pane_index
-                    || !drawing.visible
-                    || !drawing.interval_visibility.allows(self.drawing_interval)
-                {
+                if drawing.pane_index != pane_index || !self.drawing_shown(drawing) {
                     continue;
                 }
                 let px = if drawing.kind == DrawingKind::RegressionTrend {
@@ -553,7 +549,7 @@ impl ChartEngine {
                 let Some(drawing) = self.drawings.get(position) else {
                     continue;
                 };
-                if !drawing.visible || !drawing.interval_visibility.allows(self.drawing_interval) {
+                if !self.drawing_shown(drawing) {
                     continue;
                 }
                 let Some(key) = self.drawing_coordinate_key(drawing) else {
@@ -715,10 +711,7 @@ impl ChartEngine {
         vpr: f64,
     ) -> Option<Vec<(f64, f64)>> {
         let drawing = self.drawing(id)?;
-        if drawing.pane_index != pane_index
-            || !drawing.visible
-            || !drawing.interval_visibility.allows(self.drawing_interval)
-        {
+        if drawing.pane_index != pane_index || !self.drawing_shown(drawing) {
             return None;
         }
         let key = self.drawing_coordinate_key(drawing)?;
@@ -808,10 +801,7 @@ impl ChartEngine {
         let mut points = Vec::new();
         let mut touched = Vec::new();
         for drawing in self.drawings.iter().rev() {
-            if drawing.pane_index != pane_index
-                || !drawing.visible
-                || !drawing.interval_visibility.allows(self.drawing_interval)
-            {
+            if drawing.pane_index != pane_index || !self.drawing_shown(drawing) {
                 continue;
             }
             let Some(px) = self.drawing_render_px(drawing) else {
@@ -4543,8 +4533,7 @@ impl ChartEngine {
     ) {
         for drawing in self.drawings.iter().filter(|drawing| {
             drawing.pane_index == pane_index
-                && drawing.visible
-                && drawing.interval_visibility.allows(self.drawing_interval)
+                && self.drawing_shown(drawing)
                 && matches!(
                     drawing.kind,
                     DrawingKind::LongPosition | DrawingKind::ShortPosition
@@ -4891,8 +4880,7 @@ impl ChartEngine {
         for drawing in self.drawings.iter().filter(|drawing| {
             self.is_drawing_selected(drawing.id)
                 && drawing.pane_index == pane_index
-                && drawing.visible
-                && drawing.interval_visibility.allows(self.drawing_interval)
+                && self.drawing_shown(drawing)
                 && matches!(
                     drawing.kind,
                     DrawingKind::LongPosition | DrawingKind::ShortPosition

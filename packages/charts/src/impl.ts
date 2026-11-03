@@ -7181,6 +7181,30 @@ export class chart_impl implements chart_api {
     return changed;
   }
 
+  set_drawings_hidden(hidden: boolean): boolean {
+    if (hidden) this.close_text_editor(true); // hiding commits the edit
+    const changed = this.wasm.set_drawings_hidden(hidden);
+    if (changed) {
+      this.sync_drawing_tool();
+      this.repaint();
+    }
+    return changed;
+  }
+
+  drawings_hidden(): boolean {
+    return this.wasm.drawings_hidden();
+  }
+
+  show_hidden_drawings(): number {
+    const changed = this.wasm.show_hidden_drawings();
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  hidden_drawing_count(): number {
+    return this.wasm.hidden_drawing_count();
+  }
+
   move_drawing_group(group_id: string, logical_delta: number, price_delta: number): number {
     const changed = this.wasm.move_drawing_group(group_id, logical_delta, price_delta);
     if (changed !== 0) this.repaint();

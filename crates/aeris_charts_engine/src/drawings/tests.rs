@@ -9197,6 +9197,129 @@ fn locking_hiding_and_cloning_the_selection_are_single_undo_steps() {
     assert!(chart.clone_selected_drawings(f64::NAN, 0.0).is_empty());
 }
 
+fn painted_drawings(chart: &mut ChartEngine) -> Vec<DrawingId> {
+    chart.build_frame();
+    chart
+        .frame_drawing_segments(0)
+        .iter()
+        .filter_map(|segment| segment.drawing_id)
+        .collect()
+}
+
+#[test]
+fn the_hidden_drawing_layer_paints_hits_and_selects_nothing_and_keeps_each_drawing_visibility() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    assert!(chart.set_drawing_visibility(rect, false));
+    chart.set_selected_drawings(&[trend]);
+    chart.set_hovered_drawing(Some(trend));
+    assert_eq!(painted_drawings(&mut chart), vec![trend]);
+    let (x, y) = chart.drawing_point_to_coordinate(trend, 0).unwrap();
+    assert!(chart.hit_test_drawing(x, y).is_some());
+    let document = chart.drawings().to_vec();
+    let (revision, sync_revision) = (chart.drawing_revision(), chart.drawing_sync_revision);
+
+    assert!(chart.set_drawings_hidden(true));
+    assert!(
+        !chart.set_drawings_hidden(true),
+        "an unchanged switch reports no change"
+    );
+    assert!(chart.drawings_hidden());
+    assert!(chart.selected_drawings().is_empty() && chart.selected_drawing().is_none());
+    assert_eq!(chart.hovered_drawing(), None);
+    assert!(painted_drawings(&mut chart).is_empty());
+    assert!(chart.hit_test_drawing(x, y).is_none());
+    assert!(!chart.select_drawing_at(x, y));
+    assert!(!chart.set_selected_drawings(&[trend]));
+    chart.set_selected_drawing(Some(trend));
+    chart.set_hovered_drawing(Some(trend));
+    assert!(chart.selected_drawings().is_empty() && chart.hovered_drawing().is_none());
+    assert!(!chart.drawing_is_visible(trend));
+    assert!(!chart.drawing_drag_start_at(x, y));
+
+    // View state only: the document, its revisions, and the history are untouched.
+    assert_eq!(chart.drawings(), document.as_slice());
+    assert_eq!(chart.drawing_revision(), revision);
+    assert_eq!(chart.drawing_sync_revision, sync_revision);
+    assert!(chart.undo(), "undo reaches the earlier per-drawing hide");
+    assert!(chart.drawing(rect).unwrap().visible);
+    assert!(chart.drawings_hidden(), "undo never toggles the layer");
+    assert!(chart.redo());
+
+    assert!(chart.set_drawings_hidden(false));
+    assert_eq!(
+        painted_drawings(&mut chart),
+        vec![trend],
+        "a drawing hidden on its own stays hidden when the layer shows again"
+    );
+    assert!(chart.hit_test_drawing(x, y).is_some());
+}
+
+#[test]
+fn hiding_the_drawing_layer_cancels_creation_and_arming_a_tool_shows_it() {
+    let mut chart = settled_chart();
+    assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+    assert!(chart.drawing_create_begin(DrawingKind::TrendLine, None));
+    let (x, y) = (x_at(&chart, 2.0), y_at(&chart, 11.0));
+    chart.drawing_create_click(x, y, DrawingModifiers::default());
+    assert!(chart.pending_drawing().is_some());
+
+    assert!(chart.set_drawings_hidden(true));
+    assert_eq!(chart.active_drawing_tool(), None);
+    assert!(chart.pending_drawing().is_none());
+    assert!(chart.drawings().is_empty());
+
+    assert!(chart.set_drawing_tool(Some(DrawingKind::Rectangle), None, None));
+    assert!(
+        !chart.drawings_hidden(),
+        "starting a drawing never draws invisibly"
+    );
+    assert!(chart.set_drawings_hidden(true));
+    assert!(chart.set_drawing_tool(None, None, None));
+    assert!(
+        chart.drawings_hidden(),
+        "disarming leaves the layer as it is"
+    );
+    assert!(chart.drawing_create_begin(DrawingKind::TrendLine, None));
+    assert!(!chart.drawings_hidden());
+}
+
+#[test]
+fn showing_hidden_drawings_is_one_undo_step_and_counts_only_drawings_hidden_on_their_own() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let rect = add_rectangle(&mut chart, 1.0, 10.0);
+    let third = add_rectangle(&mut chart, 5.0, 11.0);
+    assert_eq!(chart.hidden_drawing_count(), 0);
+    assert_eq!(chart.show_hidden_drawings(), 0);
+    chart.set_selected_drawings(&[trend, rect]);
+    assert_eq!(chart.set_selected_drawings_visibility(false), 2);
+    assert!(chart.set_drawings_hidden(true));
+    assert_eq!(
+        chart.hidden_drawing_count(),
+        2,
+        "the layer switch is not counted"
+    );
+
+    let (revision, sync_revision) = (chart.drawing_revision(), chart.drawing_sync_revision);
+    assert_eq!(chart.show_hidden_drawings(), 2);
+    assert_eq!(chart.hidden_drawing_count(), 0);
+    assert!(chart.drawings_hidden(), "the layer switch is separate");
+    assert!(chart.drawing_revision() > revision);
+    assert_ne!(chart.drawing_sync_revision, sync_revision);
+    assert!(chart.set_drawings_hidden(false));
+    assert_eq!(painted_drawings(&mut chart), vec![trend, rect, third]);
+
+    assert!(chart.undo());
+    assert_eq!(
+        chart.hidden_drawing_count(),
+        2,
+        "one undo restores every hidden drawing"
+    );
+    assert_eq!(painted_drawings(&mut chart), vec![third]);
+}
+
 #[test]
 fn a_selection_box_selects_every_drawing_it_touches() {
     let mut chart = settled_chart();

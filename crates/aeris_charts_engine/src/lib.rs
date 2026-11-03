@@ -2063,6 +2063,9 @@ pub struct ChartEngine {
     /// Host-supplied interval metadata used by drawing visibility ranges. `None` means no
     /// interval filter is active and keeps legacy drawings visible.
     pub drawing_interval: Option<DrawingInterval>,
+    /// Chart-wide drawing layer switch: while set, no drawing paints, hovers, hits, or selects.
+    /// View state the host persists; never part of the drawings document, sync, or history.
+    drawings_hidden: bool,
     sync_events: VecDeque<ChartSyncEvent>,
     sync_revision: u64,
     sync_received: VecDeque<(String, u64)>,
@@ -2356,6 +2359,7 @@ impl ChartEngine {
             crosshair: None,
             comparison_anchor: None,
             drawing_interval: None,
+            drawings_hidden: false,
             sync_events: VecDeque::new(),
             sync_revision: 0,
             sync_received: VecDeque::new(),

@@ -1448,7 +1448,18 @@ bounded contract fields on a clone before installation and record one undo entry
 change. The shared resolved-geometry path applies line extensions and is consumed by both frame
 emission and hit testing. Hidden or interval-ineligible drawings remain in persistence and the
 object tree but are excluded from rendering and hit testing; locked drawings remain selectable
-but cannot be edited. Selection, clone/copy/paste, z-order, group operations, bulk removal, and
+but cannot be edited. One predicate (`drawing_shown`) combines a drawing's own `visible` flag,
+its interval range and the chart-wide drawing layer switch, and every drawing frame layer, axis
+view, hit test, text-edit target and marquee test applies it. `set_drawings_hidden` is that switch:
+view state outside the drawings document, sync revision and history (hosts persist it), which
+leaves every drawing's own flag untouched, so drawings hidden one by one stay hidden when the
+layer shows again. Hiding abandons a drawing drag, selection box or capture, commits held keyboard
+moves and an open text edit, disarms the tool, cancels any creation, and clears drawing selection
+and hover; while hidden nothing selects or hovers a drawing. Arming a tool
+(`set_drawing_tool`, `drawing_create_begin`) shows the layer again, so nothing is drawn
+invisibly; hosts read `drawings_hidden()` after arming. `show_hidden_drawings` sets `visible`
+on every individually hidden drawing as one `BatchUpdate` undo step, and
+`hidden_drawing_count` lets hosts enable that command. Selection, clone/copy/paste, z-order, group operations, bulk removal, and
 sync are chart-owned and bounded, with sync IDs/revisions preventing stale or echoed updates.
 Named templates are validated data rather than host-side drawing copies. V1/V2 persistence keeps
 these fields optional for lossless migration of existing layouts, while browser/WASM exposes the

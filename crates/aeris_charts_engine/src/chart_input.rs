@@ -2046,7 +2046,11 @@ impl ChartEngine {
         key: ChartKey,
         modifiers: InputModifiers,
     ) -> bool {
-        let Some(drawing) = self.drawing(id).cloned() else {
+        let Some(drawing) = self
+            .drawing(id)
+            .filter(|_| !self.drawings_hidden())
+            .cloned()
+        else {
             self.input.drawing_edit = None;
             return false;
         };
@@ -2152,6 +2156,28 @@ impl ChartEngine {
         // A selected drawing owns the arrows even when a step cannot move it (off-screen anchors),
         // so the chart never pans underneath it.
         true
+    }
+
+    /// Close drawing input before the drawing layer hides. A drawing drag, selection box, or
+    /// freehand capture is abandoned without committing; held keyboard moves commit as their
+    /// usual undo entries; a drawing hover winner is released.
+    pub(crate) fn release_drawing_input(&mut self) {
+        if matches!(
+            self.input.press.map(|press| press.mode),
+            Some(
+                PressMode::DrawingDrag
+                    | PressMode::DrawingMarquee
+                    | PressMode::DrawingCreation { .. }
+            )
+        ) {
+            self.abandon_press();
+        }
+        self.commit_keyboard_nudge();
+        self.commit_drawing_edit_session();
+        if matches!(self.input.hover, ChartHover::Drawing { .. }) {
+            self.input.hover = ChartHover::None;
+        }
+        self.input.frame_dirty = true;
     }
 
     /// Record a held arrow nudge as one undo entry.
@@ -4174,6 +4200,47 @@ mod tests {
         drag(&mut chart, (210.0, 170.0), (250.0, 120.0));
         assert_eq!(chart.drawing(id).unwrap().points, before);
         assert_eq!(chart.selected_drawing(), Some(id));
+    }
+
+    #[test]
+    fn a_hidden_drawing_layer_never_hovers_drags_or_selects_through_input() {
+        let mut chart = chart();
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        click(&mut chart, 120.0, 120.0);
+        click(&mut chart, 300.0, 220.0);
+        let id = chart.drawings()[0].id;
+        let before = chart.drawing(id).unwrap().points.clone();
+
+        // Hiding mid-drag abandons the drag at its start and releases the hover.
+        chart.input_pointer_down(at(210.0, 170.0), 1);
+        chart.input_pointer_move(at(260.0, 100.0), true);
+        assert!(chart.drawing_drag_active());
+        assert!(chart.set_drawings_hidden(true));
+        assert!(!chart.drawing_drag_active());
+        assert_eq!(chart.drawing(id).unwrap().points, before);
+        chart.input_pointer_up(at(260.0, 100.0));
+
+        chart.input_pointer_move(at(210.0, 170.0), false);
+        assert!(!matches!(chart.input_hover(), ChartHover::Drawing { .. }));
+        drag(&mut chart, (210.0, 170.0), (250.0, 120.0));
+        assert_eq!(
+            chart.drawing(id).unwrap().points,
+            before,
+            "the press pans instead"
+        );
+        click(&mut chart, 210.0, 170.0);
+        assert_eq!(chart.selected_drawing(), None);
+        assert!(!chart.input_target_key_down(
+            ChartFocusTarget::Drawing(id),
+            ChartKey::Enter,
+            InputModifiers::default()
+        ));
+
+        assert!(chart.set_drawings_hidden(false));
+        // The pan above moved the line on screen; hover it where it is now.
+        let (x, y) = chart.drawing_point_to_coordinate(id, 0).unwrap();
+        chart.input_pointer_move(at(x, y), false);
+        assert!(matches!(chart.input_hover(), ChartHover::Drawing { .. }));
     }
 
     #[test]

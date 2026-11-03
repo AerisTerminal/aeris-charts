@@ -16090,6 +16090,22 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
     assert!(chart.drawing_apply_options(id, r##"{"label_text_color":"#123456"}"##));
     let label = label_at(&mut chart);
     assert_eq!(label.color, Color::rgb(0x12, 0x34, 0x56));
+
+    // The hidden drawing layer takes the line's axis label with it.
+    assert!(chart.set_drawings_hidden(true));
+    let hidden = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
+    assert!(
+        !hidden
+            .labels
+            .iter()
+            .any(|l| l.text == "12.00" && l.background.is_some())
+    );
+    assert!(chart.set_drawings_hidden(false));
+    label_at(&mut chart);
 }
 
 #[test]

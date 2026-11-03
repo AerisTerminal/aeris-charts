@@ -4764,6 +4764,20 @@ export interface chart_api {
   move_drawing_z_order(drawing: drawing_api | number, delta: number): boolean;
   set_drawing_group_visibility(group_id: string, visible: boolean): number;
   set_drawing_group_locked(group_id: string, locked: boolean): number;
+  /**
+   * Hide or show every drawing at once. Each drawing keeps its own visibility, so drawings hidden
+   * one by one stay hidden when the layer shows again. Hiding disarms the drawing tool, cancels a
+   * drawing in progress, and clears the drawing selection; arming a tool shows the layer again.
+   * This is view state: it is not undoable and not part of exported drawings, so hosts persist it.
+   * Returns whether the layer changed.
+   */
+  set_drawings_hidden(hidden: boolean): boolean;
+  /** Whether the drawing layer is hidden. */
+  drawings_hidden(): boolean;
+  /** Show every drawing hidden on its own as one undo step. Returns how many changed. */
+  show_hidden_drawings(): number;
+  /** How many drawings are hidden on their own, regardless of the drawing layer. */
+  hidden_drawing_count(): number;
   move_drawing_group(group_id: string, logical_delta: number, price_delta: number): number;
   /** Apply or export a typed template. */
   drawing_template(drawing: drawing_api | number, name: string): drawing_template;

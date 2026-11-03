@@ -192,6 +192,17 @@ reaches each drawing only for the settings its kind lists in `drawing_property_s
 toolbar edit restyles a mixed selection. Each group action is one undo step; undoing a removal
 restores the drawings selected, and clones replace the selection.
 
+### Hiding all drawings
+
+`set_drawings_hidden(hidden)` hides or shows every drawing at once and returns whether the switch
+changed; `drawings_hidden()` reads it. Each drawing keeps its own `visible` option, so drawings
+hidden one by one stay hidden when the layer shows again. While hidden, no drawing paints, hovers,
+hit-tests or selects; hiding disarms the drawing tool, cancels a drawing in progress and clears the
+selection, and arming a tool shows the layer again. The switch is view state: it is not undoable
+and not part of exported drawings or sync payloads, so hosts persist it themselves.
+`show_hidden_drawings()` shows every drawing hidden on its own as one undo step and returns how
+many changed; `hidden_drawing_count()` returns how many are hidden on their own.
+
 ### Drawing text
 
 Drawing text (the `text` option of standalone Text, notes, comments, callouts, signposts, price

@@ -2993,10 +2993,58 @@ impl ChartEngine {
         }
     }
 
+    /// Whether the drawing paints now: its own visibility, its interval range, and the
+    /// chart-wide drawing layer all allow it.
     pub fn drawing_is_visible(&self, id: DrawingId) -> bool {
-        self.drawing(id).is_some_and(|drawing| {
-            drawing.visible && drawing.interval_visibility.allows(self.drawing_interval)
-        })
+        self.drawing(id)
+            .is_some_and(|drawing| self.drawing_shown(drawing))
+    }
+
+    /// The one visibility rule every frame layer, axis view, and hit test of a committed
+    /// drawing applies.
+    pub(crate) fn drawing_shown(&self, drawing: &Drawing) -> bool {
+        !self.drawings_hidden
+            && drawing.visible
+            && drawing.interval_visibility.allows(self.drawing_interval)
+    }
+
+    /// Hide or show every drawing at once without touching any drawing's own visibility, so
+    /// drawings hidden one by one stay hidden when the layer shows again. Hiding closes drawing
+    /// input first: a drag, selection box, or freehand capture is abandoned, the armed tool and
+    /// any creation are cancelled, an open text edit commits, and the selection and hover clear.
+    /// This is view state: it records no undo step and never changes the drawings document or
+    /// its sync revision, so hosts persist it themselves. Returns whether the layer changed.
+    pub fn set_drawings_hidden(&mut self, hidden: bool) -> bool {
+        if self.drawings_hidden == hidden {
+            return false;
+        }
+        if hidden {
+            self.release_drawing_input();
+            self.commit_drawing_text_edit();
+            self.set_editing_drawing(None);
+            self.cancel_drawing_tool();
+            self.clear_drawing_selection_state();
+            self.set_hovered_drawing(None);
+            self.set_hovered_text(None);
+        }
+        self.drawings_hidden = hidden;
+        self.invalidate_frame_drawings();
+        self.refresh_input_cursor();
+        true
+    }
+
+    /// Whether the chart-wide drawing layer is hidden. Arming a drawing tool shows it again, so
+    /// hosts that persist the switch read it after [`Self::set_drawing_tool`].
+    pub fn drawings_hidden(&self) -> bool {
+        self.drawings_hidden
+    }
+
+    /// Starting a new drawing shows a hidden layer, so nothing is ever drawn invisibly.
+    fn show_drawing_layer_for_creation(&mut self) {
+        if self.drawings_hidden {
+            self.drawings_hidden = false;
+            self.invalidate_frame_drawings();
+        }
     }
 
     fn rebase_drawing_logicals_with<F>(&mut self, map: F)
@@ -5108,7 +5156,7 @@ impl ChartEngine {
             .iter()
             .take(crate::MAX_DRAWING_OBJECTS)
             .copied()
-            .filter(|id| live.contains(id))
+            .filter(|id| !self.drawings_hidden && live.contains(id))
             .collect::<Vec<_>>();
         let primary = selected.first().copied();
         selected.sort_unstable();
@@ -5136,9 +5184,14 @@ impl ChartEngine {
         self.selected_drawings.binary_search(&id).is_ok()
     }
 
+    /// A hidden drawing layer selects nothing.
     fn select_only_drawing(&mut self, id: DrawingId) {
-        self.selected_drawing = Some(id);
         self.selected_drawings.clear();
+        if self.drawings_hidden {
+            self.selected_drawing = None;
+            return;
+        }
+        self.selected_drawing = Some(id);
         self.selected_drawings.push(id);
     }
 
@@ -5346,17 +5399,30 @@ impl ChartEngine {
         self.drawing_apply_options(id, &serde_json::json!({ "locked": locked }).to_string())
     }
 
-    fn update_group<F>(&mut self, group_id: &str, mut update: F) -> usize
+    fn update_group<F>(&mut self, group_id: &str, update: F) -> usize
     where
         F: FnMut(&mut Drawing),
     {
         if group_id.is_empty() {
             return 0;
         }
+        self.update_drawings_where(
+            |drawing| drawing.group_id.as_deref() == Some(group_id),
+            update,
+        )
+    }
+
+    /// Apply `update` to every drawing `matches` accepts, as one undo step. Returns how many
+    /// drawings changed.
+    fn update_drawings_where<P, F>(&mut self, mut matches: P, mut update: F) -> usize
+    where
+        P: FnMut(&Drawing) -> bool,
+        F: FnMut(&mut Drawing),
+    {
         let before = self.drawings.clone();
         let mut changed = 0;
         for drawing in &mut self.drawings {
-            if drawing.group_id.as_deref() == Some(group_id) {
+            if matches(drawing) {
                 let original = drawing.clone();
                 update(drawing);
                 if *drawing != original {
@@ -5379,6 +5445,20 @@ impl ChartEngine {
 
     pub fn set_drawing_group_visibility(&mut self, group_id: &str, visible: bool) -> usize {
         self.update_group(group_id, |drawing| drawing.visible = visible)
+    }
+
+    /// Show every drawing hidden on its own, as one undo step. The chart-wide layer switch
+    /// ([`Self::set_drawings_hidden`]) is separate and unchanged. Returns how many changed.
+    pub fn show_hidden_drawings(&mut self) -> usize {
+        self.update_drawings_where(|drawing| !drawing.visible, |drawing| drawing.visible = true)
+    }
+
+    /// How many drawings are hidden on their own, regardless of the layer switch.
+    pub fn hidden_drawing_count(&self) -> usize {
+        self.drawings
+            .iter()
+            .filter(|drawing| !drawing.visible)
+            .count()
     }
 
     pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> usize {
@@ -5770,11 +5850,7 @@ impl ChartEngine {
         let candidates = self.take_drawing_candidates(pane_index, Some((x, y)));
         let hit = candidates.iter().rev().find_map(|&id| {
             let drawing = self.drawing(id)?;
-            if !drawing.kind.has_line_text()
-                || !drawing.visible
-                || drawing.locked
-                || !drawing.interval_visibility.allows(self.drawing_interval)
-            {
+            if !drawing.kind.has_line_text() || !self.drawing_shown(drawing) || drawing.locked {
                 return None;
             }
             let px = self.drawing_px(drawing)?;
@@ -5877,11 +5953,7 @@ impl ChartEngine {
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&eid| {
             self.drawings.iter().any(|d| {
-                d.id == eid
-                    && !d.locked
-                    && d.visible
-                    && d.interval_visibility.allows(self.drawing_interval)
-                    && d.kind.edits_text_inline()
+                d.id == eid && !d.locked && self.drawing_shown(d) && d.kind.edits_text_inline()
             })
         });
         let changes_line_placeholder =
@@ -5917,9 +5989,11 @@ impl ChartEngine {
     /// ring; an empty line's `+ Add text` prompt follows selection, not hover.
     pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&hid| {
-            self.drawings
-                .iter()
-                .any(|d| d.id == hid && d.kind.edits_text_inline())
+            !self.drawings_hidden
+                && self
+                    .drawings
+                    .iter()
+                    .any(|d| d.id == hid && d.kind.edits_text_inline())
         });
         if valid != self.hovered_text {
             self.invalidate_frame_overlay();
@@ -5953,7 +6027,8 @@ impl ChartEngine {
     /// promotion cannot oscillate hover. Cleared on hover leave, deselection-safe (selection
     /// is separate), cancellation, removal, and `clear_hover`.
     pub fn set_hovered_drawing(&mut self, id: Option<DrawingId>) {
-        let valid = id.filter(|&hid| self.drawings.iter().any(|d| d.id == hid));
+        let valid =
+            id.filter(|&hid| !self.drawings_hidden && self.drawings.iter().any(|d| d.id == hid));
         if valid != self.hovered_drawing {
             // Ordering-only change: retained drawing geometry is reassembled, not rebuilt.
             // Overlay invalidation covers the text ring transition when the hovered drawing
@@ -6098,10 +6173,7 @@ impl ChartEngine {
             let Some(drawing) = self.drawing(selected) else {
                 continue;
             };
-            if drawing.pane_index != pane
-                || !drawing.visible
-                || !drawing.interval_visibility.allows(self.drawing_interval)
-            {
+            if drawing.pane_index != pane || !self.drawing_shown(drawing) {
                 continue;
             }
             let Some(px) = self.drawing_render_px(drawing) else {
@@ -6207,10 +6279,7 @@ impl ChartEngine {
         }
         if !indexed {
             for drawing in self.drawings.iter().rev() {
-                if drawing.pane_index != pane
-                    || !drawing.visible
-                    || !drawing.interval_visibility.allows(self.drawing_interval)
-                {
+                if drawing.pane_index != pane || !self.drawing_shown(drawing) {
                     continue;
                 }
                 let Some(px) = self.drawing_render_px(drawing) else {
@@ -6238,7 +6307,7 @@ impl ChartEngine {
                 let Some(drawing) = self.drawings.get(position) else {
                     continue;
                 };
-                if !drawing.visible || !drawing.interval_visibility.allows(self.drawing_interval) {
+                if !self.drawing_shown(drawing) {
                     continue;
                 }
                 let Some(key) = self.drawing_coordinate_key(drawing) else {
@@ -7440,7 +7509,7 @@ impl ChartEngine {
 
     /// Arm or disarm the chart's canonical drawing tool. The host may optionally constrain the
     /// next drawing to one pane; placement, sequence completion, freehand capture and one-shot
-    /// disarming remain engine-owned.
+    /// disarming remain engine-owned. Arming a tool shows a hidden drawing layer.
     pub fn set_drawing_tool(
         &mut self,
         kind: Option<DrawingKind>,
@@ -7454,6 +7523,9 @@ impl ChartEngine {
             },
             None => None,
         };
+        if template.is_some() {
+            self.show_drawing_layer_for_creation();
+        }
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
         self.drawing_controller.pending = None;
@@ -7945,8 +8017,8 @@ impl ChartEngine {
     /// `startDrawing`): subsequent clicks place anchors through
     /// [`ChartEngine::drawing_create_click`], mouse moves update the preview through
     /// [`ChartEngine::drawing_create_move`]. `options_json` templates the new drawing
-    /// ([`DrawingPatch`]). Replaces any in-progress creation. Returns false for a malformed
-    /// options template.
+    /// ([`DrawingPatch`]). Replaces any in-progress creation and shows a hidden drawing layer.
+    /// Returns false for a malformed options template.
     pub fn drawing_create_begin(&mut self, kind: DrawingKind, options_json: Option<&str>) -> bool {
         self.invalidate_frame_drawings();
         let patch = match options_json {
@@ -7956,6 +8028,7 @@ impl ChartEngine {
             },
             None => None,
         };
+        self.show_drawing_layer_for_creation();
         let mut drawing = Drawing::new(0, kind, 0, Vec::new());
         if let Some(patch) = patch {
             drawing.apply_patch(patch);

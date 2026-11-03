@@ -6217,6 +6217,21 @@ impl AerisChart {
             .borrow_mut()
             .set_drawing_group_visibility(group_id, visible)
     }
+    /// Hide or show every drawing without changing any drawing's own visibility; view state,
+    /// never undo history or the drawings document. Returns whether the layer changed.
+    pub fn set_drawings_hidden(&mut self, hidden: bool) -> bool {
+        self.inner.borrow_mut().set_drawings_hidden(hidden)
+    }
+    pub fn drawings_hidden(&self) -> bool {
+        self.inner.borrow().drawings_hidden()
+    }
+    /// Show every drawing hidden on its own as one undo step; returns how many changed.
+    pub fn show_hidden_drawings(&mut self) -> u32 {
+        self.inner.borrow_mut().show_hidden_drawings()
+    }
+    pub fn hidden_drawing_count(&self) -> u32 {
+        self.inner.borrow().hidden_drawing_count()
+    }
     pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> u32 {
         self.inner
             .borrow_mut()
