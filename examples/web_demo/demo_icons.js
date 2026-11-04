@@ -5,6 +5,7 @@ import ChartCandlestickIcon from "./node_modules/@hugeicons/core-free-icons/dist
 import ChartHistogramIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/ChartHistogramIcon.js";
 import GridViewIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/GridViewIcon.js";
 import MagicWand01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/MagicWand01Icon.js";
+import MoreHorizontalIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/MoreHorizontalIcon.js";
 import Moon02Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/Moon02Icon.js";
 import NextIcon from "./node_modules/@hugeicons/core-free-icons/dist/esm/NextIcon.js";
 import PaintBrush01Icon from "./node_modules/@hugeicons/core-free-icons/dist/esm/PaintBrush01Icon.js";
@@ -30,6 +31,7 @@ const icons = {
   grid: GridViewIcon,
   lab: MagicWand01Icon,
   moon: Moon02Icon,
+  more: MoreHorizontalIcon,
   next: NextIcon,
   panel: PanelRightIcon,
   pause: PauseIcon,
@@ -74,7 +76,10 @@ hydrate_icons();
 const inspector = document.getElementById("inspector");
 const backdrop = document.getElementById("mobile_backdrop");
 const inspector_toggle = document.getElementById("inspector_toggle");
-const compact_layout = window.matchMedia("(max-width: 820px)");
+// Keep in step with the compact-layout media query in index.html.
+const compact_layout = window.matchMedia("(max-width: 820px), (max-height: 500px) and (pointer: coarse)");
+const more_toggle = document.getElementById("more_toggle");
+const header_tools = document.getElementById("header_tools");
 const control_jump = document.getElementById("control_jump");
 const panel_buttons = [...document.querySelectorAll("#tool_rail [data-panel-target]")];
 const panel_groups = [...document.querySelectorAll("#controls_strip [data-panel]")];
@@ -91,7 +96,13 @@ new ResizeObserver(([entry]) => {
   document.documentElement.style.setProperty("--demo-header-height", `${entry.target.getBoundingClientRect().height}px`);
 }).observe(document.getElementById("bar"));
 
+function set_more(open) {
+  header_tools.dataset.open = String(open);
+  more_toggle.setAttribute("aria-expanded", String(open));
+}
+
 function set_inspector(open) {
+  if (open) set_more(false);
   inspector.dataset.open = String(open);
   document.getElementById("workspace").dataset.inspectorOpen = String(open);
   backdrop.dataset.open = String(open);
@@ -111,7 +122,21 @@ backdrop.addEventListener("click", () => {
   inspector_toggle.focus();
 });
 set_inspector(!compact_layout.matches);
-compact_layout.addEventListener("change", (event) => set_inspector(!event.matches));
+compact_layout.addEventListener("change", (event) => {
+  set_more(false);
+  set_inspector(!event.matches);
+});
+
+more_toggle.addEventListener("click", () => set_more(header_tools.dataset.open !== "true"));
+document.addEventListener("pointerdown", (event) => {
+  if (header_tools.dataset.open === "true" && !header_tools.contains(event.target) && !more_toggle.contains(event.target)) {
+    set_more(false);
+  }
+});
+// Picking a drawing tool on a compact screen hands the chart back so the user can draw at once.
+document.getElementById("drawings_group").addEventListener("click", (event) => {
+  if (compact_layout.matches && event.target.closest("[data-tool]")) set_inspector(false);
+});
 
 // One panel at a time: each rail button shows only its own control groups.
 function show_panel(name, { open = true } = {}) {
@@ -130,12 +155,25 @@ for (const button of panel_buttons) {
   const label = document.createElement("span");
   label.textContent = button.getAttribute("aria-label");
   button.appendChild(label);
-  button.addEventListener("click", () => show_panel(button.dataset.panelTarget));
+  button.addEventListener("click", () => {
+    // On compact screens the current panel's button toggles the sheet closed.
+    if (compact_layout.matches && inspector.dataset.open === "true" && button.getAttribute("aria-current") === "true") {
+      set_inspector(false);
+      return;
+    }
+    show_panel(button.dataset.panelTarget);
+  });
 }
 const requested_panel = new URLSearchParams(location.search).get("panel");
 show_panel(requested_panel in panels ? requested_panel : "indicators", { open: false });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && header_tools.dataset.open === "true") {
+    set_more(false);
+    more_toggle.focus();
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && compact_layout.matches && inspector.dataset.open === "true") {
     set_inspector(false);
     inspector_toggle.focus();

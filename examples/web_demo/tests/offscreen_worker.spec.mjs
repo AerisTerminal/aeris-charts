@@ -221,8 +221,9 @@ test("worker touch long press enters engine crosshair tracking and exits on the 
   const pointer = (type, x, pointer_id) => ({
     type: "pointer", event: { type, x, y: 150, pointer_id, pointer_type: "touch", buttons: type === "move" ? 1 : 0 },
   });
-  await send(page, pointer("down", 250, 41));
-  await page.waitForTimeout(280);
+  const pressed = await send(page, pointer("down", 250, 41));
+  expect(pressed.crosshair).toBeNull();
+  await page.waitForTimeout(480);
   const held = await send(page, { type: "state" });
   expect(held.crosshair).not.toBeNull();
   await send(page, pointer("move", 280, 41));

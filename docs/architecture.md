@@ -894,10 +894,14 @@ Browser and worker mouse, pen, and touch samples enter the engine input controll
 Both adapters use the same touch pinch membership, zoom, cancellation, and primary-finger
 continuation. The browser keeps only DOM touch capture and page-scroll direction arbitration;
 yielding to page scroll cancels the controller press immediately.
-The controller also schedules a stationary pane touch at 240 ms through its wake deadline.
-On that wake it enters crosshair tracking, keeps the crosshair anchored through one-finger
-motion without panning, and applies the configured next-tap or touch-end exit rule. Browser and
-worker hosts schedule this engine deadline and call `input_tick` when it arrives.
+A finger has no hover: a touch tap, pan, or the finger left after a pinch on a financial-time pane
+never shows the crosshair (the replay trim cursor still follows the finger, and general panes keep
+their touch hover). The controller schedules a stationary pane touch at 400 ms
+(`TOUCH_LONG_PRESS_MS`, the platform long-press convention) through its wake deadline. On that
+wake it enters crosshair tracking, keeps the crosshair anchored through one-finger motion without
+panning, keeps it after the finger lifts, moves it by the travel of a later one-finger drag, and
+applies the configured next-tap or touch-end exit rule. Browser and worker hosts schedule this
+engine deadline and call `input_tick` when it arrives.
 For consumed wheel input, the controller uses the wheel event's position to promote hover and
 resolve the cursor; the browser applies that cursor after the event even without pointer motion.
 The hosts supply CSS-logical coordinates, pointer identity and device, and configured interaction
@@ -1948,7 +1952,7 @@ timer, or DOM node exactly once; none of that runtime state enters engine persis
 
 The engine input controller owns the crosshair-action chip as a press target: hovering it resolves the pointer cursor, its press prevents chart pan and selection underneath, and an unmoved release within the hit area emits the shared action request. Pointer cancellation discards the pending press. The GPUI demo shows the request's pane and price in its status line.
 
-Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered or dragged. Placing a drawing (an armed tool, a pending multi-point creation, or a freehand brush stroke) and a following Shift-click measure are the exceptions: they read the pointer through the crosshair, so the crosshair stays visible even over other objects. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor.
+Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered or dragged. Placing a drawing (an armed tool, a pending multi-point creation, or a freehand brush stroke) and a following Shift-click measure are the exceptions: they read the pointer through the crosshair, so the crosshair stays visible even over other objects. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor. When the newest pointer sample is a touch and a drawing is being placed, the shared frame paints the crosshair as a touch reticle: the theme primary colors its lines and axis tags, and a primary dot with a canvas-colored ring marks the snapped point the anchor lands on. A change of input device invalidates the overlay and axis layers so every executor repaints the same reticle.
 
 ## Performance contract
 

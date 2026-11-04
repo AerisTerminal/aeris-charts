@@ -18,8 +18,10 @@ use crate::general_series::GeneralBrushSelection;
 /// Hosts that arbitrate page scrolling before the engine sees a gesture wait for this distance.
 pub const CLICK_SLOP_MANHATTAN: f64 = 5.0;
 const DOUBLE_CLICK_WINDOW_MS: f64 = 500.0;
-/// A stationary pane touch enters crosshair inspection after this host-clock interval.
-pub const TOUCH_LONG_PRESS_MS: f64 = 240.0;
+/// A stationary pane touch enters crosshair inspection after this host-clock interval. It matches
+/// the platform long-press convention (Android 400 ms), so a finger that rests briefly before a
+/// swipe still pans instead of opening the crosshair.
+pub const TOUCH_LONG_PRESS_MS: f64 = 400.0;
 /// CSS px hit tolerance around a pane boundary.
 pub const PANE_SEPARATOR_HIT: f64 = 4.0;
 /// Hover dwell before a trading control reveals its action tooltip. The engine owns no clock, so
@@ -463,6 +465,8 @@ impl PressMode {
 struct Press {
     id: u32,
     mode: PressMode,
+    /// A touch press never hovers: its pane tap or pan shows no crosshair until a long press.
+    touch: bool,
     double_candidate: bool,
     start: (f64, f64),
     moved: bool,
@@ -526,6 +530,8 @@ pub(crate) struct InputController {
     touch_longpress_deadline_ms: Option<f64>,
     touch_tracking: Option<TouchTracking>,
     hover: ChartHover,
+    /// Device of the newest pointer sample; touch placement paints the drawing reticle.
+    device: InputDevice,
     /// The pointer crosshair was published to linked charts, so leaving must clear it there.
     crosshair_published: bool,
     drawing_edit: Option<DrawingEditSession>,
@@ -813,6 +819,24 @@ impl ChartEngine {
         changed
     }
 
+    fn note_input_device(&mut self, device: InputDevice) {
+        if self.input.device != device {
+            self.input.device = device;
+            // The touch drawing reticle recolors the crosshair lines and axis tags.
+            self.invalidate_frame_overlay();
+            self.invalidate_frame_axis();
+        }
+    }
+
+    /// Whether the crosshair paints as the touch drawing reticle: accent lines, accent axis tags,
+    /// and a dot at the point the next anchor or stroke sample lands on.
+    pub(crate) fn touch_drawing_reticle(&self) -> bool {
+        self.input.device == InputDevice::Touch
+            && (self.active_drawing_tool().is_some()
+                || self.pending_drawing().is_some()
+                || self.brush_capture().is_some())
+    }
+
     fn arm_touch_tracking(&mut self) -> bool {
         let Some(press) = self.input.press.as_mut() else {
             return false;
@@ -891,6 +915,7 @@ impl ChartEngine {
     }
 
     fn handle_pointer_down(&mut self, input: PointerInput, click_count: u32) {
+        self.note_input_device(input.device);
         // A pinch has exactly two members. After its primary leaves, ignore new touches until
         // the remaining member lifts too; it cannot silently become a fresh press.
         if input.device == InputDevice::Touch
@@ -940,6 +965,7 @@ impl ChartEngine {
                 self.input.press = Some(Press {
                     id: input.id,
                     mode: PressMode::TouchTracking,
+                    touch: true,
                     double_candidate: false,
                     start: (x, y),
                     moved: true,
@@ -966,6 +992,7 @@ impl ChartEngine {
         let press = |mode, double_candidate| Press {
             id: input.id,
             mode,
+            touch: input.device == InputDevice::Touch,
             double_candidate,
             start: (x, y),
             moved: false,
@@ -1028,6 +1055,7 @@ impl ChartEngine {
     }
 
     fn handle_pointer_move(&mut self, input: PointerInput, primary_pressed: bool) {
+        self.note_input_device(input.device);
         if input.device == InputDevice::Touch
             && self.input.resolver.state() == GestureState::Pinching
         {
@@ -1211,6 +1239,7 @@ impl ChartEngine {
     }
 
     fn handle_pointer_up(&mut self, input: PointerInput) {
+        self.note_input_device(input.device);
         if input.device == InputDevice::Touch
             && self.input.resolver.state() == GestureState::Pinching
         {
@@ -1239,6 +1268,7 @@ impl ChartEngine {
                         price_pan,
                         panning: false,
                     },
+                    touch: true,
                     double_candidate: false,
                     start: (update.x, update.y),
                     moved: true,
@@ -1567,6 +1597,7 @@ impl ChartEngine {
     }
 
     fn handle_wheel(&mut self, sample: WheelSample) -> bool {
+        self.note_input_device(InputDevice::Mouse);
         let options = self.input.options;
         let intent = sample.intent(options.wheel_behavior);
         // Auto pans only on the horizontal axis; explicit modes pan along the dominant axis.
@@ -2884,6 +2915,20 @@ impl ChartEngine {
             self.input.press.map(|press| press.mode),
             Some(PressMode::Separator { .. } | PressMode::TimeAxis | PressMode::PriceAxis { .. })
         ) {
+            self.clear_pointer_hover();
+            return;
+        }
+        // A finger has no hover. Tapping, panning, or the finger left after a pinch on a
+        // financial pane shows no crosshair; inspection starts only from a long press. The replay
+        // trim cursor is the selection feedback, so it still follows the finger.
+        if let Some(press) = self.input.press
+            && press.touch
+            && matches!(press.mode, PressMode::Pane { .. })
+            && !self.replay_selecting()
+            && self
+                .pane_at_y(press.start.1)
+                .is_some_and(|pane| self.pane_uses_financial_time(pane))
+        {
             self.clear_pointer_hover();
             return;
         }
@@ -5397,21 +5442,128 @@ mod tests {
         };
         chart.input_pointer_down(touch(1, x, 100.0), 1);
         assert!(chart.input_touch_page_scroll_candidate(1));
-        assert_eq!(chart.input_wake_deadline_ms(), Some(340.0));
-        assert!(!chart.input_tick(339.0));
-        assert!(chart.input_tick(340.0));
+        assert_eq!(chart.crosshair, None, "a held finger has no crosshair yet");
+        assert_eq!(chart.input_wake_deadline_ms(), Some(500.0));
+        assert!(!chart.input_tick(499.0));
+        assert_eq!(chart.crosshair, None);
+        assert!(chart.input_tick(500.0));
+        assert_eq!(chart.crosshair, Some((x, y)));
         assert!(!chart.input_touch_page_scroll_candidate(1));
         let scroll = chart.scroll_position();
-        chart.input_pointer_move(touch(1, x + 20.0, 350.0), true);
+        chart.input_pointer_move(touch(1, x + 20.0, 510.0), true);
         assert_eq!(chart.scroll_position(), scroll);
         assert_eq!(chart.crosshair, Some((x + 20.0, y)));
-        chart.input_pointer_up(touch(1, x + 20.0, 360.0));
-        assert_eq!(chart.crosshair, Some((x + 20.0, y)));
+        chart.input_pointer_up(touch(1, x + 20.0, 520.0));
+        assert_eq!(
+            chart.crosshair,
+            Some((x + 20.0, y)),
+            "the crosshair stays after lifting"
+        );
         assert!(chart.take_input_events().is_empty());
-        chart.input_pointer_down(touch(2, x + 30.0, 400.0), 1);
-        chart.input_pointer_up(touch(2, x + 30.0, 410.0));
+        // A later drag moves the kept crosshair by the finger's travel, without panning.
+        chart.input_pointer_down(touch(2, x + 100.0, 600.0), 1);
+        chart.input_pointer_move(touch(2, x + 90.0, 610.0), true);
+        assert_eq!(chart.crosshair, Some((x + 10.0, y)));
+        assert_eq!(chart.scroll_position(), scroll);
+        chart.input_pointer_up(touch(2, x + 90.0, 620.0));
+        assert_eq!(chart.crosshair, Some((x + 10.0, y)));
+        chart.input_pointer_down(touch(3, x + 30.0, 700.0), 1);
+        chart.input_pointer_up(touch(3, x + 30.0, 710.0));
         assert_eq!(chart.crosshair, None);
         assert!(chart.take_input_events().is_empty());
+    }
+
+    #[test]
+    fn touch_taps_pans_and_pinches_never_show_the_crosshair() {
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        let touch = |id, x, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let scroll = chart.scroll_position();
+        chart.input_pointer_down(touch(1, x, 100.0), 1);
+        assert_eq!(chart.crosshair, None);
+        chart.input_pointer_move(touch(1, x + 40.0, 150.0), true);
+        chart.input_pointer_move(touch(1, x + 80.0, 200.0), true);
+        assert_ne!(chart.scroll_position(), scroll, "the finger pans");
+        assert_eq!(chart.crosshair, None, "a pan shows no crosshair");
+        chart.input_pointer_up(touch(1, x + 80.0, 210.0));
+        assert_eq!(chart.crosshair, None);
+
+        chart.input_pointer_down(touch(2, x, 1_000.0), 1);
+        chart.input_pointer_up(touch(2, x, 1_050.0));
+        assert_eq!(chart.crosshair, None, "a tap shows no crosshair");
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .any(|event| matches!(event, ChartInputEvent::Click { .. })),
+            "the tap is still a click"
+        );
+
+        chart.input_pointer_down(touch(3, x, 2_000.0), 1);
+        chart.input_pointer_down(touch(4, x + 60.0, 2_010.0), 1);
+        chart.input_pointer_up(touch(4, x + 60.0, 2_020.0));
+        chart.input_pointer_move(touch(3, x + 30.0, 2_030.0), true);
+        assert_eq!(
+            chart.crosshair, None,
+            "the finger left after a pinch only pans"
+        );
+        chart.input_pointer_up(touch(3, x + 30.0, 2_040.0));
+        assert_eq!(chart.crosshair, None);
+    }
+
+    #[test]
+    fn touch_drawing_paints_an_accent_reticle_and_mouse_drawing_does_not() {
+        let primary = Color::parse_css(aeris_charts_core::style::LIGHT_PRIMARY_CSS).unwrap();
+        let reticle = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let main = &frame.panes[0].main;
+            let lines = main
+                .iter()
+                .filter(|primitive| {
+                    matches!(primitive, Prim::VLine { color, .. } | Prim::HLine { color, .. }
+                        if *color == primary)
+                })
+                .count();
+            let dot = main.iter().any(
+                |primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == primary),
+            );
+            (lines, dot)
+        };
+        let mut chart = chart();
+        let (x, y) = empty_pane_point(&chart);
+        chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None);
+        chart.input_pointer_move(at(x, y), false);
+        assert!(chart.crosshair.is_some());
+        assert_eq!(
+            reticle(&mut chart),
+            (0, false),
+            "the mouse keeps the plain crosshair"
+        );
+
+        let touch = |timestamp_ms| PointerInput {
+            id: 9,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        chart.input_pointer_down(touch(100.0), 1);
+        assert_eq!(
+            reticle(&mut chart),
+            (2, true),
+            "touch placement paints accent lines and the center dot"
+        );
+        chart.input_pointer_up(touch(110.0));
+        chart.input_pointer_move(at(x + 20.0, y), false);
+        assert_eq!(reticle(&mut chart), (0, false));
     }
 
     #[test]
@@ -5433,11 +5585,11 @@ mod tests {
         chart.input_pointer_down(touch(x, 100.0), 1);
         chart.input_pointer_move(touch(x + 8.0, 120.0), true);
         assert_eq!(chart.input_wake_deadline_ms(), None);
-        assert!(!chart.input_tick(340.0));
-        chart.input_pointer_up(touch(x + 8.0, 350.0));
-        chart.input_pointer_down(touch(x, 400.0), 1);
-        assert!(chart.input_tick(640.0));
-        chart.input_pointer_up(touch(x, 650.0));
+        assert!(!chart.input_tick(500.0));
+        chart.input_pointer_up(touch(x + 8.0, 510.0));
+        chart.input_pointer_down(touch(x, 600.0), 1);
+        assert!(chart.input_tick(1000.0));
+        chart.input_pointer_up(touch(x, 1010.0));
         assert_eq!(chart.crosshair, None);
     }
 

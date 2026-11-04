@@ -417,7 +417,8 @@ test("Touch Events use the controller long-press deadline and next-tap exit", as
     };
     const start = touch(41, x);
     send("touchstart", [start], [start]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    const beforeLongPress = crosshair();
+    await new Promise((resolve) => setTimeout(resolve, 500));
     const scroll = chart.wasm.scroll_position();
     const moved = touch(41, x + 30);
     send("touchmove", [moved], [moved]);
@@ -428,9 +429,10 @@ test("Touch Events use the controller long-press deadline and next-tap exit", as
     const next = touch(42, x + 50);
     send("touchstart", [next], [next]);
     send("touchend", [], [next]);
-    return { tracked, afterEnd, afterTap: crosshair(), scroll, afterMove,
+    return { beforeLongPress, tracked, afterEnd, afterTap: crosshair(), scroll, afterMove,
       localX: x + 30 - rect.left - chart.wasm.pane_left(), localY: y - rect.top };
   });
+  expect(Number.isNaN(result.beforeLongPress[0])).toBe(true);
   expect(result.tracked[0]).toBeCloseTo(result.localX, 5);
   expect(result.tracked[1]).toBeCloseTo(result.localY, 5);
   expect(result.afterMove).toBeCloseTo(result.scroll, 8);

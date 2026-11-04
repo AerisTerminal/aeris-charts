@@ -2965,6 +2965,7 @@ impl ChartEngine {
         let options = self.options.get();
         let metrics = self.axis_metrics();
         let ch = &options.crosshair;
+        let reticle = self.touch_drawing_reticle();
         if ch.horz_line.label_visible
             && !trim
             && self.crosshair_shows_price()
@@ -3012,12 +3013,18 @@ impl ChartEngine {
                         strip_x,
                     )
                 };
-                let label_bg = css_color(&ch.horz_line.label_background_color, CROSSHAIR_LABEL_BG);
+                let (label_bg, label_text) = if reticle {
+                    self.theme_primary_colors()
+                } else {
+                    let background =
+                        css_color(&ch.horz_line.label_background_color, CROSSHAIR_LABEL_BG);
+                    (background, self.axis_label_text_color(background))
+                };
                 labels.push(AxisLabel {
                     text,
                     x: label_x,
                     y: snap_y,
-                    color: self.axis_label_text_color(label_bg),
+                    color: label_text,
                     align,
                     midpoint: AxisTextMidpoint::Label,
                     font_scale: AXIS_FONT_SCALE,
@@ -3052,8 +3059,8 @@ impl ChartEngine {
                     self.pane_left,
                     (self.pane_left + self.pane_w - width).max(self.pane_left),
                 );
-                let (label_bg, label_text) = if trim {
-                    self.replay_trim_colors()
+                let (label_bg, label_text) = if trim || reticle {
+                    self.theme_primary_colors()
                 } else {
                     let background =
                         css_color(&ch.vert_line.label_background_color, CROSSHAIR_LABEL_BG);

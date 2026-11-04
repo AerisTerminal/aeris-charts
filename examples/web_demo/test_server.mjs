@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const benchmark_root = resolve(root, "..", "..", "benchmarks");
 const port = Number.parseInt(process.env.AERIS_CHARTS_TEST_PORT ?? "4174", 10);
+// Loopback by default; set AERIS_CHARTS_TEST_HOST=0.0.0.0 to open the demo from a phone on the same network.
+const host = process.env.AERIS_CHARTS_TEST_HOST ?? "127.0.0.1";
 // The complete-build server answers the shared bundle path with the complete bundle, so every page
 // and spec runs unchanged against `@aeristerminal/aeris-charts/complete`.
 const complete_build = process.env.AERIS_CHARTS_BUILD === "complete";
@@ -61,8 +63,8 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Aeris browser-test server (${complete_build ? "complete" : "standard"} build) listening on http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`Aeris browser-test server (${complete_build ? "complete" : "standard"} build) listening on http://${host}:${port}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

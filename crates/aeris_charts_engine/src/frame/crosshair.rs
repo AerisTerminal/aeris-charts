@@ -9,6 +9,9 @@ const REPLAY_TRIM_LINE_WIDTH: f64 = 2.0;
 const REPLAY_TRIM_BADGE_RADIUS: f64 = 13.0;
 /// CSS px edge of the scissors icon inside the badge.
 const REPLAY_TRIM_ICON_SIZE: f64 = 16.0;
+/// CSS px radius of the touch drawing reticle's center dot, and of the canvas ring around it.
+const TOUCH_RETICLE_DOT_RADIUS: f64 = 4.0;
+const TOUCH_RETICLE_RING_WIDTH: f64 = 1.5;
 
 impl ChartEngine {
     /// Interactive chart objects own pointer feedback while they are hovered or manipulated.
@@ -61,8 +64,16 @@ impl ChartEngine {
             return;
         }
         let ch = &self.options.get().crosshair;
-        let vert_color = css_color(&ch.vert_line.color, CROSSHAIR_COLOR);
-        let horz_color = css_color(&ch.horz_line.color, CROSSHAIR_COLOR);
+        let reticle = self.touch_drawing_reticle();
+        let (vert_color, horz_color) = if reticle {
+            let primary = self.theme_primary_colors().0;
+            (primary, primary)
+        } else {
+            (
+                css_color(&ch.vert_line.color, CROSSHAIR_COLOR),
+                css_color(&ch.horz_line.color, CROSSHAIR_COLOR),
+            )
+        };
         // reference lineWidth is in CSS px; generalize the crisp "1 CSS px" rule (grid uses the same
         // `max(1, floor(ratio))`) so width 1 keeps today's output. Vertical lines take the
         // horizontal ratio for thickness, horizontal lines the vertical ratio. Style is the
@@ -179,11 +190,34 @@ impl ChartEngine {
                 stroke: fill,
             });
         }
+        // The reticle's dot marks the exact snapped point a touch placement lands on; it paints
+        // last so no series marker covers it.
+        if reticle {
+            let cx = (snapped_x * hpr) as f32;
+            let cy = (snap_y * vpr) as f32;
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius: ((TOUCH_RETICLE_DOT_RADIUS + TOUCH_RETICLE_RING_WIDTH) * vpr) as f32,
+                fill: background,
+                stroke_width: 0.0,
+                stroke: background,
+            });
+            let primary = self.theme_primary_colors().0;
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius: (TOUCH_RETICLE_DOT_RADIUS * vpr) as f32,
+                fill: primary,
+                stroke_width: 0.0,
+                stroke: primary,
+            });
+        }
     }
 
-    /// The theme primary and its foreground, shared by the trim line, its time-axis label, and
-    /// the scissors badge so the cursor reads as one object.
-    pub(super) fn replay_trim_colors(&self) -> (Color, Color) {
+    /// The theme primary and its foreground. The replay trim cursor and the touch drawing reticle
+    /// share them across lines, axis tags, and badges so each cursor reads as one object.
+    pub(super) fn theme_primary_colors(&self) -> (Color, Color) {
         let (primary, foreground) = match self.theme {
             crate::ChartTheme::Light => (
                 aeris_charts_core::style::LIGHT_PRIMARY_CSS,
@@ -219,7 +253,7 @@ impl ChartEngine {
             return;
         };
         let pane = &self.panes[pane_index];
-        let (primary, foreground) = self.replay_trim_colors();
+        let (primary, foreground) = self.theme_primary_colors();
         let background = css_color(
             &self.options.get().layout.background.color,
             Color::rgb(0xff, 0xff, 0xff),
