@@ -21,7 +21,7 @@
 //! inside it to share one order — which would flatten the chart's z-order. Clipping therefore goes
 //! through `with_content_mask`, which affects masking only.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use gpui::{
     App, Background, Bounds, ContentMask, Font, FontStyle, FontWeight, Hsla, Path, Pixels,
@@ -220,7 +220,7 @@ pub fn text_cap_centerer(
 }
 
 fn measure_with(
-    text_system: &Arc<gpui::WindowTextSystem>,
+    text_system: &Rc<gpui::WindowTextSystem>,
     text: &str,
     family: &str,
     size: f32,

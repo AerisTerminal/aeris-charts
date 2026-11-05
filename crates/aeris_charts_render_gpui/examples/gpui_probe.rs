@@ -42,7 +42,7 @@ use aeris_charts_render_gpui::{
 use gpui::{
     AnyElement, App, Bounds, Context, CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent,
     KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PinchEvent, Render, ScrollHandle, ScrollWheelEvent, Subscription, Task, Window, WindowBounds,
+    PinchEvent, Render, ScrollEvent, ScrollHandle, Subscription, Task, Window, WindowBounds,
     WindowOptions, canvas, div, prelude::*, px, relative, rgb, size,
 };
 use gpui_platform::application;
@@ -1526,7 +1526,7 @@ impl Probe {
 
     fn on_scroll_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1660,7 +1660,7 @@ impl Render for Probe {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
+            .on_scroll(cx.listener(Self::on_scroll_wheel))
             .on_pinch(cx.listener(Self::on_pinch))
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_key_down(cx.listener(Self::on_key_down))

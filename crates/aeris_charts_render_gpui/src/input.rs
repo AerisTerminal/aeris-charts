@@ -15,7 +15,7 @@ use aeris_charts_engine::{
 use gpui::{
     App, Bounds, ClipboardItem, CursorStyle, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
     ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Pixels, Point,
-    ScrollDelta, ScrollWheelEvent, Window, point,
+    ScrollDelta, ScrollEvent, Window, point,
 };
 
 use crate::backend::{text_cap_centerer, text_measurer};
@@ -141,7 +141,7 @@ impl GpuiChartInput {
     }
 
     /// Returns whether the chart consumed the wheel.
-    pub fn scroll_wheel(&self, engine: &mut ChartEngine, event: &ScrollWheelEvent) -> bool {
+    pub fn scroll_wheel(&self, engine: &mut ChartEngine, event: &ScrollEvent) -> bool {
         let (x, y) = self.pane_point(engine, event.position);
         // GPUI reports wheel-up as positive y but its horizontal sign is opposite the browser's.
         // Preserve raw line/pixel units for the engine's shared normalization rule.
@@ -624,14 +624,14 @@ mod wheel_tests {
                 chart.time_scale.set_width(400.0);
                 chart.fit_content();
             }
-            let event = ScrollWheelEvent {
+            let event = ScrollEvent {
                 position: point(px(200.0), px(100.0)),
                 delta,
                 modifiers: Modifiers {
                     shift: true,
                     ..Modifiers::default()
                 },
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             };
             let start = actual.time_scale.right_offset();
             assert!(adapter.scroll_wheel(&mut actual, &event));
@@ -678,10 +678,10 @@ mod wheel_tests {
                 chart.time_scale.set_width(400.0);
                 chart.fit_content();
             }
-            let native_event = ScrollWheelEvent {
+            let native_event = ScrollEvent {
                 position: point(px(200.0), px(100.0)),
                 delta: ScrollDelta::Lines(point(0.0, 3.0)),
-                ..ScrollWheelEvent::default()
+                ..ScrollEvent::default()
             };
             assert!(adapter.scroll_wheel(&mut native, &native_event));
             assert!(browser.input_wheel(WheelSample {
@@ -716,12 +716,12 @@ mod key_tests {
                 is_held: false,
                 prefer_character_input: false,
             };
-            let key = chart_key_down(&event).unwrap_or_else(|| panic!("{keystroke}"));
+            let key = chart_key_down(&event).unwrap_or_else(|| panic!("{keystroke:?}"));
             let binding = ChartKeyBinding {
                 key,
                 modifiers: input_modifiers(&keystroke.modifiers),
             };
-            assert!(CHART_KEY_BINDINGS.contains(&binding), "{keystroke}");
+            assert!(CHART_KEY_BINDINGS.contains(&binding), "{keystroke:?}");
         }
         for binding in CHART_KEY_BINDINGS {
             assert!(
