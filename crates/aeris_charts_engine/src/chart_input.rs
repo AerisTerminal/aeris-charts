@@ -436,6 +436,10 @@ enum PressMode {
     TextEditor,
     /// A press with no gesture: inert chrome or an already-handled double-click.
     Inert,
+    /// A touch press while a non-freehand drawing tool is armed: the finger only aims the
+    /// visible reticle by its own delta, and a tap commits the next anchor at the reticle,
+    /// never under the finger (TradingView mobile placement).
+    TouchReticle,
 }
 
 impl PressMode {
@@ -450,7 +454,8 @@ impl PressMode {
             | Self::DrawingCreation { .. }
             | Self::DrawingDrag
             | Self::DrawingMarquee
-            | Self::TextEditor => InputTarget::Drawing,
+            | Self::TextEditor
+            | Self::TouchReticle => InputTarget::Drawing,
             Self::Pane { .. }
             | Self::TouchTracking
             | Self::DeltaTooltip
@@ -529,6 +534,9 @@ pub(crate) struct InputController {
     tooltip_deadline_ms: Option<f64>,
     touch_longpress_deadline_ms: Option<f64>,
     touch_tracking: Option<TouchTracking>,
+    /// The reticle position when the current touch drawing press began; the drag moves the
+    /// reticle by the finger's delta from this base instead of jumping to the finger.
+    touch_reticle_base: Option<(f64, f64)>,
     hover: ChartHover,
     /// Device of the newest pointer sample; touch placement paints the drawing reticle.
     device: InputDevice,
@@ -837,6 +845,51 @@ impl ChartEngine {
                 || self.brush_capture().is_some())
     }
 
+    /// The point the next touch drawing anchor lands on: the visible reticle, or the center
+    /// of the tool's pane before the reticle first appears.
+    fn touch_reticle_position(&self) -> (f64, f64) {
+        if let Some(crosshair) = self.crosshair {
+            return crosshair;
+        }
+        let pane = self.active_drawing_tool_pane().unwrap_or(0);
+        let (top, height) = self
+            .panes
+            .get(pane)
+            .map_or((0.0, self.pane_h), |pane| (pane.top, pane.height));
+        (self.pane_w * 0.5, top + height * 0.5)
+    }
+
+    /// Touch has no hover, so an armed tool shows the drawing reticle at once and disarming
+    /// hides it again: touch placement must never happen at an invisible point. No-ops for
+    /// mouse and pen, whose hover already shows where the anchor lands.
+    pub(crate) fn sync_touch_drawing_reticle(&mut self) {
+        if self.input.device != InputDevice::Touch {
+            return;
+        }
+        if self.active_drawing_tool().is_some() {
+            let (x, y) = self.touch_reticle_position();
+            self.set_crosshair_at(x, y);
+        } else {
+            self.clear_crosshair_at();
+        }
+        self.invalidate_frame_overlay();
+        self.invalidate_frame_axis();
+    }
+
+    /// Hover after a touch release: the reticle stays while a tool is armed or a creation is
+    /// pending, so the next tap commits at the point the user can still see.
+    fn finish_touch_release_hover(&mut self, x: f64, y: f64, now_ms: f64) {
+        if self.touch_drawing_reticle() {
+            let (rx, ry) = self.touch_reticle_position();
+            self.input.pointer = Some((rx, ry));
+            self.refresh_pointer_hover(rx, ry, now_ms);
+        } else {
+            self.refresh_pointer_hover(x, y, now_ms);
+            self.input.pointer = None;
+            self.clear_pointer_hover();
+        }
+    }
+
     fn arm_touch_tracking(&mut self) -> bool {
         let Some(press) = self.input.press.as_mut() else {
             return false;
@@ -952,30 +1005,36 @@ impl ChartEngine {
                 .touch_tracking
                 .filter(|state| state.active_id.is_none())
             {
-                self.stop_input_motion();
-                self.input
-                    .resolver
-                    .pointer_down(Self::mouse_sample(input, InputTarget::Pane));
-                self.input.resolver.long_press(input.id);
-                tracking.base_anchor = tracking.anchor;
-                tracking.start = (x, y);
-                tracking.active_id = Some(input.id);
-                tracking.exit_on_release = true;
-                self.input.touch_tracking = Some(tracking);
-                self.input.press = Some(Press {
-                    id: input.id,
-                    mode: PressMode::TouchTracking,
-                    touch: true,
-                    double_candidate: false,
-                    start: (x, y),
-                    moved: true,
-                    text_press_selected: None,
-                });
-                self.input.pointer = Some((x, y));
-                self.input.last_click = None;
-                self.input.frame_dirty = true;
-                self.refresh_input_cursor();
-                return;
+                if self.touch_drawing_reticle() {
+                    // A tool armed over a dormant inspection session: this touch aims the
+                    // drawing reticle instead of resuming tracking.
+                    self.input.touch_tracking = None;
+                } else {
+                    self.stop_input_motion();
+                    self.input
+                        .resolver
+                        .pointer_down(Self::mouse_sample(input, InputTarget::Pane));
+                    self.input.resolver.long_press(input.id);
+                    tracking.base_anchor = tracking.anchor;
+                    tracking.start = (x, y);
+                    tracking.active_id = Some(input.id);
+                    tracking.exit_on_release = true;
+                    self.input.touch_tracking = Some(tracking);
+                    self.input.press = Some(Press {
+                        id: input.id,
+                        mode: PressMode::TouchTracking,
+                        touch: true,
+                        double_candidate: false,
+                        start: (x, y),
+                        moved: true,
+                        text_press_selected: None,
+                    });
+                    self.input.pointer = Some((x, y));
+                    self.input.last_click = None;
+                    self.input.frame_dirty = true;
+                    self.refresh_input_cursor();
+                    return;
+                }
             }
         } else {
             self.input.touch_tracking = None;
@@ -1043,6 +1102,10 @@ impl ChartEngine {
         .then_some(input.timestamp_ms + TOUCH_LONG_PRESS_MS);
         if matches!(mode, PressMode::Separator { .. }) {
             self.clear_pointer_hover();
+        } else if mode == PressMode::TouchReticle {
+            // The reticle, not the finger, is the drawing position.
+            let (rx, ry) = self.touch_reticle_position();
+            self.refresh_pointer_hover(rx, ry, input.timestamp_ms);
         } else {
             self.refresh_pointer_hover(x, y, input.timestamp_ms);
         }
@@ -1137,6 +1200,23 @@ impl ChartEngine {
                     tracking.anchor.1,
                     input.timestamp_ms,
                 );
+                self.refresh_input_cursor();
+            }
+            return;
+        }
+        if let Some(press) = self.input.press
+            && press.mode == PressMode::TouchReticle
+        {
+            if let Some(base) = self.input.touch_reticle_base {
+                // Aim the reticle by the finger's delta; it stays visible beside the finger
+                // and the pending preview follows it.
+                let reticle = (
+                    (base.0 + x - press.start.0).clamp(0.0, self.pane_w.max(0.0)),
+                    (base.1 + y - press.start.1).clamp(0.0, self.pane_h.max(0.0)),
+                );
+                self.input.pointer = Some(reticle);
+                self.drawing_tool_pointer_move(reticle.0, reticle.1, modifiers, false);
+                self.refresh_pointer_hover(reticle.0, reticle.1, input.timestamp_ms);
                 self.refresh_input_cursor();
             }
             return;
@@ -1369,18 +1449,42 @@ impl ChartEngine {
                 | PressMode::Alert
                 | PressMode::Separator { .. }
                 | PressMode::TouchTracking
+                | PressMode::TouchReticle
                 | PressMode::DeltaTooltip
                 | PressMode::GeneralBrush
                 | PressMode::GeneralLegend { .. }
                 | PressMode::TextEditor
                 | PressMode::Inert => {}
             }
+            self.input.touch_reticle_base = None;
             self.input.last_click = None;
-            self.input_double_click(self.region_at(x, y), input, press.text_press_selected);
+            // A double-tap while a sequence tool is armed finishes it at the reticle, not
+            // under the finger.
+            let double_input = if press.mode == PressMode::TouchReticle {
+                let (rx, ry) = self.touch_reticle_position();
+                PointerInput {
+                    x: rx,
+                    y: ry,
+                    ..input
+                }
+            } else {
+                input
+            };
+            self.input_double_click(
+                self.region_at(double_input.x, double_input.y),
+                double_input,
+                press.text_press_selected,
+            );
             self.apply_input_magnet();
             if input.device == InputDevice::Touch {
-                self.input.pointer = None;
-                self.clear_pointer_hover();
+                if self.touch_drawing_reticle() {
+                    let (rx, ry) = self.touch_reticle_position();
+                    self.input.pointer = Some((rx, ry));
+                    self.refresh_pointer_hover(rx, ry, input.timestamp_ms);
+                } else {
+                    self.input.pointer = None;
+                    self.clear_pointer_hover();
+                }
             } else {
                 self.refresh_pointer_hover(x, y, input.timestamp_ms);
             }
@@ -1422,6 +1526,25 @@ impl ChartEngine {
             PressMode::PriceAxis { pane, target } => self.price_axis_end_scale(pane, target),
             PressMode::Measure => {
                 self.measure_pointer_up(x, y, modifiers);
+            }
+            PressMode::TouchReticle => {
+                self.input.touch_reticle_base = None;
+                if !moved {
+                    // A tap commits the next anchor at the reticle; a drag only aimed it.
+                    let (rx, ry) = self.touch_reticle_position();
+                    let update = self.drawing_tool_pointer_down(rx, ry, modifiers);
+                    let committed_on_press = update.created.is_some();
+                    created_on_release |= committed_on_press;
+                    self.note_drawing_created(update.created);
+                    let update = self.drawing_tool_pointer_up(rx, ry, modifiers);
+                    created_on_release |= update.created.is_some();
+                    self.note_drawing_created(update.created);
+                    if !committed_on_press && update.created.is_none() {
+                        let update = self.drawing_tool_activate(rx, ry, modifiers);
+                        created_on_release |= update.created.is_some();
+                        self.note_drawing_created(update.created);
+                    }
+                }
             }
             PressMode::DrawingCreation {
                 capture,
@@ -1496,10 +1619,10 @@ impl ChartEngine {
             }
         }
         self.apply_input_magnet();
-        self.refresh_pointer_hover(x, y, input.timestamp_ms);
         if input.device == InputDevice::Touch {
-            self.input.pointer = None;
-            self.clear_pointer_hover();
+            self.finish_touch_release_hover(x, y, input.timestamp_ms);
+        } else {
+            self.refresh_pointer_hover(x, y, input.timestamp_ms);
         }
         if created_on_release {
             // The new drawing appeared under a stationary pointer. Promote it after the next
@@ -1514,6 +1637,12 @@ impl ChartEngine {
     /// measure stays on screen.
     pub fn input_pointer_leave(&mut self) {
         if self.input.press.is_some() || self.input.touch_tracking.is_some() {
+            return;
+        }
+        if self.touch_drawing_reticle() {
+            // The reticle is placement state, not hover: the finger leaving cannot dismiss it.
+            self.input.pointer = None;
+            self.input.tooltip_deadline_ms = None;
             return;
         }
         self.input.pointer = None;
@@ -2258,6 +2387,7 @@ impl ChartEngine {
                 PressMode::DrawingDrag
                     | PressMode::DrawingMarquee
                     | PressMode::DrawingCreation { .. }
+                    | PressMode::TouchReticle
             )
         ) {
             self.abandon_press();
@@ -2341,6 +2471,7 @@ impl ChartEngine {
 
     fn abandon_press_state(&mut self) {
         self.input.pending_capture = None;
+        self.input.touch_reticle_base = None;
         if let Some(press) = self.input.press.take() {
             match press.mode {
                 PressMode::Pane { price_pan, panning } => {
@@ -2485,6 +2616,19 @@ impl ChartEngine {
         }
         self.deactivate_trading_group();
         if tool_armed {
+            let freehand = self
+                .active_drawing_tool()
+                .is_some_and(|kind| kind.spec().placement.is_freehand());
+            if input.device == InputDevice::Touch && !freehand {
+                // Touch placement aims a visible reticle instead of committing under the
+                // finger: the press remembers the reticle, a drag moves it by the finger's
+                // delta, and a release tap commits at it. Freehand keeps direct capture —
+                // the stroke itself is its cursor.
+                let base = self.touch_reticle_position();
+                self.input.touch_reticle_base = Some(base);
+                self.set_crosshair_at(base.0, base.1);
+                return PressMode::TouchReticle;
+            }
             let update = self.drawing_tool_pointer_down(x, y, modifiers);
             self.note_drawing_created(update.created);
             return PressMode::DrawingCreation {
@@ -3022,6 +3166,7 @@ impl ChartEngine {
                 | PressMode::DrawingCreation { .. }
                 | PressMode::DrawingMarquee
                 | PressMode::TouchTracking
+                | PressMode::TouchReticle
                 | PressMode::DeltaTooltip
                 | PressMode::GeneralBrush => {
                     return ChartCursor::Crosshair;
@@ -5965,5 +6110,216 @@ mod tests {
         let point = chart.drawing_px(chart.drawing(anchored).unwrap()).unwrap()[0];
         assert!((point.0 - 210.0).abs() < 1e-4, "{point:?}");
         assert!((point.1 - 145.0).abs() < 1e-4, "{point:?}");
+    }
+
+    /// Touch placement follows the TradingView mobile model: the armed tool shows a reticle,
+    /// a drag only aims it by the finger's delta, and a tap commits at the reticle — never
+    /// under the finger.
+    #[test]
+    fn touch_armed_tool_shows_a_reticle_and_taps_commit_at_it() {
+        let touch = |id, x, y, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let mut reference = chart();
+        let mut chart = chart();
+        chart.note_input_device(InputDevice::Touch);
+        assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+        let pane = &chart.panes[0];
+        let center = (chart.pane_w * 0.5, pane.top + pane.height * 0.5);
+        assert_eq!(
+            chart.crosshair,
+            Some(center),
+            "arming on touch shows the reticle at the pane center"
+        );
+        assert!(chart.touch_drawing_reticle());
+
+        // A tap away from the reticle commits the first anchor AT the reticle.
+        let finger = (center.0 + 120.0, center.1 - 60.0);
+        chart.input_pointer_down(touch(1, finger.0, finger.1, 100.0), 1);
+        chart.input_pointer_up(touch(1, finger.0, finger.1, 110.0));
+        assert!(
+            chart.pending_drawing().is_some(),
+            "the tap placed the first anchor"
+        );
+        assert_eq!(chart.crosshair, Some(center), "the reticle stays visible");
+
+        // A drag aims the reticle by the finger's delta and commits nothing.
+        chart.input_pointer_down(touch(2, finger.0, finger.1, 200.0), 1);
+        chart.input_pointer_move(touch(2, finger.0 + 30.0, finger.1 + 20.0, 210.0), true);
+        chart.input_pointer_move(touch(2, finger.0 + 90.0, finger.1 + 70.0, 220.0), true);
+        let aimed = (center.0 + 90.0, center.1 + 70.0);
+        let cross = chart.crosshair.expect("the reticle tracks the drag");
+        assert!(
+            (cross.0 - aimed.0).abs() < 1e-9 && (cross.1 - aimed.1).abs() < 1e-9,
+            "the reticle moved by the finger delta: {cross:?} vs {aimed:?}"
+        );
+        chart.input_pointer_up(touch(2, finger.0 + 90.0, finger.1 + 70.0, 230.0));
+        assert!(
+            chart.pending_drawing().is_some(),
+            "the aim drag added no anchor"
+        );
+        assert!(
+            chart
+                .take_input_events()
+                .iter()
+                .all(|event| !matches!(event, ChartInputEvent::DrawingCreated(_))),
+            "aiming creates nothing"
+        );
+        assert_eq!(chart.crosshair, Some(aimed));
+
+        // The next tap commits the second anchor at the aimed reticle. The finished line
+        // matches a mouse line clicked at the two reticle positions exactly: no anchor ever
+        // landed under a finger.
+        chart.input_pointer_down(touch(3, 80.0, 130.0, 300.0), 1);
+        chart.input_pointer_up(touch(3, 80.0, 130.0, 310.0));
+        let [ChartInputEvent::DrawingCreated(id)] = chart.take_input_events()[..] else {
+            panic!("the second tap completed the line");
+        };
+        assert_eq!(chart.active_drawing_tool(), None, "one-shot tools disarm");
+        assert_eq!(
+            chart.crosshair, None,
+            "the reticle hides once the tool finishes"
+        );
+
+        assert!(reference.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+        click(&mut reference, center.0, center.1);
+        click(&mut reference, aimed.0, aimed.1);
+        let expected = reference
+            .drawing(reference.drawings()[0].id)
+            .unwrap()
+            .points
+            .clone();
+        assert_eq!(chart.drawing(id).unwrap().points, expected);
+    }
+
+    #[test]
+    fn touch_drawing_drag_only_aims_and_never_pans_or_commits() {
+        let touch = |id, x, y, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let mut chart = chart();
+        chart.note_input_device(InputDevice::Touch);
+        assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+        let reticle = chart.crosshair.expect("arming shows the reticle");
+        let scroll = chart.scroll_position();
+
+        chart.input_pointer_down(touch(1, 100.0, 100.0, 100.0), 1);
+        chart.input_pointer_move(touch(1, 140.0, 150.0, 110.0), true);
+        chart.input_pointer_move(touch(1, 180.0, 190.0, 120.0), true);
+        chart.input_pointer_up(touch(1, 180.0, 190.0, 130.0));
+
+        let cross = chart.crosshair.expect("the reticle stays after aiming");
+        assert!(
+            (cross.0 - (reticle.0 + 80.0)).abs() < 1e-9
+                && (cross.1 - (reticle.1 + 90.0)).abs() < 1e-9,
+            "the reticle moved by the finger delta: {cross:?}"
+        );
+        assert!(chart.drawings().is_empty() && chart.pending_drawing().is_none());
+        assert_eq!(
+            chart.scroll_position(),
+            scroll,
+            "an armed-tool drag never pans"
+        );
+        assert!(chart.take_input_events().is_empty());
+    }
+
+    #[test]
+    fn touch_sequence_tool_appends_at_the_reticle_and_double_tap_finishes() {
+        let touch = |id, x, y, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let mut reference = chart();
+        let mut chart = chart();
+        chart.note_input_device(InputDevice::Touch);
+        assert!(chart.set_drawing_tool(Some(DrawingKind::Path), None, None));
+        let first = chart.crosshair.expect("arming shows the reticle");
+
+        // Anchor one: tap. Anchor two: aim, then tap. Both land on reticle positions.
+        chart.input_pointer_down(touch(1, 90.0, 400.0, 100.0), 1);
+        chart.input_pointer_up(touch(1, 90.0, 400.0, 110.0));
+        chart.input_pointer_down(touch(2, 90.0, 400.0, 200.0), 1);
+        chart.input_pointer_move(touch(2, 150.0, 340.0, 210.0), true);
+        chart.input_pointer_up(touch(2, 150.0, 340.0, 220.0));
+        let second = chart
+            .crosshair
+            .expect("the reticle kept the aimed position");
+        chart.input_pointer_down(touch(3, 600.0, 60.0, 300.0), 1);
+        chart.input_pointer_up(touch(3, 600.0, 60.0, 310.0));
+        assert!(chart.drawing_create_active(), "two anchors are pending");
+
+        // A rapid second tap at the same spot is the double-tap: it finishes the sequence at
+        // the reticle and disarms, and the reticle hides.
+        chart.input_pointer_down(touch(4, 600.0, 60.0, 400.0), 2);
+        chart.input_pointer_up(touch(4, 600.0, 60.0, 410.0));
+        let events = chart.take_input_events();
+        let [ChartInputEvent::DrawingCreated(id)] = events[..] else {
+            panic!("the double-tap finished the path: {events:?}");
+        };
+        assert_eq!(chart.active_drawing_tool(), None);
+        assert_eq!(chart.crosshair, None);
+
+        assert!(reference.set_drawing_tool(Some(DrawingKind::Path), None, None));
+        reference.drawing_tool_activate(first.0, first.1, DrawingModifiers::default());
+        reference.drawing_tool_activate(second.0, second.1, DrawingModifiers::default());
+        reference.drawing_tool_activate(second.0, second.1, DrawingModifiers::default());
+        reference.drawing_tool_finish();
+        let expected = reference
+            .drawing(reference.drawings()[0].id)
+            .unwrap()
+            .points
+            .clone();
+        assert_eq!(
+            chart.drawing(id).unwrap().points,
+            expected,
+            "the double-tap adds the terminal anchor at the reticle, like a double-click"
+        );
+    }
+
+    #[test]
+    fn the_touch_reticle_survives_pointer_leave_and_hides_on_disarm() {
+        let touch = |id, x, y, timestamp_ms| PointerInput {
+            id,
+            device: InputDevice::Touch,
+            x,
+            y,
+            timestamp_ms,
+            ..PointerInput::default()
+        };
+        let mut chart = chart();
+        chart.note_input_device(InputDevice::Touch);
+        assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+        let reticle = chart.crosshair.expect("arming shows the reticle");
+        chart.input_pointer_down(touch(1, 120.0, 380.0, 100.0), 1);
+        chart.input_pointer_up(touch(1, 120.0, 380.0, 110.0));
+        chart.input_pointer_leave();
+        assert_eq!(
+            chart.crosshair,
+            Some(reticle),
+            "the reticle is placement state, not hover"
+        );
+
+        assert!(chart.cancel_drawing_tool());
+        assert_eq!(chart.crosshair, None, "disarming hides the reticle");
+
+        // Re-arming shows it again; a direct disarm hides it too.
+        assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, None));
+        assert!(chart.crosshair.is_some());
+        assert!(chart.set_drawing_tool(None, None, None));
+        assert_eq!(chart.crosshair, None);
     }
 }

@@ -7539,6 +7539,7 @@ impl ChartEngine {
             }),
             _ => None,
         };
+        self.sync_touch_drawing_reticle();
         true
     }
 
@@ -7633,6 +7634,7 @@ impl ChartEngine {
         if !kind.spec().placement.is_freehand() {
             self.drawing_controller.armed = None;
         }
+        self.sync_touch_drawing_reticle();
         DrawingCreationUpdate {
             consumed: true,
             changed: true,
@@ -7834,6 +7836,9 @@ impl ChartEngine {
         let pending = controller.pending.take().is_some();
         let brush = controller.brush.take().is_some();
         let measure = controller.measure.take().is_some();
+        if armed || pending || brush {
+            self.sync_touch_drawing_reticle();
+        }
         armed || pending || brush || measure
     }
 
