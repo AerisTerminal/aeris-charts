@@ -25,7 +25,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-11-01. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-11-07. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -40,7 +40,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
 | G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
 | G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
-| G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | Shared statistics, violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix |
+| G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | G12 |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
 | G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
 | G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
@@ -55,9 +55,11 @@ Notes:
   because they include later-phase behavior.
 
 Seven of eight baseline batches are complete. G8's automated work is complete; its phase
-closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G14 are planned
-and proceed in order while that manual evidence is collected. Batch completion does not imply full
-parity-matrix verification.
+closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G11 are
+complete (`22303df`, `33e2dbc`, `36cea9c`). G12–G14 have not started: no gauge, graph, map or 3D
+code exists yet, and G12 is the next batch. Work committed after G11 (ten-language chart text,
+linked sync, replay, drawing visibility and touch input) is shared or financial-chart work and
+does not advance G12–G14. Batch completion does not imply full parity-matrix verification.
 
 ## How work is delivered
 
@@ -984,8 +986,8 @@ which the standard-build dashboard skips with a `complete-only` marker, and
 `g11_statistics.spec.mjs` exercises rendering, per-series hits, option validation and
 round-trips, matrix updates, persistence, and dashboard mounting on `chromium-complete`.
 Statistics tooltip text (`{count} samples`, `from`, `to`) and the hexbin fallback label come
-from the engine text catalog, so they follow the chart language with English and Russian plural
-rules.
+from the engine text catalog, so they follow the chart language. `b1939d9` extended that catalog
+from English and Russian to ten languages.
 
 Gate evidence: `cargo fmt`, workspace and WASM clippy and workspace tests on both feature sets
 (1,430 engine tests with `complete`), GPUI clippy, tests and pixel parity (the GPUI gallery's
