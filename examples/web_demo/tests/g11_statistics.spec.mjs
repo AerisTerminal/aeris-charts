@@ -291,11 +291,11 @@ test("statistics options validate, update, and survive persistence", async ({ pa
   expect(result.restored_painted).toBeGreaterThan(200);
 });
 
-test("the general dashboard mounts every statistics card on the complete build", async ({ page }) => {
+test("the general dashboard mounts every complete-only card on the complete build", async ({ page }) => {
   await page.goto("/?theme=dark&demo=general");
   await page.waitForFunction(() => window.__generalDashboard?.ready === true);
   const cards = page.locator('#general_workspace .general-chart-card[data-complete-only="true"]');
-  await expect(cards).toHaveCount(13);
+  await expect(cards).toHaveCount(22);
   for (const card of await cards.all()) {
     await card.scrollIntoViewIfNeeded();
     await expect(card).toHaveAttribute("data-mounted", "true");

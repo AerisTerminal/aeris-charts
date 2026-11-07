@@ -3,16 +3,16 @@
   "baseline": "explicit_previous_release",
   "thresholds": {},
   "absolute_maximums": {
-    "package-release-artifacts.npm_tarball_bytes.p50": 4160000,
-    "package-release-artifacts.npm_unpacked_bytes.p50": 12600000,
+    "package-release-artifacts.npm_tarball_bytes.p50": 4246000,
+    "package-release-artifacts.npm_unpacked_bytes.p50": 12792000,
     "package-release-artifacts.javascript_raw_bytes.p50": 620000,
     "package-release-artifacts.javascript_brotli_bytes.p50": 95000,
     "package-release-artifacts.wasm_raw_bytes.p50": 5780000,
-    "package-release-artifacts.wasm_brotli_bytes.p50": 1335000,
+    "package-release-artifacts.wasm_brotli_bytes.p50": 1344000,
     "package-release-artifacts.javascript_complete_raw_bytes.p50": 620000,
     "package-release-artifacts.javascript_complete_brotli_bytes.p50": 95000,
     "package-release-artifacts.wasm_complete_raw_bytes.p50": 5780000,
-    "package-release-artifacts.wasm_complete_brotli_bytes.p50": 1380000,
+    "package-release-artifacts.wasm_complete_brotli_bytes.p50": 1426000,
     "general-dashboard-100k.startup_ms.p50": 2000,
     "general-dashboard-100k.gpu_uploaded_bytes.p50": 100663296
   }

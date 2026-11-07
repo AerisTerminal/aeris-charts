@@ -3488,6 +3488,9 @@ test("Aeris preformatted French ticks enter the portable frame without changing 
 
 async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = false,
   loseAfterInstall = false) {
+  // Exports are compared as still images, so the network simulation settles synchronously
+  // instead of animating; g12_relationships.spec.mjs covers its animation.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   return page.evaluate(async ({ requestedBackend, onlyId, loseWebGpu, loseAfterInstall }) => {
     const { create_chart, build_variant } = await import("/dist/aeris_charts_financial.js");
@@ -3627,10 +3630,11 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
 
 const COMPLETE_ONLY_KINDS = [
   "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot", "ecdf", "qq_plot",
-  "hexbin", "contour", "parallel_coordinates", "scatter_matrix",
+  "hexbin", "contour", "parallel_coordinates", "scatter_matrix", "gauge", "chord",
+  "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud",
 ];
 const is_complete_project = (test_info) => test_info.project.name === "chromium-complete";
-const catalog_count = (test_info) => (is_complete_project(test_info) ? 69 : 56);
+const catalog_count = (test_info) => (is_complete_project(test_info) ? 78 : 56);
 
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`all catalog families export and dispose through ${backend}`, async ({ page, browserName }, test_info) => {

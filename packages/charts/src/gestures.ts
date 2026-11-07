@@ -363,7 +363,6 @@ export function install_gestures(chart: chart_impl): { detach: () => void; sync:
   document.addEventListener("visibilitychange", on_visibility_change);
 
   const detach = () => {
-    stop_scroll_anim();
     clear_input_wake();
     overlay.removeEventListener("wheel", on_wheel);
     overlay.removeEventListener("pointerdown", on_down);
@@ -387,6 +386,9 @@ export function install_gestures(chart: chart_impl): { detach: () => void; sync:
     document.removeEventListener("visibilitychange", on_visibility_change);
     gesture_resize_observer.disconnect();
     cancel_active_input();
+    // Cancelling re-arms input frames while the engine still animates (a running network
+    // simulation), so frames stop only after it.
+    stop_scroll_anim();
     detached = true;
     clear_input_wake();
   };

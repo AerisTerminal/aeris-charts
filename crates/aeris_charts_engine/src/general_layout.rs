@@ -14,8 +14,28 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
 mod calendar;
+#[cfg(feature = "complete")]
+mod chord;
 mod gantt;
+#[cfg(feature = "complete")]
+mod gauge;
+#[cfg(feature = "complete")]
+mod graph;
+#[cfg(feature = "complete")]
+mod icicle;
 mod mosaic;
+#[cfg(feature = "complete")]
+mod network;
+#[cfg(feature = "complete")]
+pub(crate) use network::NetworkDragPhase;
+#[cfg(feature = "complete")]
+mod packing;
+#[cfg(feature = "complete")]
+mod tree;
+#[cfg(feature = "complete")]
+mod venn;
+#[cfg(feature = "complete")]
+mod word_cloud;
 
 pub use calendar::{CalendarDay, CalendarInput};
 pub use gantt::GanttTask;
@@ -86,6 +106,16 @@ pub enum GeneralLayoutElement {
     Day,
     /// A Marimekko cell; its row is the cell's input index.
     Cell,
+    /// A gauge value band; its row is the band's input index.
+    Band,
+    /// A gauge progress arc; its row is always 0.
+    Progress,
+    /// A gauge pointer; its row is always 0.
+    Pointer,
+    /// A venn exclusive region; its row is the region's input index.
+    Region,
+    /// A word cloud word; its row is the word's input index.
+    Word,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -96,6 +126,14 @@ pub struct GeneralLayoutAccessibilityItem {
     pub label: String,
     pub value: Option<f64>,
     pub selected: bool,
+    /// Whether a tree or dendrogram node with children shows them; `None` for every other item.
+    #[cfg(feature = "complete")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded: Option<bool>,
+    /// Whether a word cloud word was placed; `None` for every other item.
+    #[cfg(feature = "complete")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placed: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -119,6 +157,194 @@ pub enum GeneralLayoutSeriesKind {
     Gantt,
     CalendarHeatmap,
     Marimekko,
+    /// A dial with a progress arc, value bands, ticks and a pointer (complete build).
+    Gauge,
+    /// A chord diagram over a graph dataset (complete build).
+    Chord,
+    /// A tidy node-link tree over a hierarchy dataset (complete build).
+    Tree,
+    /// A node-link tree with every leaf at the deepest level (complete build).
+    Dendrogram,
+    /// Nested circles sized by leaf value over a hierarchy dataset (complete build).
+    CirclePacking,
+    /// A rectangular partition with one band per depth over a hierarchy dataset (complete build).
+    Icicle,
+    /// A node-link network over a graph dataset with force, circular or fixed layout
+    /// (complete build).
+    Network,
+    /// An area-proportional set diagram over a sets dataset (complete build).
+    Venn,
+    /// A weight-sized word placement over a words dataset (complete build).
+    WordCloud,
+}
+
+impl GeneralLayoutSeriesKind {
+    /// Layout families that exist only in the complete build; the standard build rejects them
+    /// with `unsupported_operation` at series creation.
+    pub fn requires_complete_build(self) -> bool {
+        matches!(
+            self,
+            Self::Gauge
+                | Self::Chord
+                | Self::Tree
+                | Self::Dendrogram
+                | Self::CirclePacking
+                | Self::Icicle
+                | Self::Network
+                | Self::Venn
+                | Self::WordCloud
+        )
+    }
+
+    /// Families whose nodes fold and unfold their subtrees.
+    #[cfg(feature = "complete")]
+    pub fn is_collapsible(self) -> bool {
+        matches!(self, Self::Tree | Self::Dendrogram)
+    }
+
+    /// Whether the family can lay out in `orientation`. Every family accepts the default
+    /// horizontal orientation; trees and dendrograms also lay out vertically and radially, and
+    /// icicles vertically (the radial partition is the sunburst family).
+    #[cfg(feature = "complete")]
+    pub fn supports_orientation(self, orientation: HierarchyOrientation) -> bool {
+        match orientation {
+            HierarchyOrientation::Horizontal => true,
+            HierarchyOrientation::Vertical => {
+                matches!(self, Self::Tree | Self::Dendrogram | Self::Icicle)
+            }
+            HierarchyOrientation::Radial => matches!(self, Self::Tree | Self::Dendrogram),
+        }
+    }
+}
+
+/// Direction of a hierarchy layout: horizontal puts the root on the left, vertical on top, and
+/// radial at the center.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HierarchyOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+    Radial,
+}
+
+#[cfg(feature = "complete")]
+impl HierarchyOrientation {
+    pub(crate) fn is_horizontal(&self) -> bool {
+        *self == Self::Horizontal
+    }
+}
+
+/// Placement of network nodes: a d3-force simulation, evenly on a circle in input order, or at
+/// each node's input `x`/`y`.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkLayout {
+    #[default]
+    Force,
+    Circular,
+    Fixed,
+}
+
+#[cfg(feature = "complete")]
+impl NetworkLayout {
+    pub(crate) fn is_force(&self) -> bool {
+        *self == Self::Force
+    }
+}
+
+/// A network node held at a layout position, as a node drag leaves it.
+#[cfg(feature = "complete")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkPin {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Pan offset in layout units and zoom factor of a network view.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkView {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+#[cfg(feature = "complete")]
+impl Default for NetworkView {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            zoom: 1.0,
+        }
+    }
+}
+
+#[cfg(feature = "complete")]
+impl NetworkView {
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// d3-force `forceLink` default distance.
+#[cfg(feature = "complete")]
+pub(crate) const DEFAULT_NETWORK_LINK_DISTANCE: f64 = 30.0;
+
+#[cfg(feature = "complete")]
+pub(crate) fn network_link_distance_default() -> f64 {
+    DEFAULT_NETWORK_LINK_DISTANCE
+}
+
+#[cfg(feature = "complete")]
+pub(crate) fn is_default_network_link_distance(distance: &f64) -> bool {
+    *distance == DEFAULT_NETWORK_LINK_DISTANCE
+}
+
+/// Weight-to-font mapping of a word cloud.
+#[cfg(feature = "complete")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WordCloudScaling {
+    /// Font size is linear in the weight.
+    Linear,
+    /// Font size follows the square root of the weight, so the painted area is linear.
+    #[default]
+    Sqrt,
+}
+
+#[cfg(feature = "complete")]
+pub(crate) const DEFAULT_WORD_CLOUD_MIN_SIZE: f64 = 10.0;
+#[cfg(feature = "complete")]
+pub(crate) const DEFAULT_WORD_CLOUD_MAX_SIZE: f64 = 48.0;
+
+#[cfg(feature = "complete")]
+pub(crate) fn word_cloud_min_size_default() -> f64 {
+    DEFAULT_WORD_CLOUD_MIN_SIZE
+}
+
+#[cfg(feature = "complete")]
+pub(crate) fn word_cloud_max_size_default() -> f64 {
+    DEFAULT_WORD_CLOUD_MAX_SIZE
+}
+
+#[cfg(feature = "complete")]
+pub(crate) fn is_default_word_cloud_min_size(size: &f64) -> bool {
+    *size == DEFAULT_WORD_CLOUD_MIN_SIZE
+}
+
+#[cfg(feature = "complete")]
+pub(crate) fn is_default_word_cloud_max_size(size: &f64) -> bool {
+    *size == DEFAULT_WORD_CLOUD_MAX_SIZE
+}
+
+#[cfg(feature = "complete")]
+pub(crate) fn is_default_word_cloud_scaling(scaling: &WordCloudScaling) -> bool {
+    *scaling == WordCloudScaling::Sqrt
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -132,6 +358,65 @@ pub struct GeneralLayoutSeriesOptions {
     pub data_labels: bool,
     #[serde(default = "layout_visible_default")]
     pub visible: bool,
+    // The hierarchy, network and word cloud options below configure complete-build families
+    // only. The standard build omits them, so its deserializer ignores them like any other
+    // unknown key and its series creation rejects the families they configure.
+    /// Tree, dendrogram and icicle direction; other families accept only the default.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "HierarchyOrientation::is_horizontal")]
+    pub hierarchy_orientation: HierarchyOrientation,
+    /// IDs of collapsed tree or dendrogram nodes. Each names a node with children; the engine
+    /// toggles them through its input controller and drops IDs a data replacement removes.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collapsed: Vec<String>,
+    /// Network node placement; other families accept only the default.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "NetworkLayout::is_force")]
+    pub network_layout: NetworkLayout,
+    /// Rest length of force-layout links in layout units, `1..=1000`.
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "network_link_distance_default",
+        skip_serializing_if = "is_default_network_link_distance"
+    )]
+    pub network_link_distance: f64,
+    /// Network nodes held in place. Dragging a node pins it where it is released; a data
+    /// replacement drops pins of removed nodes.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned: Vec<NetworkPin>,
+    /// Positions of every settled network node, exported so a restore reuses them directly
+    /// instead of re-simulating; a data replacement drops positions of removed nodes.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<NetworkPin>,
+    /// Pan and zoom of a network series.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "NetworkView::is_default")]
+    pub network_view: NetworkView,
+    /// Smallest word cloud font size in media px, `4..=256`.
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "word_cloud_min_size_default",
+        skip_serializing_if = "is_default_word_cloud_min_size"
+    )]
+    pub word_cloud_min_size: f64,
+    /// Largest word cloud font size in media px, `4..=256`.
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "word_cloud_max_size_default",
+        skip_serializing_if = "is_default_word_cloud_max_size"
+    )]
+    pub word_cloud_max_size: f64,
+    /// Weight-to-font mapping of a word cloud.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "is_default_word_cloud_scaling")]
+    pub word_cloud_scaling: WordCloudScaling,
+    /// Rotate every second word of a word cloud by 90 degrees.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub word_cloud_rotate: bool,
 }
 
 pub(crate) fn layout_visible_default() -> bool {
@@ -152,7 +437,68 @@ impl GeneralLayoutSeriesOptions {
             color: "#4682b4".into(),
             data_labels: false,
             visible: true,
+            #[cfg(feature = "complete")]
+            hierarchy_orientation: HierarchyOrientation::Horizontal,
+            #[cfg(feature = "complete")]
+            collapsed: Vec::new(),
+            #[cfg(feature = "complete")]
+            network_layout: NetworkLayout::Force,
+            #[cfg(feature = "complete")]
+            network_link_distance: DEFAULT_NETWORK_LINK_DISTANCE,
+            #[cfg(feature = "complete")]
+            pinned: Vec::new(),
+            #[cfg(feature = "complete")]
+            positions: Vec::new(),
+            #[cfg(feature = "complete")]
+            network_view: NetworkView::default(),
+            #[cfg(feature = "complete")]
+            word_cloud_min_size: DEFAULT_WORD_CLOUD_MIN_SIZE,
+            #[cfg(feature = "complete")]
+            word_cloud_max_size: DEFAULT_WORD_CLOUD_MAX_SIZE,
+            #[cfg(feature = "complete")]
+            word_cloud_scaling: WordCloudScaling::Sqrt,
+            #[cfg(feature = "complete")]
+            word_cloud_rotate: false,
         }
+    }
+
+    /// Retained heap bytes of the option text, collapsed IDs and pins.
+    fn heap_bytes(&self) -> usize {
+        let text = self.title.capacity() + self.color.capacity();
+        #[cfg(not(feature = "complete"))]
+        {
+            text
+        }
+        #[cfg(feature = "complete")]
+        {
+            text + self.collapsed.capacity() * std::mem::size_of::<String>()
+                + self.collapsed.iter().map(String::capacity).sum::<usize>()
+                + (self.pinned.capacity() + self.positions.capacity())
+                    * std::mem::size_of::<NetworkPin>()
+                + self
+                    .pinned
+                    .iter()
+                    .chain(self.positions.iter())
+                    .map(|pin| pin.id.capacity())
+                    .sum::<usize>()
+        }
+    }
+
+    #[cfg(feature = "complete")]
+    fn has_default_network_options(&self) -> bool {
+        self.network_layout == NetworkLayout::Force
+            && self.network_link_distance == DEFAULT_NETWORK_LINK_DISTANCE
+            && self.pinned.is_empty()
+            && self.positions.is_empty()
+            && self.network_view.is_default()
+    }
+
+    #[cfg(feature = "complete")]
+    fn has_default_word_cloud_options(&self) -> bool {
+        self.word_cloud_min_size == DEFAULT_WORD_CLOUD_MIN_SIZE
+            && self.word_cloud_max_size == DEFAULT_WORD_CLOUD_MAX_SIZE
+            && self.word_cloud_scaling == WordCloudScaling::Sqrt
+            && !self.word_cloud_rotate
     }
 }
 
@@ -189,6 +535,94 @@ pub struct FlowLink {
     pub value: f64,
 }
 
+/// One graph vertex. `category` groups nodes for color; `value` raises the node's value above
+/// its incoming plus outgoing edge value; `x`/`y` (both or neither) pin the node for fixed layouts.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub value: Option<f64>,
+    #[serde(default)]
+    pub x: Option<f64>,
+    #[serde(default)]
+    pub y: Option<f64>,
+}
+
+/// One directed graph edge, identified by its ordered `(source, target)` pair. Cycles and
+/// self-links are allowed; a repeated pair is rejected.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+    #[serde(default = "graph_edge_value_default")]
+    pub value: f64,
+}
+
+fn graph_edge_value_default() -> f64 {
+    1.0
+}
+
+/// A gauge dial: one value on a `min..max` scale with optional colored bands.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GaugeInput {
+    pub value: f64,
+    #[serde(default)]
+    pub min: f64,
+    #[serde(default = "gauge_max_default")]
+    pub max: f64,
+    /// Name shown under the dial center and announced for the pointer.
+    #[serde(default)]
+    pub label: String,
+    /// Suffix appended to the value text, such as `%` or ` km/h`.
+    #[serde(default)]
+    pub unit: String,
+    /// Fixed fraction digits of the value text; `None` prints the shortest exact form.
+    #[serde(default)]
+    pub decimals: Option<u8>,
+    /// Bands in ascending `to` order; each starts where the previous one ends.
+    #[serde(default)]
+    pub bands: Vec<GaugeBand>,
+    /// Paint a progress arc from `min` to the value over the track.
+    #[serde(default)]
+    pub progress: bool,
+}
+
+fn gauge_max_default() -> f64 {
+    100.0
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GaugeBand {
+    /// Upper bound of the band in value units.
+    pub to: f64,
+    pub color: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// One exclusive venn region: the sets covering it and its area, venn.js-shaped. A region
+/// listing one set is that set's exclusive core; `label` overrides the joined set names in
+/// tooltips and accessibility text (complete build).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VennSet {
+    pub sets: Vec<String>,
+    pub size: f64,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// One word cloud word; `color` overrides the series color (complete build).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WordCloudWord {
+    pub text: String,
+    pub weight: f64,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralLayoutInput {
     Funnel(Vec<FunnelStage>),
@@ -206,6 +640,61 @@ pub enum GeneralLayoutInput {
     },
     Calendar(CalendarInput),
     Mosaic(Vec<MosaicCell>),
+    // The standard build keeps the four complete-build variants below so it can reject their
+    // data with the typed complete-build error, but skips their serde field code: persisted
+    // data deserializes as an empty placeholder that validation then rejects.
+    /// A gauge dial (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_gauge_fields")
+    )]
+    Gauge(GaugeInput),
+    /// Shared graph store for relationship layouts (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Graph {
+        nodes: Vec<GraphNode>,
+        edges: Vec<GraphEdge>,
+    },
+    /// Exclusive venn regions, venn.js-shaped (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Sets(Vec<VennSet>),
+    /// Weighted words (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Words(Vec<WordCloudWord>),
+}
+
+#[cfg(not(feature = "complete"))]
+fn skip_layout_fields<'de, D: serde::Deserializer<'de>, T: Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(T::default())
+}
+
+#[cfg(not(feature = "complete"))]
+fn skip_gauge_fields<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<GaugeInput, D::Error> {
+    skip_layout_fields::<D, ()>(deserializer)?;
+    Ok(GaugeInput {
+        value: 0.0,
+        min: 0.0,
+        max: 0.0,
+        label: String::new(),
+        unit: String::new(),
+        decimals: None,
+        bands: Vec::new(),
+        progress: false,
+    })
 }
 
 impl GeneralLayoutInput {
@@ -261,6 +750,18 @@ impl GeneralLayoutInput {
             Self::Gantt { tasks, .. } => gantt::semantic_values(tasks),
             Self::Calendar(calendar) => calendar::semantic_values(&calendar.days),
             Self::Mosaic(cells) => cells.iter().map(|cell| cell.value).collect(),
+            #[cfg(feature = "complete")]
+            Self::Gauge(gauge) => std::iter::once(gauge.value)
+                .chain(gauge.bands.iter().map(|band| band.to))
+                .collect(),
+            #[cfg(feature = "complete")]
+            Self::Graph { nodes, edges } => graph::semantic_values(nodes, edges),
+            #[cfg(feature = "complete")]
+            Self::Sets(sets) => sets.iter().map(|region| region.size).collect(),
+            #[cfg(feature = "complete")]
+            Self::Words(words) => words.iter().map(|word| word.weight).collect(),
+            #[cfg(not(feature = "complete"))]
+            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => Vec::new(),
         }
     }
 
@@ -272,6 +773,16 @@ impl GeneralLayoutInput {
             Self::Gantt { tasks, .. } => tasks.len(),
             Self::Calendar(calendar) => calendar::semantic_value_count(&calendar.days),
             Self::Mosaic(cells) => cells.len(),
+            #[cfg(feature = "complete")]
+            Self::Gauge(gauge) => 1 + gauge.bands.len(),
+            #[cfg(feature = "complete")]
+            Self::Graph { nodes, edges } => nodes.len() + edges.len(),
+            #[cfg(feature = "complete")]
+            Self::Sets(sets) => sets.len(),
+            #[cfg(feature = "complete")]
+            Self::Words(words) => words.len(),
+            #[cfg(not(feature = "complete"))]
+            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => 0,
         }
     }
     fn validate(&self) -> Result<(), ChartError> {
@@ -292,6 +803,20 @@ impl GeneralLayoutInput {
             Self::Gantt { tasks, now } => gantt::validate(tasks, *now)?,
             Self::Calendar(calendar) => calendar::validate(calendar)?,
             Self::Mosaic(cells) => mosaic::validate(cells)?,
+            #[cfg(feature = "complete")]
+            Self::Gauge(gauge) => gauge::validate(gauge)?,
+            #[cfg(feature = "complete")]
+            Self::Graph { nodes, edges } => graph::validate(nodes, edges)?,
+            #[cfg(feature = "complete")]
+            Self::Sets(sets) => venn::validate(sets)?,
+            #[cfg(feature = "complete")]
+            Self::Words(words) => word_cloud::validate(words)?,
+            #[cfg(not(feature = "complete"))]
+            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => {
+                return Err(crate::complete_build_required(
+                    "gauge, graph, venn and word cloud layout datasets",
+                ));
+            }
         }
         if self.estimated_bytes() + self.semantic_value_count() * std::mem::size_of::<f64>()
             > MAX_LAYOUT_DATASET_BYTES
@@ -342,6 +867,58 @@ impl GeneralLayoutInput {
             Self::Mosaic(cells) => {
                 cells.capacity() * std::mem::size_of::<MosaicCell>() + mosaic::heap_bytes(cells)
             }
+            #[cfg(feature = "complete")]
+            Self::Gauge(gauge) => {
+                gauge.label.capacity()
+                    + gauge.unit.capacity()
+                    + gauge.bands.capacity() * std::mem::size_of::<GaugeBand>()
+                    + gauge
+                        .bands
+                        .iter()
+                        .map(|band| band.color.capacity() + band.label.capacity())
+                        .sum::<usize>()
+            }
+            #[cfg(feature = "complete")]
+            Self::Graph { nodes, edges } => {
+                nodes.capacity() * std::mem::size_of::<GraphNode>()
+                    + edges.capacity() * std::mem::size_of::<GraphEdge>()
+                    + nodes
+                        .iter()
+                        .map(|node| {
+                            node.id.capacity()
+                                + node.label.capacity()
+                                + node.category.as_ref().map_or(0, String::capacity)
+                        })
+                        .sum::<usize>()
+                    + edges
+                        .iter()
+                        .map(|edge| edge.source.capacity() + edge.target.capacity())
+                        .sum::<usize>()
+            }
+            #[cfg(feature = "complete")]
+            Self::Sets(sets) => {
+                sets.capacity() * std::mem::size_of::<VennSet>()
+                    + sets
+                        .iter()
+                        .map(|region| {
+                            region.sets.capacity() * std::mem::size_of::<String>()
+                                + region.sets.iter().map(String::capacity).sum::<usize>()
+                                + region.label.as_ref().map_or(0, String::capacity)
+                        })
+                        .sum::<usize>()
+            }
+            #[cfg(feature = "complete")]
+            Self::Words(words) => {
+                words.capacity() * std::mem::size_of::<WordCloudWord>()
+                    + words
+                        .iter()
+                        .map(|word| {
+                            word.text.capacity() + word.color.as_ref().map_or(0, String::capacity)
+                        })
+                        .sum::<usize>()
+            }
+            #[cfg(not(feature = "complete"))]
+            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => 0,
         }
     }
 }
@@ -414,6 +991,29 @@ fn layout_transition_compatible(from: &GeneralLayoutInput, to: &GeneralLayoutInp
                     .zip(bl)
                     .all(|(left, right)| left.source == right.source && left.target == right.target)
         }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutInput::Gauge(a), GeneralLayoutInput::Gauge(b)) => {
+            a.bands.len() == b.bands.len()
+        }
+        #[cfg(feature = "complete")]
+        (
+            GeneralLayoutInput::Graph {
+                nodes: an,
+                edges: ae,
+            },
+            GeneralLayoutInput::Graph {
+                nodes: bn,
+                edges: be,
+            },
+        ) => {
+            an.len() == bn.len()
+                && ae.len() == be.len()
+                && an.iter().zip(bn).all(|(left, right)| left.id == right.id)
+                && ae
+                    .iter()
+                    .zip(be)
+                    .all(|(left, right)| left.source == right.source && left.target == right.target)
+        }
         _ => false,
     }
 }
@@ -455,6 +1055,45 @@ fn blend_layout_input(
                 item.value = blend(left.value, right.value);
             }
         }
+        #[cfg(feature = "complete")]
+        (
+            GeneralLayoutInput::Gauge(a),
+            GeneralLayoutInput::Gauge(b),
+            GeneralLayoutInput::Gauge(out),
+        ) => {
+            // Blending both ends keeps min < max and the band bounds increasing and inside them.
+            out.value = blend(a.value, b.value);
+            out.min = blend(a.min, b.min);
+            out.max = blend(a.max, b.max);
+            for ((left, right), item) in a.bands.iter().zip(&b.bands).zip(&mut out.bands) {
+                item.to = blend(left.to, right.to);
+            }
+        }
+        #[cfg(feature = "complete")]
+        (
+            GeneralLayoutInput::Graph {
+                nodes: an,
+                edges: ae,
+            },
+            GeneralLayoutInput::Graph {
+                nodes: bn,
+                edges: be,
+            },
+            GeneralLayoutInput::Graph {
+                nodes: on,
+                edges: oe,
+            },
+        ) => {
+            let pair = |a: Option<f64>, b: Option<f64>| a.zip(b).map(|(a, b)| blend(a, b));
+            for ((left, right), item) in an.iter().zip(bn).zip(on) {
+                item.value = pair(left.value, right.value).or(right.value);
+                item.x = pair(left.x, right.x).or(right.x);
+                item.y = pair(left.y, right.y).or(right.y);
+            }
+            for ((left, right), item) in ae.iter().zip(be).zip(oe) {
+                item.value = blend(left.value, right.value);
+            }
+        }
         _ => unreachable!("layout transition topology validated before interpolation"),
     }
 }
@@ -479,6 +1118,22 @@ struct LayoutSeriesEntry {
     treemap: RefCell<Option<TreemapCache>>,
     sankey: RefCell<Option<SankeyCache>>,
     sunburst: RefCell<Option<SunburstCache>>,
+    #[cfg(feature = "complete")]
+    chord: RefCell<Option<chord::ChordCache>>,
+    #[cfg(feature = "complete")]
+    tree: RefCell<Option<tree::TreeCache>>,
+    #[cfg(feature = "complete")]
+    packing: RefCell<Option<packing::PackCache>>,
+    #[cfg(feature = "complete")]
+    icicle: RefCell<Option<icicle::IcicleCache>>,
+    #[cfg(feature = "complete")]
+    venn: RefCell<Option<venn::VennCache>>,
+    #[cfg(feature = "complete")]
+    word_cloud: RefCell<Option<word_cloud::WordCloudCache>>,
+    /// Simulated positions of a network series. Not a cache: positions evolve over time and
+    /// survive data replacement, so only a series rebuild replaces them.
+    #[cfg(feature = "complete")]
+    network: Option<Box<network::NetworkSim>>,
     /// First Gantt row in the viewport. Clamped wherever it is read, so a data or size change
     /// never leaves the viewport past the last row.
     scroll_row: usize,
@@ -1048,6 +1703,65 @@ fn treemap_position_row(
 }
 
 impl LayoutSeriesEntry {
+    /// Drops every cached layout of this series; each cache rebuilds from the next read.
+    fn clear_caches(&self) {
+        *self.treemap.borrow_mut() = None;
+        *self.sankey.borrow_mut() = None;
+        *self.sunburst.borrow_mut() = None;
+        #[cfg(feature = "complete")]
+        {
+            *self.chord.borrow_mut() = None;
+            *self.tree.borrow_mut() = None;
+            *self.packing.borrow_mut() = None;
+            *self.icicle.borrow_mut() = None;
+            *self.venn.borrow_mut() = None;
+            *self.word_cloud.borrow_mut() = None;
+        }
+    }
+
+    fn relationship_cache_bytes(&self) -> usize {
+        #[cfg(feature = "complete")]
+        {
+            self.chord
+                .borrow()
+                .as_ref()
+                .map_or(0, chord::ChordCache::heap_bytes)
+                + self
+                    .tree
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, tree::TreeCache::heap_bytes)
+                + self
+                    .packing
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, packing::PackCache::heap_bytes)
+                + self
+                    .icicle
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, icicle::IcicleCache::heap_bytes)
+                + self
+                    .network
+                    .as_deref()
+                    .map_or(0, network::NetworkSim::heap_bytes)
+                + self
+                    .venn
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, venn::VennCache::heap_bytes)
+                + self
+                    .word_cloud
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, word_cloud::WordCloudCache::heap_bytes)
+        }
+        #[cfg(not(feature = "complete"))]
+        {
+            0
+        }
+    }
+
     fn with_treemap_cache<R>(
         &self,
         nodes: &[HierarchyNode],
@@ -1586,7 +2300,7 @@ impl GeneralLayoutStore {
                 hit.row < stages.len()
             }
             (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => {
-                hit.row < nodes.len()
+                hit.row < nodes.len() && !hierarchy_row_hidden(series, nodes, hit.row)
             }
             (GeneralLayoutInput::Flow { nodes, .. }, GeneralLayoutElement::Node) => {
                 hit.row < nodes.len()
@@ -1603,6 +2317,28 @@ impl GeneralLayoutStore {
             (GeneralLayoutInput::Mosaic(cells), GeneralLayoutElement::Cell) => {
                 hit.row < cells.len()
             }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(_), GeneralLayoutElement::Pointer) => hit.row == 0,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(gauge), GeneralLayoutElement::Progress) => {
+                hit.row == 0 && gauge.progress
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(gauge), GeneralLayoutElement::Band) => {
+                hit.row < gauge.bands.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { nodes, .. }, GeneralLayoutElement::Node) => {
+                hit.row < nodes.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { edges, .. }, GeneralLayoutElement::Link) => {
+                hit.row < edges.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Sets(sets), GeneralLayoutElement::Region) => hit.row < sets.len(),
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Words(words), GeneralLayoutElement::Word) => hit.row < words.len(),
             _ => false,
         }
     }
@@ -1673,6 +2409,12 @@ impl GeneralLayoutStore {
                     "layout dataset kind cannot change while bound",
                 ));
             }
+            #[cfg(feature = "complete")]
+            if !network::accepts_replacement(&series.options, &input) {
+                return Err(invalid_data(
+                    "a fixed network layout needs x and y on every node",
+                ));
+            }
         }
         let cache_before = self
             .series
@@ -1727,7 +2469,12 @@ impl GeneralLayoutStore {
             None
         };
         self.entries[index].funnel_max = input.funnel_max();
-        self.entries[index].input = input;
+        #[cfg(feature = "complete")]
+        let previous_input = std::mem::replace(&mut self.entries[index].input, input);
+        #[cfg(not(feature = "complete"))]
+        {
+            self.entries[index].input = input;
+        }
         self.entries[index].semantic_values = semantic_values;
         self.entries[index].transition = transition_from.map(|from| {
             let mut presentation = self.entries[index].input.clone();
@@ -1761,11 +2508,45 @@ impl GeneralLayoutStore {
         }) {
             self.focused = None;
         }
+        #[cfg(feature = "complete")]
+        if let GeneralLayoutInput::Hierarchy(nodes) = &self.entries[index].input {
+            let parents: HashSet<&str> = nodes
+                .iter()
+                .filter_map(|node| node.parent.as_deref())
+                .collect();
+            for series in self
+                .series
+                .iter_mut()
+                .filter(|series| series.options.dataset == id)
+            {
+                series
+                    .options
+                    .collapsed
+                    .retain(|collapsed| parents.contains(collapsed.as_str()));
+            }
+        }
+        #[cfg(feature = "complete")]
+        if let (
+            GeneralLayoutInput::Graph { nodes, edges },
+            GeneralLayoutInput::Graph {
+                nodes: previous, ..
+            },
+        ) = (&self.entries[index].input, &previous_input)
+        {
+            let values = &self.entries[index].semantic_values;
+            for series in self
+                .series
+                .iter_mut()
+                .filter(|series| series.options.dataset == id)
+            {
+                network::retain_pins(&mut series.options.pinned, nodes);
+                network::retain_pins(&mut series.options.positions, nodes);
+                series.rebuild_network(nodes, edges, values, Some(previous));
+            }
+        }
         for series in &self.series {
             if series.options.dataset == id {
-                *series.treemap.borrow_mut() = None;
-                *series.sankey.borrow_mut() = None;
-                *series.sunburst.borrow_mut() = None;
+                series.clear_caches();
             }
         }
         Ok(())
@@ -1812,9 +2593,7 @@ impl GeneralLayoutStore {
             {
                 continue;
             }
-            *series.treemap.borrow_mut() = None;
-            *series.sankey.borrow_mut() = None;
-            *series.sunburst.borrow_mut() = None;
+            series.clear_caches();
         }
     }
 
@@ -1843,8 +2622,7 @@ impl GeneralLayoutStore {
                 .series
                 .iter()
                 .map(|series| {
-                    series.options.title.capacity()
-                        + series.options.color.capacity()
+                    series.options.heap_bytes()
                         + series.treemap.borrow().as_ref().map_or(0, |cache| {
                             cache.shapes.capacity() * std::mem::size_of::<TreemapShape>()
                                 + cache.bounds.capacity()
@@ -1858,6 +2636,7 @@ impl GeneralLayoutStore {
                         + series.sunburst.borrow().as_ref().map_or(0, |cache| {
                             cache.shapes.capacity() * std::mem::size_of::<SunburstShape>()
                         })
+                        + series.relationship_cache_bytes()
                 })
                 .sum::<usize>()
             + self
@@ -1893,8 +2672,7 @@ impl GeneralLayoutStore {
                 .series
                 .iter()
                 .map(|series| {
-                    series.options.title.capacity()
-                        + series.options.color.capacity()
+                    series.options.heap_bytes()
                         + self.entry(series.options.dataset).map_or(0, |entry| {
                             cache_reservation(series.options.kind, &entry.input)
                         })
@@ -1928,10 +2706,32 @@ impl GeneralLayoutStore {
         let color = Color::parse_css(&options.color).ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidOptions, "invalid layout series color")
         })?;
+        #[cfg(feature = "complete")]
+        validate_relationship_options(&options, dataset)?;
+        #[cfg(feature = "complete")]
+        if options.kind == GeneralLayoutSeriesKind::WordCloud {
+            word_cloud::validate_options(&options)?;
+        }
+        #[cfg(feature = "complete")]
+        let network = if options.kind == GeneralLayoutSeriesKind::Network {
+            network::validate_options(&options, dataset)?;
+            let GeneralLayoutInput::Graph { nodes, edges } = dataset else {
+                unreachable!("network series accept only graph datasets");
+            };
+            let values = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == options.dataset)
+                .map_or(&[][..], |entry| &entry.semantic_values);
+            Some(Box::new(network::NetworkSim::new(
+                &options, nodes, edges, values, None,
+            )))
+        } else {
+            None
+        };
         if self
             .reserved_bytes()
-            .saturating_add(options.title.capacity())
-            .saturating_add(options.color.capacity())
+            .saturating_add(options.heap_bytes())
             .saturating_add(cache_reservation(options.kind, dataset))
             > MAX_LAYOUT_STORE_BYTES
         {
@@ -1955,6 +2755,20 @@ impl GeneralLayoutStore {
             treemap: RefCell::new(None),
             sankey: RefCell::new(None),
             sunburst: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            chord: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            tree: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            packing: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            icicle: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            venn: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            word_cloud: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            network,
             scroll_row: 0,
         });
         self.next_series_id = next;
@@ -1996,8 +2810,36 @@ impl GeneralLayoutStore {
         self.entries.iter().map(|entry| (entry.id, &entry.input))
     }
 
-    pub(crate) fn persistence_series(&self) -> impl Iterator<Item = &GeneralLayoutSeriesOptions> {
-        self.series.iter().map(|entry| &entry.options)
+    pub(crate) fn persistence_series(
+        &self,
+    ) -> impl Iterator<Item = (GeneralLayoutSeriesId, &GeneralLayoutSeriesOptions)> {
+        self.series.iter().map(|entry| (entry.id, &entry.options))
+    }
+
+    /// Settled force positions of a network series as persistable pins, or `None` while its
+    /// simulation still moves nodes: an export captures rest state, never a half-settled
+    /// layout.
+    #[cfg(feature = "complete")]
+    pub(crate) fn settled_positions(
+        &self,
+        series: GeneralLayoutSeriesId,
+    ) -> Option<Vec<NetworkPin>> {
+        let entry = self.series.iter().find(|entry| entry.id == series)?;
+        let sim = entry.network.as_deref()?;
+        let GeneralLayoutInput::Graph { nodes, .. } = &self.entry(entry.options.dataset)?.input
+        else {
+            return None;
+        };
+        sim.snapshot_positions(nodes)
+    }
+
+    /// Drop every word placement cache: text measurements changed and each word box must be
+    /// re-measured and re-placed on the next frame.
+    #[cfg(feature = "complete")]
+    pub(crate) fn invalidate_word_cloud_caches(&self) {
+        for series in &self.series {
+            *series.word_cloud.borrow_mut() = None;
+        }
     }
 
     pub(crate) fn uses_pane(&self, pane_id: PaneId) -> bool {
@@ -2011,14 +2853,38 @@ impl GeneralLayoutSeriesKind {
             (self, input),
             (Self::Funnel, GeneralLayoutInput::Funnel(_))
                 | (
-                    Self::Treemap | Self::Sunburst,
+                    Self::Treemap
+                        | Self::Sunburst
+                        | Self::Tree
+                        | Self::Dendrogram
+                        | Self::CirclePacking
+                        | Self::Icicle,
                     GeneralLayoutInput::Hierarchy(_)
                 )
                 | (Self::Sankey, GeneralLayoutInput::Flow { .. })
                 | (Self::Gantt, GeneralLayoutInput::Gantt { .. })
                 | (Self::CalendarHeatmap, GeneralLayoutInput::Calendar(_))
                 | (Self::Marimekko, GeneralLayoutInput::Mosaic(_))
+        ) || self.accepts_complete(input)
+    }
+
+    #[cfg(feature = "complete")]
+    fn accepts_complete(self, input: &GeneralLayoutInput) -> bool {
+        matches!(
+            (self, input),
+            (Self::Gauge, GeneralLayoutInput::Gauge(_))
+                | (
+                    Self::Chord | Self::Network,
+                    GeneralLayoutInput::Graph { .. }
+                )
+                | (Self::Venn, GeneralLayoutInput::Sets(_))
+                | (Self::WordCloud, GeneralLayoutInput::Words(_))
         )
+    }
+
+    #[cfg(not(feature = "complete"))]
+    fn accepts_complete(self, _input: &GeneralLayoutInput) -> bool {
+        false
     }
 }
 
@@ -2049,6 +2915,33 @@ fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) 
         (GeneralLayoutSeriesKind::Sankey, GeneralLayoutInput::Flow { nodes, links }) => {
             2 * nodes.len() * (std::mem::size_of::<TreemapShape>() + std::mem::size_of::<usize>())
                 + 2 * links.len() * std::mem::size_of::<SankeyLinkShape>()
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::Chord, GeneralLayoutInput::Graph { nodes, edges }) => {
+            chord::cache_reservation(nodes.len(), edges.len())
+        }
+        #[cfg(feature = "complete")]
+        (
+            GeneralLayoutSeriesKind::Tree | GeneralLayoutSeriesKind::Dendrogram,
+            GeneralLayoutInput::Hierarchy(nodes),
+        ) => tree::cache_reservation(nodes.len()),
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::CirclePacking, GeneralLayoutInput::Hierarchy(nodes)) => {
+            packing::cache_reservation(nodes.len())
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::Icicle, GeneralLayoutInput::Hierarchy(nodes)) => {
+            icicle::cache_reservation(nodes.len())
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::Network, GeneralLayoutInput::Graph { nodes, edges }) => {
+            network::cache_reservation(nodes.len(), edges.len())
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::Venn, GeneralLayoutInput::Sets(_)) => venn::cache_reservation(),
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(_)) => {
+            word_cloud::cache_reservation()
         }
         _ => 0,
     }
@@ -2432,6 +3325,60 @@ impl ChartEngine {
                     (GeneralLayoutSeriesKind::Marimekko, GeneralLayoutInput::Mosaic(cells)) => {
                         self.build_mosaic_frame(series, cells, plot, (hpr, vpr), out);
                     }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::Gauge, GeneralLayoutInput::Gauge(gauge)) => {
+                        let GeneralLayoutInput::Gauge(target) = &entry.input else {
+                            unreachable!("a transition keeps the input variant");
+                        };
+                        self.build_gauge_frame(
+                            series,
+                            (gauge, target),
+                            plot,
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
+                    #[cfg(feature = "complete")]
+                    (
+                        GeneralLayoutSeriesKind::Chord,
+                        GeneralLayoutInput::Graph { nodes, edges },
+                    ) => {
+                        self.build_chord_frame(
+                            series,
+                            (nodes, edges),
+                            plot,
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
+                    #[cfg(feature = "complete")]
+                    (
+                        GeneralLayoutSeriesKind::Tree | GeneralLayoutSeriesKind::Dendrogram,
+                        GeneralLayoutInput::Hierarchy(nodes),
+                    ) => self.build_tree_frame(series, nodes, plot, (hpr, vpr), out, points),
+                    #[cfg(feature = "complete")]
+                    (
+                        GeneralLayoutSeriesKind::CirclePacking,
+                        GeneralLayoutInput::Hierarchy(nodes),
+                    ) => self.build_packing_frame(series, nodes, plot, (hpr, vpr), out),
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::Icicle, GeneralLayoutInput::Hierarchy(nodes)) => {
+                        self.build_icicle_frame(series, nodes, plot, (hpr, vpr), out);
+                    }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::Network, GeneralLayoutInput::Graph { nodes, .. }) => {
+                        self.build_network_frame(series, nodes, plot, (hpr, vpr), out, points);
+                    }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::Venn, GeneralLayoutInput::Sets(sets)) => {
+                        self.build_venn_frame(series, sets, plot, (hpr, vpr), out);
+                    }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(words)) => {
+                        self.build_word_cloud_frame(series, words, plot, (hpr, vpr), out);
+                    }
                     _ => {}
                 }
             }
@@ -2560,6 +3507,50 @@ impl ChartEngine {
                 GeneralLayoutSeriesKind::Marimekko,
                 GeneralLayoutElement::Cell,
             ) => mosaic::MosaicLayout::new(cells, plot).anchor(hit.row),
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(gauge), GeneralLayoutSeriesKind::Gauge, element) => {
+                gauge::GaugeLayout::new(gauge, plot).anchor(element, hit.row)
+            }
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Graph { nodes, edges },
+                GeneralLayoutSeriesKind::Chord,
+                element,
+            ) => series.with_chord(nodes, edges, plot, |cache| cache.anchor(element, hit.row)),
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Hierarchy(nodes),
+                GeneralLayoutSeriesKind::Tree | GeneralLayoutSeriesKind::Dendrogram,
+                GeneralLayoutElement::Node,
+            ) => series.with_tree(nodes, plot, |cache| cache.anchor(hit.row)),
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Hierarchy(nodes),
+                GeneralLayoutSeriesKind::CirclePacking,
+                GeneralLayoutElement::Node,
+            ) => series.with_packing(nodes, plot, |cache| cache.anchor(hit.row)),
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Hierarchy(nodes),
+                GeneralLayoutSeriesKind::Icicle,
+                GeneralLayoutElement::Node,
+            ) => series.with_icicle(nodes, plot, |cache| cache.anchor(hit.row)),
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { .. }, GeneralLayoutSeriesKind::Network, element) => {
+                series.network_anchor(plot, element, hit.row)
+            }
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Sets(sets),
+                GeneralLayoutSeriesKind::Venn,
+                GeneralLayoutElement::Region,
+            ) => series.with_venn(sets, plot, |cache| cache.anchor(hit.row)),
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Words(words),
+                GeneralLayoutSeriesKind::WordCloud,
+                GeneralLayoutElement::Word,
+            ) => series.with_word_cloud(self, words, plot, |cache| cache.anchor(hit.row)),
             _ => None,
         }
     }
@@ -2683,6 +3674,43 @@ impl ChartEngine {
                     mosaic::MosaicLayout::new(cells, plot)
                         .hit(x, y)
                         .map(|row| (GeneralLayoutElement::Cell, row))
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Gauge, GeneralLayoutInput::Gauge(gauge)) => {
+                    gauge::GaugeLayout::new(gauge, plot).hit(x, y)
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Chord, GeneralLayoutInput::Graph { nodes, edges }) => {
+                    series.with_chord(nodes, edges, plot, |cache| cache.hit(x, y))
+                }
+                #[cfg(feature = "complete")]
+                (
+                    GeneralLayoutSeriesKind::Tree | GeneralLayoutSeriesKind::Dendrogram,
+                    GeneralLayoutInput::Hierarchy(nodes),
+                ) => series
+                    .with_tree(nodes, plot, |cache| cache.hit(x, y))
+                    .map(|row| (GeneralLayoutElement::Node, row)),
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::CirclePacking, GeneralLayoutInput::Hierarchy(nodes)) => {
+                    series
+                        .with_packing(nodes, plot, |cache| cache.hit(x, y))
+                        .map(|row| (GeneralLayoutElement::Node, row))
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Icicle, GeneralLayoutInput::Hierarchy(nodes)) => series
+                    .with_icicle(nodes, plot, |cache| cache.hit(x, y))
+                    .map(|row| (GeneralLayoutElement::Node, row)),
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Network, GeneralLayoutInput::Graph { .. }) => {
+                    series.network_hit(plot, x, y)
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Venn, GeneralLayoutInput::Sets(sets)) => {
+                    series.with_venn(sets, plot, |cache| cache.hit(x, y))
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(words)) => {
+                    series.with_word_cloud(self, words, plot, |cache| cache.hit(x, y))
                 }
                 _ => None,
             };
@@ -2913,6 +3941,21 @@ impl ChartEngine {
             (GeneralLayoutInput::Gantt { .. }, GeneralLayoutElement::Task)
             | (GeneralLayoutInput::Calendar(_), GeneralLayoutElement::Day)
             | (GeneralLayoutInput::Mosaic(_), GeneralLayoutElement::Cell) => hit.row,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Sets(_), GeneralLayoutElement::Region)
+            | (GeneralLayoutInput::Words(_), GeneralLayoutElement::Word)
+            | (GeneralLayoutInput::Graph { .. }, GeneralLayoutElement::Node) => hit.row,
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Gauge(_),
+                GeneralLayoutElement::Pointer | GeneralLayoutElement::Progress,
+            ) => 0,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(_), GeneralLayoutElement::Band) => hit.row.checked_add(1)?,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { nodes, .. }, GeneralLayoutElement::Link) => {
+                nodes.len().checked_add(hit.row)?
+            }
             _ => return None,
         };
         // Calendar days without data hold NaN so day offsets stay addressable.
@@ -2923,11 +3966,24 @@ impl ChartEngine {
             .filter(|value| !value.is_nan())
     }
 
-    /// Host-facing identity and label of a Gantt, calendar, or Marimekko item.
+    /// Host-facing identity and label of a Gantt, calendar, Marimekko, gauge, or graph item.
     pub fn general_layout_item_identity(&self, hit: GeneralLayoutHit) -> Option<(String, String)> {
         let store = self.general_layout_data.as_ref()?;
         let series = store.series.iter().find(|series| series.id == hit.series)?;
         match (&store.entry(series.options.dataset)?.input, hit.element) {
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(gauge), element) => {
+                self.gauge_item_identity(gauge, element, hit.row)
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { nodes, edges }, element) => {
+                self.graph_item_identity(nodes, edges, element, hit.row)
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => {
+                let node = nodes.get(hit.row)?;
+                Some((node.id.clone(), node.label.clone()))
+            }
             (GeneralLayoutInput::Gantt { tasks, .. }, GeneralLayoutElement::Task) => {
                 let task = tasks.get(hit.row)?;
                 Some((task.id.clone(), task.label.clone()))
@@ -2942,6 +3998,16 @@ impl ChartEngine {
                     format!("{}/{}", cell.column, cell.segment),
                     format!("{} · {}", cell.column, cell.segment),
                 ))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Sets(sets), GeneralLayoutElement::Region) => {
+                let region = sets.get(hit.row)?;
+                Some((region.sets.join("∩"), venn::region_label(sets, hit.row)?))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Words(words), GeneralLayoutElement::Word) => {
+                let word = words.get(hit.row)?;
+                Some((word.text.clone(), word.text.clone()))
             }
             _ => None,
         }
@@ -2965,10 +4031,15 @@ impl ChartEngine {
             }
             (GeneralLayoutInput::Hierarchy(nodes), GeneralLayoutElement::Node) => (
                 nodes.get(hit.row)?.label.clone(),
-                if series.options.kind == GeneralLayoutSeriesKind::Treemap {
-                    treemap_cell_color(series.color, nodes, hit.row, treemap_color_range(nodes))
-                } else {
-                    series.color
+                match series.options.kind {
+                    GeneralLayoutSeriesKind::Treemap => {
+                        treemap_cell_color(series.color, nodes, hit.row, treemap_color_range(nodes))
+                    }
+                    #[cfg(feature = "complete")]
+                    GeneralLayoutSeriesKind::Icicle => {
+                        icicle::cell_color(series.color, nodes, hit.row)
+                    }
+                    _ => series.color,
                 },
                 None,
             ),
@@ -3015,6 +4086,30 @@ impl ChartEngine {
                     Some(format!("({:.1}%)", layout.share(hit.row) * 100.0)),
                 )
             }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Gauge(gauge), element) => {
+                return self.gauge_item_tooltip(series, gauge, element, hit.row);
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Graph { nodes, edges }, element) => {
+                let (label, color, detail) =
+                    self.chord_item_tooltip(series, nodes, edges, element, hit.row)?;
+                (label, color, detail)
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Sets(sets), GeneralLayoutElement::Region) => {
+                self.venn_item_tooltip(series, sets, hit.row)?
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Words(words), GeneralLayoutElement::Word) => {
+                let word = words.get(hit.row)?;
+                let color = word
+                    .color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or(series.color);
+                (word.text.clone(), color, None)
+            }
             _ => return None,
         };
         Some(LayoutItemTooltip {
@@ -3058,32 +4153,50 @@ impl ChartEngine {
                                 element: GeneralLayoutElement::Stage,
                                 row,
                             }),
+                        #[cfg(feature = "complete")]
+                        expanded: None,
+                        #[cfg(feature = "complete")]
+                        placed: None,
                     })
                     .collect(),
             ),
-            GeneralLayoutInput::Hierarchy(nodes) => (
-                nodes.len(),
-                nodes
-                    .iter()
-                    .enumerate()
-                    .skip(offset)
-                    .take(limit)
-                    .map(|(row, node)| GeneralLayoutAccessibilityItem {
-                        element: GeneralLayoutElement::Node,
-                        row,
-                        id: node.id.clone(),
-                        label: node.label.clone(),
-                        value: entry.semantic_values.get(row).copied(),
-
-                        selected: selected
-                            == Some(GeneralLayoutHit {
-                                series: series_id,
+            GeneralLayoutInput::Hierarchy(nodes) => self
+                .collapsible_accessibility_items(
+                    series,
+                    nodes,
+                    &entry.semantic_values,
+                    selected,
+                    offset,
+                    limit,
+                )
+                .unwrap_or_else(|| {
+                    (
+                        nodes.len(),
+                        nodes
+                            .iter()
+                            .enumerate()
+                            .skip(offset)
+                            .take(limit)
+                            .map(|(row, node)| GeneralLayoutAccessibilityItem {
                                 element: GeneralLayoutElement::Node,
                                 row,
-                            }),
-                    })
-                    .collect(),
-            ),
+                                id: node.id.clone(),
+                                label: node.label.clone(),
+                                value: entry.semantic_values.get(row).copied(),
+                                selected: selected
+                                    == Some(GeneralLayoutHit {
+                                        series: series_id,
+                                        element: GeneralLayoutElement::Node,
+                                        row,
+                                    }),
+                                #[cfg(feature = "complete")]
+                                expanded: None,
+                                #[cfg(feature = "complete")]
+                                placed: None,
+                            })
+                            .collect(),
+                    )
+                }),
             GeneralLayoutInput::Flow { nodes, links } => {
                 let mut items = Vec::with_capacity(limit.min(nodes.len() + links.len()));
                 for row in offset..(offset.saturating_add(limit)).min(nodes.len() + links.len()) {
@@ -3122,6 +4235,10 @@ impl ChartEngine {
                                 element,
                                 row: element_row,
                             }),
+                        #[cfg(feature = "complete")]
+                        expanded: None,
+                        #[cfg(feature = "complete")]
+                        placed: None,
                     });
                 }
                 (nodes.len() + links.len(), items)
@@ -3145,6 +4262,88 @@ impl ChartEngine {
                 cells.len(),
                 self.mosaic_accessibility_items(series_id, cells, selected, offset, limit),
             ),
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Gauge(gauge) => (
+                1 + gauge.bands.len(),
+                self.gauge_accessibility_items(series_id, gauge, selected, offset, limit),
+            ),
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Graph { nodes, edges } => (
+                nodes.len() + edges.len(),
+                self.graph_accessibility_items(
+                    series_id,
+                    (nodes, edges),
+                    &entry.semantic_values,
+                    selected,
+                    offset,
+                    limit,
+                ),
+            ),
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Sets(sets) => (
+                sets.len(),
+                sets.iter()
+                    .enumerate()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|(row, region)| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Region,
+                        row,
+                        id: region.sets.join("∩"),
+                        label: venn::region_label(sets, row).unwrap_or_default(),
+                        value: Some(region.size),
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Region,
+                                row,
+                            }),
+                        #[cfg(feature = "complete")]
+                        expanded: None,
+                        #[cfg(feature = "complete")]
+                        placed: None,
+                    })
+                    .collect(),
+            ),
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Words(words) => {
+                let plot = self
+                    .pane_index_for_id(series.pane_id)
+                    .and_then(|pane| self.general_plot_rect(pane));
+                (
+                    words.len(),
+                    words
+                        .iter()
+                        .enumerate()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|(row, word)| GeneralLayoutAccessibilityItem {
+                            element: GeneralLayoutElement::Word,
+                            row,
+                            id: word.text.clone(),
+                            label: word.text.clone(),
+                            value: Some(word.weight),
+                            selected: selected
+                                == Some(GeneralLayoutHit {
+                                    series: series_id,
+                                    element: GeneralLayoutElement::Word,
+                                    row,
+                                }),
+                            expanded: None,
+                            placed: plot.map(|plot| {
+                                series.with_word_cloud(self, words, plot, |cache| {
+                                    cache.is_placed(row)
+                                })
+                            }),
+                        })
+                        .collect(),
+                )
+            }
+            #[cfg(not(feature = "complete"))]
+            GeneralLayoutInput::Gauge(_)
+            | GeneralLayoutInput::Graph { .. }
+            | GeneralLayoutInput::Sets(_)
+            | GeneralLayoutInput::Words(_) => (0, Vec::new()),
         };
         Some(GeneralLayoutAccessibilitySnapshot {
             series: series_id,
@@ -3159,6 +4358,11 @@ impl ChartEngine {
         &mut self,
         options: GeneralLayoutSeriesOptions,
     ) -> Result<GeneralLayoutSeriesId, ChartError> {
+        if options.kind.requires_complete_build() && !Self::build_includes_complete_families() {
+            return Err(crate::complete_build_required(
+                "gauge, relationship, and hierarchy layout families",
+            ));
+        }
         let pane_id = self
             .pane_stable_id(options.pane)
             .ok_or_else(|| invalid_handle("layout pane is stale"))?;
@@ -3173,6 +4377,8 @@ impl ChartEngine {
             .as_mut()
             .ok_or_else(|| invalid_handle("layout dataset handle is stale"))?;
         let id = store.insert_series(pane_id, options)?;
+        #[cfg(feature = "complete")]
+        self.settle_network_simulations();
         self.invalidate_frame_all();
         Ok(id)
     }
@@ -3240,6 +4446,46 @@ impl ChartEngine {
         self.invalidate_frame_all();
         Ok(())
     }
+    /// Changes the direction of a tree, dendrogram, or icicle series. Fails without a change
+    /// when the series kind does not support `orientation`.
+    #[cfg(feature = "complete")]
+    pub fn set_general_layout_hierarchy_orientation(
+        &mut self,
+        id: GeneralLayoutSeriesId,
+        orientation: HierarchyOrientation,
+    ) -> Result<(), ChartError> {
+        let series = self
+            .general_layout_data
+            .as_mut()
+            .and_then(|store| store.series.iter_mut().find(|series| series.id == id))
+            .ok_or_else(|| invalid_handle("layout series handle is stale"))?;
+        if !series.options.kind.supports_orientation(orientation) {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "layout series kind does not support this hierarchy orientation",
+            ));
+        }
+        if series.options.hierarchy_orientation != orientation {
+            series.options.hierarchy_orientation = orientation;
+            series.clear_caches();
+            self.invalidate_frame_all();
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "complete"))]
+    fn collapsible_accessibility_items(
+        &self,
+        _series: &LayoutSeriesEntry,
+        _nodes: &[HierarchyNode],
+        _values: &[f64],
+        _selected: Option<GeneralLayoutHit>,
+        _offset: usize,
+        _limit: usize,
+    ) -> Option<(usize, Vec<GeneralLayoutAccessibilityItem>)> {
+        None
+    }
+
     pub fn remove_general_layout_series(
         &mut self,
         id: GeneralLayoutSeriesId,
@@ -3356,6 +4602,8 @@ impl ChartEngine {
                     && !self.general_transition_reduced_motion,
                 self.general_transition_time_ms,
             )?;
+        #[cfg(feature = "complete")]
+        self.settle_network_simulations();
         self.invalidate_frame_all();
         Ok(())
     }
@@ -3374,6 +4622,90 @@ impl ChartEngine {
         }
         self.invalidate_frame_all();
         Ok(())
+    }
+}
+
+/// Whether a hierarchy row of `series` sits under a collapsed tree or dendrogram node.
+fn hierarchy_row_hidden(series: &LayoutSeriesEntry, nodes: &[HierarchyNode], row: usize) -> bool {
+    #[cfg(feature = "complete")]
+    {
+        tree::row_hidden(series, nodes, row)
+    }
+    #[cfg(not(feature = "complete"))]
+    {
+        let _ = (series, nodes, row);
+        false
+    }
+}
+
+/// Hierarchy, network and word cloud options apply only to the families they configure.
+#[cfg(feature = "complete")]
+fn validate_relationship_options(
+    options: &GeneralLayoutSeriesOptions,
+    input: &GeneralLayoutInput,
+) -> Result<(), ChartError> {
+    if !options
+        .kind
+        .supports_orientation(options.hierarchy_orientation)
+    {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "layout series kind does not support this hierarchy orientation",
+        ));
+    }
+    validate_collapsed(options, input)?;
+    if options.kind != GeneralLayoutSeriesKind::Network && !options.has_default_network_options() {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "network options apply only to network series",
+        ));
+    }
+    if options.kind != GeneralLayoutSeriesKind::WordCloud
+        && !options.has_default_word_cloud_options()
+    {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "word cloud options apply only to word cloud series",
+        ));
+    }
+    Ok(())
+}
+
+/// Collapsed IDs are bounded by the dataset: each must be unique and name a node with children
+/// of a tree or dendrogram series.
+#[cfg(feature = "complete")]
+fn validate_collapsed(
+    options: &GeneralLayoutSeriesOptions,
+    input: &GeneralLayoutInput,
+) -> Result<(), ChartError> {
+    if options.collapsed.is_empty() {
+        return Ok(());
+    }
+    let invalid = || {
+        ChartError::new(
+            ErrorCode::InvalidOptions,
+            "collapsed IDs must be unique internal nodes of a tree or dendrogram series",
+        )
+    };
+    let GeneralLayoutInput::Hierarchy(nodes) = input else {
+        return Err(invalid());
+    };
+    if !options.kind.is_collapsible() || options.collapsed.len() > nodes.len() {
+        return Err(invalid());
+    }
+    let parents: HashSet<&str> = nodes
+        .iter()
+        .filter_map(|node| node.parent.as_deref())
+        .collect();
+    let mut seen = HashSet::with_capacity(options.collapsed.len());
+    if options
+        .collapsed
+        .iter()
+        .all(|id| parents.contains(id.as_str()) && seen.insert(id.as_str()))
+    {
+        Ok(())
+    } else {
+        Err(invalid())
     }
 }
 

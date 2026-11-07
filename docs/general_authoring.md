@@ -345,6 +345,53 @@ days, so convert local dates with `Date.UTC(year, monthIndex, day)` before passi
 `renderItem` shapes beyond bars, progress, milestones and finish-to-start arrows have no Aeris
 equivalent yet.
 
+### Migrating ECharts gauge, chord, tree and graph charts (complete build)
+
+These families need `@aeristerminal/aeris-charts/complete`; the standard build throws
+`complete_build_required`. Each takes a typed layout input on an axis-free layout pane:
+
+| ECharts authoring concept | Aeris equivalent |
+| --- | --- |
+| `gauge` series with `data: [{ value, name }]` | `add_layout_series("gauge", options, { type: "gauge", value, label })` |
+| `axisLine.lineStyle.color: [[fraction, color], ...]` | `bands: [{ to, color }]` in data units inside `min..max` |
+| `progress.show: true` | `progress: true` |
+| `detail.formatter: "{value}%"` | `unit: "%"`, optional `decimals` |
+| `chord` series with `data` and `links` | `add_layout_series("chord", options, { type: "graph", nodes, edges })` with `source`/`target` node IDs |
+| `tree` series with nested `children` | `add_layout_series("tree", options, { type: "hierarchy", nodes })` with flat `{ id, parent }` nodes |
+| `tree` `orient: "LR"` / `"TB"`, `layout: "radial"` | `hierarchy_orientation: "horizontal"` / `"vertical"` / `"radial"` |
+| `tree` `edgeShape: "polyline"` with leaves aligned | `add_layout_series("dendrogram", ...)` |
+| `expandAndCollapse` and `collapsed` node flags | Built-in click and Enter collapse; initial state through `collapsed: [ids]` |
+| `graph` series `layout: "force"` / `"circular"` / `"none"` | `add_layout_series("network", { network_layout: "force" \| "circular" \| "fixed" }, { type: "graph", nodes, edges })` |
+| `graph` `roam: true`, `draggable: true` | Built-in pan, wheel and pinch zoom, and node drag with pin on release |
+| `graph` `categories` | Node `category`; nodes sharing one share a color |
+
+Aeris follows d3-force where ECharts runs its own force model, so force coordinates differ. To
+reopen a settled network without re-simulating, keep the exported state or pass its
+`options().positions` back at creation. Circle packing, icicle, Venn and word cloud have no
+ECharts series: use `"circle_packing"` and `"icicle"` with hierarchy data, `"venn"` with
+`{ type: "sets", sets }` exclusive regions (venn.js shape), and `"word_cloud"` with
+`{ type: "words", words }`.
+
+```ts
+import { create_chart } from "@aeristerminal/aeris-charts/complete";
+
+const chart = await create_chart(container, {
+  initialPane: { horizontal_domain: { type: "layout" } },
+});
+const network = chart.add_layout_series("network", { pane: 0, title: "Services" }, {
+  type: "graph",
+  nodes: [
+    { id: "api", label: "API", category: "edge" },
+    { id: "auth", label: "Auth", category: "core" },
+    { id: "db", label: "Database", category: "core" },
+  ],
+  edges: [
+    { source: "api", target: "auth" },
+    { source: "auth", target: "db", value: 2 },
+  ],
+});
+```
+
 ### Migrating ECharts waterfall, bullet, lollipop, dumbbell, slope and bump charts
 
 ECharts builds these from stacked bars, `custom` series, extra scatter series and host-computed

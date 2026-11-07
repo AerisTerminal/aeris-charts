@@ -403,8 +403,32 @@ export type layout_series_kind =
   | "sunburst"
   | "gantt"
   | "calendar_heatmap"
-  | "marimekko";
-export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell";
+  | "marimekko"
+  /** Complete build only. */
+  | "gauge"
+  /** Complete build only; takes `graph` data. */
+  | "chord"
+  /** Complete build only; takes `hierarchy` data. Nodes with children fold on click or Enter. */
+  | "tree"
+  /** Complete build only; takes `hierarchy` data. Nodes with children fold on click or Enter. */
+  | "dendrogram"
+  /** Complete build only; takes `hierarchy` data. */
+  | "circle_packing"
+  /** Complete build only; takes `hierarchy` data. */
+  | "icicle"
+  /**
+   * Complete build only; takes `graph` data. Nodes drag and pin, empty space pans, and the
+   * wheel or a pinch zooms around the pointer.
+   */
+  | "network"
+  /**
+   * Complete build only; takes `sets` data. Two and three sets lay out area-proportionally;
+   * more sets are a labelled approximation whose overlaps carry no area meaning.
+   */
+  | "venn"
+  /** Complete build only; takes `words` data. */
+  | "word_cloud";
+export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell" | "band" | "progress" | "pointer" | "region" | "word";
 export type layout_input =
   | { type: "funnel"; stages: readonly { id: string; label: string; value: number }[] }
   | {
@@ -443,7 +467,53 @@ export type layout_input =
       low_color?: string | null;
       high_color?: string | null;
     }
-  | { type: "mosaic"; cells: readonly { column: string; segment: string; value: number }[] };
+  | { type: "mosaic"; cells: readonly { column: string; segment: string; value: number }[] }
+  | {
+      type: "gauge";
+      /** Values outside `min..max` clamp to the track ends. */
+      value: number;
+      /** Defaults to 0. */
+      min?: number;
+      /** Defaults to 100. */
+      max?: number;
+      label?: string;
+      /** Suffix of the value text, such as `%`. */
+      unit?: string;
+      /** Fixed fraction digits (0-10) of the value text; omit for the shortest exact form. */
+      decimals?: number | null;
+      /** At most 32 bands with ascending `to` inside `min..max`; each starts where the previous ends. */
+      bands?: readonly { to: number; color: string; label?: string }[];
+      /** Paint a progress arc from `min` to the value. */
+      progress?: boolean;
+    }
+  | {
+      type: "graph";
+      /** `value` overrides the node's incoming plus outgoing edge value; `x`/`y` are given together or not at all. */
+      nodes: readonly {
+        id: string;
+        label: string;
+        category?: string | null;
+        value?: number | null;
+        x?: number | null;
+        y?: number | null;
+      }[];
+      /** Directed edges; cycles and self-links are allowed, a repeated `(source, target)` pair is not. `value` defaults to 1. */
+      edges?: readonly { source: string; target: string; value?: number }[];
+    }
+  | {
+      type: "sets";
+      /**
+       * Exclusive venn regions, venn.js-shaped: `{sets: ["A", "B"], size}` is the area of the
+       * part of A and B that no other listed set covers. Every named set needs its own
+       * single-set region; up to 8 sets and 255 regions.
+       */
+      sets: readonly { sets: readonly string[]; size: number; label?: string | null }[];
+    }
+  | {
+      type: "words";
+      /** Up to 500 words; `weight` scales the font size and `color` overrides the series color. */
+      words: readonly { text: string; weight: number; color?: string | null }[];
+    };
 
 export interface layout_series_options {
   pane: number;
@@ -452,6 +522,53 @@ export interface layout_series_options {
   /** Show labels only when the engine-measured text fits inside the mark. */
   data_labels?: boolean;
   visible?: boolean;
+  /**
+   * Root on the left (`"horizontal"`, the default), on top (`"vertical"`), or at the center
+   * (`"radial"`). Trees and dendrograms accept all three, icicles the first two, and other
+   * families only the default; `options()` reports it for trees, dendrograms and icicles.
+   */
+  hierarchy_orientation?: "horizontal" | "vertical" | "radial";
+  /**
+   * IDs of collapsed tree or dendrogram nodes with children. The chart folds and unfolds nodes
+   * on click and Enter, reports the current set from tree and dendrogram `options()`, and
+   * drops IDs that new data removes.
+   */
+  collapsed?: readonly string[];
+  /**
+   * Network node placement: a d3-force simulation (`"force"`, the default) that animates to
+   * rest, evenly on a circle in node order (`"circular"`), or at each node's `x`/`y`
+   * (`"fixed"`, which requires both on every node). Network series only.
+   */
+  network_layout?: "force" | "circular" | "fixed";
+  /** Rest length of force-layout links in CSS pixels at zoom 1, from 1 to 1000; default 30. */
+  network_link_distance?: number;
+  /**
+   * Network nodes held at layout positions. Dragging a node pins it where it is released;
+   * `options()` reports the current pins and new data drops pins of removed nodes.
+   */
+  pinned?: readonly { id: string; x: number; y: number }[];
+  /**
+   * Network pan offset in layout units and zoom (0.1 to 10). Panning and zooming update it;
+   * `options()` reports it for network series.
+   */
+  network_view?: { x: number; y: number; zoom: number };
+  /**
+   * Settled force-layout node positions captured by a state export. Passing them back at
+   * creation restores the layout settled, without re-simulating; `options()` reports them
+   * for network series. Network series only.
+   */
+  positions?: readonly { id: string; x: number; y: number }[];
+  /** Smallest word cloud font size in CSS pixels, 4 to 256; default 10. Word cloud series only. */
+  word_cloud_min_size?: number;
+  /** Largest word cloud font size in CSS pixels, 4 to 256 and no smaller than the minimum; default 48. Word cloud series only. */
+  word_cloud_max_size?: number;
+  /**
+   * Weight-to-font mapping: `"sqrt"` (the default) keeps the painted area linear in the
+   * weight, `"linear"` keeps the font size linear. Word cloud series only.
+   */
+  word_cloud_scaling?: "linear" | "sqrt";
+  /** Rotate every second word by 90 degrees. Word cloud series only. */
+  word_cloud_rotate?: boolean;
 }
 
 export interface layout_hit {
@@ -471,6 +588,10 @@ export interface layout_accessibility_item {
   label: string;
   value: number | null;
   selected: boolean;
+  /** Present on tree and dendrogram nodes with children: whether their subtree is shown. */
+  expanded?: boolean;
+  /** Present on word cloud words: whether the word was placed or omitted for lack of room. */
+  placed?: boolean;
 }
 
 export interface layout_accessibility_snapshot {
@@ -487,7 +608,28 @@ export interface layout_series_api {
   readonly kind: layout_series_kind;
   set_data(data: layout_input): void;
   options(): layout_series_options;
-  apply_options(options: Partial<Omit<layout_series_options, "pane">>): void;
+  /**
+   * Collapse, pin and view state change through interaction and the network layout is fixed at
+   * creation, so those are not patch fields.
+   */
+  apply_options(
+    options: Partial<
+      Omit<
+        layout_series_options,
+        | "pane"
+        | "collapsed"
+        | "network_layout"
+        | "network_link_distance"
+        | "pinned"
+        | "network_view"
+        | "positions"
+        | "word_cloud_min_size"
+        | "word_cloud_max_size"
+        | "word_cloud_scaling"
+        | "word_cloud_rotate"
+      >
+    >,
+  ): void;
   set_visible(visible: boolean): void;
   subscribe_data_changed(handler: () => void): void;
   unsubscribe_data_changed(handler: () => void): void;

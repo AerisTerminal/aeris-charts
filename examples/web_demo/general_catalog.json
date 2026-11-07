@@ -1008,6 +1008,179 @@
       ]
     },
     {
+      "id": "gauge", "title": "Gauge", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "gauge", "title": "CPU load", "color": "#5070dd", "data": { "type": "gauge",
+          "value": 62.5, "min": 0, "max": 100, "label": "CPU load", "unit": "%", "progress": true,
+          "bands": [
+            { "to": 30, "color": "#67e0e3", "label": "Low" },
+            { "to": 70, "color": "#37a2da", "label": "Normal" },
+            { "to": 100, "color": "#fd666d", "label": "High" }
+          ] } }
+      ]
+    },
+    {
+      "id": "chord", "title": "Chord", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "chord", "title": "Trade flows", "color": "#5070dd", "data": { "type": "graph",
+          "nodes": [
+            { "id": "us", "label": "US" }, { "id": "eu", "label": "EU" }, { "id": "cn", "label": "China" },
+            { "id": "jp", "label": "Japan" }, { "id": "mx", "label": "Mexico" }
+          ],
+          "edges": [
+            { "source": "us", "target": "eu", "value": 32 }, { "source": "eu", "target": "us", "value": 28 },
+            { "source": "cn", "target": "us", "value": 41 }, { "source": "us", "target": "cn", "value": 15 },
+            { "source": "cn", "target": "eu", "value": 30 }, { "source": "eu", "target": "cn", "value": 22 },
+            { "source": "jp", "target": "us", "value": 14 }, { "source": "cn", "target": "jp", "value": 17 },
+            { "source": "mx", "target": "us", "value": 26 }, { "source": "us", "target": "mx", "value": 21 }
+          ] } }
+      ]
+    },
+    {
+      "id": "tree", "title": "Tree", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "tree", "title": "Market hierarchy", "color": "#5070dd", "data": { "type": "hierarchy", "nodes": [
+          { "id": "markets", "parent": null, "label": "Markets", "value": null },
+          { "id": "equities", "parent": "markets", "label": "Equities", "value": null },
+          { "id": "rates", "parent": "markets", "label": "Rates", "value": null },
+          { "id": "fx", "parent": "markets", "label": "FX", "value": null },
+          { "id": "us_eq", "parent": "equities", "label": "US", "value": 42 },
+          { "id": "eu_eq", "parent": "equities", "label": "Europe", "value": 24 },
+          { "id": "asia_eq", "parent": "equities", "label": "Asia", "value": 18 },
+          { "id": "ust", "parent": "rates", "label": "Treasuries", "value": 30 },
+          { "id": "bund", "parent": "rates", "label": "Bunds", "value": 14 },
+          { "id": "eurusd", "parent": "fx", "label": "EUR/USD", "value": 16 },
+          { "id": "usdjpy", "parent": "fx", "label": "USD/JPY", "value": 11 },
+          { "id": "gbpusd", "parent": "fx", "label": "GBP/USD", "value": 7 }
+        ] } }
+      ]
+    },
+    {
+      "id": "dendrogram", "title": "Dendrogram", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "dendrogram", "title": "Market hierarchy", "color": "#5070dd", "hierarchy_orientation": "vertical", "data": { "type": "hierarchy", "nodes": [
+          { "id": "markets", "parent": null, "label": "Markets", "value": null },
+          { "id": "equities", "parent": "markets", "label": "Equities", "value": null },
+          { "id": "rates", "parent": "markets", "label": "Rates", "value": null },
+          { "id": "fx", "parent": "markets", "label": "FX", "value": null },
+          { "id": "us_eq", "parent": "equities", "label": "US", "value": 42 },
+          { "id": "eu_eq", "parent": "equities", "label": "Europe", "value": 24 },
+          { "id": "asia_eq", "parent": "equities", "label": "Asia", "value": 18 },
+          { "id": "ust", "parent": "rates", "label": "Treasuries", "value": 30 },
+          { "id": "bund", "parent": "rates", "label": "Bunds", "value": 14 },
+          { "id": "eurusd", "parent": "fx", "label": "EUR/USD", "value": 16 },
+          { "id": "usdjpy", "parent": "fx", "label": "USD/JPY", "value": 11 },
+          { "id": "gbpusd", "parent": "fx", "label": "GBP/USD", "value": 7 }
+        ] } }
+      ]
+    },
+    {
+      "id": "circle_packing", "title": "Circle packing", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "circle_packing", "title": "Exposure by market", "color": "#5070dd", "data": { "type": "hierarchy", "nodes": [
+          { "id": "markets", "parent": null, "label": "Markets", "value": null },
+          { "id": "equities", "parent": "markets", "label": "Equities", "value": null },
+          { "id": "rates", "parent": "markets", "label": "Rates", "value": null },
+          { "id": "fx", "parent": "markets", "label": "FX", "value": null },
+          { "id": "us_eq", "parent": "equities", "label": "US", "value": 42 },
+          { "id": "eu_eq", "parent": "equities", "label": "Europe", "value": 24 },
+          { "id": "asia_eq", "parent": "equities", "label": "Asia", "value": 18 },
+          { "id": "ust", "parent": "rates", "label": "Treasuries", "value": 30 },
+          { "id": "bund", "parent": "rates", "label": "Bunds", "value": 14 },
+          { "id": "eurusd", "parent": "fx", "label": "EUR/USD", "value": 16 },
+          { "id": "usdjpy", "parent": "fx", "label": "USD/JPY", "value": 11 },
+          { "id": "gbpusd", "parent": "fx", "label": "GBP/USD", "value": 7 }
+        ] } }
+      ]
+    },
+    {
+      "id": "icicle", "title": "Icicle", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "icicle", "title": "Exposure by market", "color": "#5070dd", "data": { "type": "hierarchy", "nodes": [
+          { "id": "markets", "parent": null, "label": "Markets", "value": null },
+          { "id": "equities", "parent": "markets", "label": "Equities", "value": null },
+          { "id": "rates", "parent": "markets", "label": "Rates", "value": null },
+          { "id": "fx", "parent": "markets", "label": "FX", "value": null },
+          { "id": "us_eq", "parent": "equities", "label": "US", "value": 42 },
+          { "id": "eu_eq", "parent": "equities", "label": "Europe", "value": 24 },
+          { "id": "asia_eq", "parent": "equities", "label": "Asia", "value": 18 },
+          { "id": "ust", "parent": "rates", "label": "Treasuries", "value": 30 },
+          { "id": "bund", "parent": "rates", "label": "Bunds", "value": 14 },
+          { "id": "eurusd", "parent": "fx", "label": "EUR/USD", "value": 16 },
+          { "id": "usdjpy", "parent": "fx", "label": "USD/JPY", "value": 11 },
+          { "id": "gbpusd", "parent": "fx", "label": "GBP/USD", "value": 7 }
+        ] } }
+      ]
+    },
+    {
+      "id": "network", "title": "Network", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "network", "title": "Counterparty network", "color": "#5070dd", "data": { "type": "graph",
+          "nodes": [
+            { "id": "jpm", "label": "JPM", "category": "bank", "value": 40 },
+            { "id": "gs", "label": "GS", "category": "bank", "value": 32 },
+            { "id": "ms", "label": "MS", "category": "bank", "value": 28 },
+            { "id": "citi", "label": "Citi", "category": "bank", "value": 24 },
+            { "id": "bx", "label": "Blackstone", "category": "fund", "value": 18 },
+            { "id": "brk", "label": "Berkshire", "category": "fund", "value": 22 },
+            { "id": "vg", "label": "Vanguard", "category": "fund", "value": 30 },
+            { "id": "cme", "label": "CME", "category": "venue", "value": 26 },
+            { "id": "ice", "label": "ICE", "category": "venue", "value": 16 },
+            { "id": "lch", "label": "LCH", "category": "venue", "value": 14 },
+            { "id": "pimco", "label": "PIMCO", "category": "fund", "value": 12 },
+            { "id": "bofa", "label": "BofA", "category": "bank", "value": 26 }
+          ],
+          "edges": [
+            { "source": "jpm", "target": "gs" }, { "source": "jpm", "target": "ms" }, { "source": "jpm", "target": "cme" },
+            { "source": "gs", "target": "ms" }, { "source": "gs", "target": "bx" }, { "source": "ms", "target": "vg" },
+            { "source": "citi", "target": "jpm" }, { "source": "citi", "target": "ice" }, { "source": "bofa", "target": "citi" },
+            { "source": "bofa", "target": "lch" }, { "source": "brk", "target": "bofa" }, { "source": "vg", "target": "pimco" },
+            { "source": "cme", "target": "lch" }, { "source": "ice", "target": "lch" }, { "source": "bx", "target": "pimco" },
+            { "source": "gs", "target": "cme" }
+          ] } }
+      ]
+    },
+    {
+      "id": "venn", "title": "Venn", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "venn", "title": "Desk coverage", "color": "#5070dd", "data": { "type": "sets",
+          "sets": [
+            { "sets": ["Equities"], "size": 18 },
+            { "sets": ["Rates"], "size": 14 },
+            { "sets": ["Credit"], "size": 12 },
+            { "sets": ["Equities", "Rates"], "size": 6 },
+            { "sets": ["Equities", "Credit"], "size": 4 },
+            { "sets": ["Rates", "Credit"], "size": 5 },
+            { "sets": ["Equities", "Rates", "Credit"], "size": 3 }
+          ] } }
+      ]
+    },
+    {
+      "id": "word_cloud", "title": "Word cloud", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "word_cloud", "title": "Desk chatter", "color": "#5070dd", "data": { "type": "words",
+          "words": [
+            { "text": "liquidity", "weight": 40 }, { "text": "volatility", "weight": 34 },
+            { "text": "spread", "weight": 28 }, { "text": "gamma", "weight": 22 },
+            { "text": "basis", "weight": 18, "color": "#3ba272" }, { "text": "coupon", "weight": 15 },
+            { "text": "duration", "weight": 13 }, { "text": "convexity", "weight": 11 },
+            { "text": "carry", "weight": 9 }, { "text": "roll", "weight": 8 },
+            { "text": "hedge", "weight": 7 }, { "text": "margin", "weight": 6 },
+            { "text": "repo", "weight": 5 }, { "text": "auction", "weight": 4 },
+            { "text": "fixing", "weight": 3 }
+          ] } }
+      ]
+    },
+    {
     "id": "violin_regional",
     "title": "Violin: response time by region",
     "category": "statistics",

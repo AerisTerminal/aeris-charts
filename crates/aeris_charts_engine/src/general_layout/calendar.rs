@@ -424,6 +424,10 @@ impl ChartEngine {
                             element: GeneralLayoutElement::Day,
                             row,
                         }),
+                    #[cfg(feature = "complete")]
+                    expanded: None,
+                    #[cfg(feature = "complete")]
+                    placed: None,
                 }
             })
             .collect()

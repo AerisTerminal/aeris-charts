@@ -53,6 +53,8 @@ pub use volume_profile::{
 #[cfg(test)]
 mod general_business_tests;
 #[cfg(test)]
+mod general_relationship_tests;
+#[cfg(test)]
 mod general_stats_tests;
 mod ordering;
 mod persistence;
@@ -200,10 +202,16 @@ pub use general_data::{
 };
 #[doc(hidden)]
 pub use general_layout::{
-    CalendarDay, CalendarInput, FlowLink, FlowNode, FunnelStage, GanttTask,
+    CalendarDay, CalendarInput, FlowLink, FlowNode, FunnelStage, GanttTask, GaugeBand, GaugeInput,
     GeneralLayoutAccessibilityItem, GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId,
     GeneralLayoutElement, GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId,
-    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, HierarchyNode, MosaicCell,
+    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GraphEdge, GraphNode, HierarchyNode,
+    MosaicCell, VennSet, WordCloudWord,
+};
+#[cfg(feature = "complete")]
+#[doc(hidden)]
+pub use general_layout::{
+    HierarchyOrientation, NetworkLayout, NetworkPin, NetworkView, WordCloudScaling,
 };
 #[doc(hidden)]
 pub use general_series::{
@@ -2877,14 +2885,30 @@ impl ChartEngine {
             }
             self.invalidate_frame_scene();
         }
+        #[cfg(feature = "complete")]
+        self.settle_network_simulations();
     }
 
+    /// Whether a general data transition or a network force simulation needs animation
+    /// frames driven through [`Self::set_general_animation_time_ms`].
     pub fn general_transition_active(&self) -> bool {
         !self.general_transitions.is_empty()
             || self
                 .general_layout_data
                 .as_ref()
                 .is_some_and(|store| store.transition_active())
+            || self.general_simulation_active()
+    }
+
+    fn general_simulation_active(&self) -> bool {
+        #[cfg(feature = "complete")]
+        {
+            self.general_layout_simulation_active()
+        }
+        #[cfg(not(feature = "complete"))]
+        {
+            false
+        }
     }
 
     /// Advance active general transitions with a finite monotonic host clock in milliseconds.
@@ -2896,6 +2920,8 @@ impl ChartEngine {
             return true;
         }
         self.general_transition_time_ms = time_ms;
+        #[cfg(feature = "complete")]
+        self.advance_network_simulations(0, time_ms);
         if self.general_transitions.is_empty()
             && !self
                 .general_layout_data

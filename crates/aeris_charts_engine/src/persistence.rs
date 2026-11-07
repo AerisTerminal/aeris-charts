@@ -195,6 +195,58 @@ struct LayoutSeriesV2 {
     data_labels: bool,
     #[serde(default = "crate::general_layout::layout_visible_default")]
     visible: bool,
+    // Complete-build family options; the standard build ignores these keys on restore and
+    // rejects the series kinds they configure.
+    #[cfg(feature = "complete")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::HierarchyOrientation::is_horizontal"
+    )]
+    hierarchy_orientation: crate::HierarchyOrientation,
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    collapsed: Vec<String>,
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "crate::NetworkLayout::is_force")]
+    network_layout: crate::NetworkLayout,
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "crate::general_layout::network_link_distance_default",
+        skip_serializing_if = "crate::general_layout::is_default_network_link_distance"
+    )]
+    network_link_distance: f64,
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pinned: Vec<crate::NetworkPin>,
+    /// Settled force-layout node positions, exported so a restore reuses them directly
+    /// instead of re-simulating.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    positions: Vec<crate::NetworkPin>,
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "crate::NetworkView::is_default")]
+    network_view: crate::NetworkView,
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "crate::general_layout::word_cloud_min_size_default",
+        skip_serializing_if = "crate::general_layout::is_default_word_cloud_min_size"
+    )]
+    word_cloud_min_size: f64,
+    #[cfg(feature = "complete")]
+    #[serde(
+        default = "crate::general_layout::word_cloud_max_size_default",
+        skip_serializing_if = "crate::general_layout::is_default_word_cloud_max_size"
+    )]
+    word_cloud_max_size: f64,
+    #[cfg(feature = "complete")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::general_layout::is_default_word_cloud_scaling"
+    )]
+    word_cloud_scaling: crate::WordCloudScaling,
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    word_cloud_rotate: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1722,8 +1774,21 @@ impl ChartEngine {
             .general_layout_data
             .as_ref()
             .into_iter()
-            .flat_map(|store| store.persistence_series())
-            .map(|options| {
+            .flat_map(|store| {
+                store
+                    .persistence_series()
+                    .map(move |(series_id, options)| (store, series_id, options))
+            })
+            .map(|(store, series_id, options)| {
+                // A settled force layout exports its node positions; a running one keeps the
+                // previously persisted positions so an export never captures half-settled
+                // geometry.
+                #[cfg(feature = "complete")]
+                let positions = store
+                    .settled_positions(series_id)
+                    .unwrap_or_else(|| options.positions.clone());
+                #[cfg(not(feature = "complete"))]
+                let _ = (store, series_id);
                 Ok(LayoutSeriesV2 {
                     dataset: layout_dataset_ids
                         .get(&options.dataset)
@@ -1735,6 +1800,28 @@ impl ChartEngine {
                     color: options.color.clone(),
                     data_labels: options.data_labels,
                     visible: options.visible,
+                    #[cfg(feature = "complete")]
+                    hierarchy_orientation: options.hierarchy_orientation,
+                    #[cfg(feature = "complete")]
+                    collapsed: options.collapsed.clone(),
+                    #[cfg(feature = "complete")]
+                    network_layout: options.network_layout,
+                    #[cfg(feature = "complete")]
+                    network_link_distance: options.network_link_distance,
+                    #[cfg(feature = "complete")]
+                    pinned: options.pinned.clone(),
+                    #[cfg(feature = "complete")]
+                    positions,
+                    #[cfg(feature = "complete")]
+                    network_view: options.network_view,
+                    #[cfg(feature = "complete")]
+                    word_cloud_min_size: options.word_cloud_min_size,
+                    #[cfg(feature = "complete")]
+                    word_cloud_max_size: options.word_cloud_max_size,
+                    #[cfg(feature = "complete")]
+                    word_cloud_scaling: options.word_cloud_scaling,
+                    #[cfg(feature = "complete")]
+                    word_cloud_rotate: options.word_cloud_rotate,
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
@@ -2994,6 +3081,28 @@ impl ChartEngine {
                 color: series.color,
                 data_labels: series.data_labels,
                 visible: series.visible,
+                #[cfg(feature = "complete")]
+                hierarchy_orientation: series.hierarchy_orientation,
+                #[cfg(feature = "complete")]
+                collapsed: series.collapsed,
+                #[cfg(feature = "complete")]
+                network_layout: series.network_layout,
+                #[cfg(feature = "complete")]
+                network_link_distance: series.network_link_distance,
+                #[cfg(feature = "complete")]
+                pinned: series.pinned,
+                #[cfg(feature = "complete")]
+                positions: series.positions,
+                #[cfg(feature = "complete")]
+                network_view: series.network_view,
+                #[cfg(feature = "complete")]
+                word_cloud_min_size: series.word_cloud_min_size,
+                #[cfg(feature = "complete")]
+                word_cloud_max_size: series.word_cloud_max_size,
+                #[cfg(feature = "complete")]
+                word_cloud_scaling: series.word_cloud_scaling,
+                #[cfg(feature = "complete")]
+                word_cloud_rotate: series.word_cloud_rotate,
             })?;
         }
         let options_json = serde_json::to_string(&state.chart_options)
@@ -3049,6 +3158,8 @@ impl ChartEngine {
             .borrow_mut()
             .rebuild_all(&self.drawings, self.panes.len());
         self.layout_panes(self.pane_h);
+        #[cfg(feature = "complete")]
+        self.settle_network_simulations();
         self.invalidate_frame_all();
         result.schema_version = PERSISTENCE_SCHEMA_VERSION_GENERAL;
         Ok(result)

@@ -4,3 +4,6 @@ to = bis {value}
 hexbin_cell = Hexbin-Zelle
 samples[one] = {count} Stichprobe
 samples[other] = {count} Stichproben
+gauge_value = Wert
+value_range = {start} – {end}
+graph_link = {source} nach {target}

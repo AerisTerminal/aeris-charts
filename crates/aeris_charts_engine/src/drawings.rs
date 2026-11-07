@@ -4671,6 +4671,12 @@ impl ChartEngine {
         self.invalidate_frame_drawings();
         // Trading marker cells size themselves from measured quantity text.
         self.invalidate_frame_trading();
+        // Word clouds place every word box from measured text, so new widths re-place them.
+        #[cfg(feature = "complete")]
+        if let Some(store) = self.general_layout_data.as_ref() {
+            store.invalidate_word_cloud_caches();
+            self.invalidate_frame_scene();
+        }
     }
 
     /// Whether a host has installed a glyph-width measurer. Native renderers use this to avoid

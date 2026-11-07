@@ -41,7 +41,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
 | G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
 | G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | G12 |
-| G12 | R12 | Relationships and hierarchy (complete build) | **Planned** | — | Gauge, graph store, chord, network, tree/dendrogram, circle packing, icicle, Venn, word cloud |
+| G12 | R12 | Relationships and hierarchy (complete build) | **Complete** | Complete-build gate for layout kinds; shared graph store; gauge, chord, tree/dendrogram with engine-owned collapse, circle packing, icicle, d3-force network with engine-owned drag/pin/pan/zoom and persisted settled positions, Venn and word cloud — complete build only | G13 |
 | G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
 | G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
 
@@ -56,10 +56,10 @@ Notes:
 
 Seven of eight baseline batches are complete. G8's automated work is complete; its phase
 closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G11 are
-complete (`22303df`, `33e2dbc`, `36cea9c`). G12–G14 have not started: no gauge, graph, map or 3D
-code exists yet, and G12 is the next batch. Work committed after G11 (ten-language chart text,
-linked sync, replay, drawing visibility and touch input) is shared or financial-chart work and
-does not advance G12–G14. Batch completion does not imply full parity-matrix verification.
+complete (`22303df`, `33e2dbc`, `36cea9c`), and G12 is complete. G13–G14 have not started: no
+map or 3D code exists yet, and G13 is the next batch. Work committed between G11 and G12
+(ten-language chart text, linked sync, replay, drawing visibility and touch input) is shared or
+financial-chart work. Batch completion does not imply full parity-matrix verification.
 
 ## How work is delivered
 
@@ -1012,6 +1012,78 @@ was invalid because an orphaned complete-build test server held the standard por
 Known limits: hexbin rounding matches d3-hexbin on engine fixtures, not a live d3 comparison;
 ridgeline hits exactly on a band boundary are distance-tie resolved; the standard build
 rejects any `stats` options object instead of validating it.
+
+### G12 — Relationships and hierarchy (2026-11-07)
+
+**Complete-build gate.** Nine layout kinds ship only in the complete build. Their modules
+(`general_layout/gauge.rs`, `graph.rs`, `chord.rs`, `tree.rs`, `packing.rs`, `icicle.rs`,
+`network.rs`, `venn.rs`, `word_cloud.rs`) compile only with `complete`.
+`GeneralLayoutSeriesKind::requires_complete_build()` gates `add_general_layout_series`, which V2
+restore also uses. The WASM `add_layout_series_result_json` and the TypeScript
+`complete_only_families` repeat the check, and the standard build rejects `gauge`, `graph`,
+`sets` and `words` inputs at dataset validation, all with `complete_build_required`. Everything
+only those families consume is gated the same way: the hierarchy orientation, collapse, network
+and word cloud fields of the layout series options and of the V2 layout series record, their
+option types, the controller's collapse toggles, the accessibility `expanded`/`placed` fields and
+the WASM option parsing; the four input variants stay but skip their serde field code in the
+standard build. Standard V2 restore ignores those option keys (state carrying only their defaults
+restores), and the package and WASM boundary reject the options with `complete_build_required`.
+The shared **graph input** (`GeneralLayoutInput::Graph`) carries nodes `{ id, label, category?, value?, x?,
+y? }` and directed edges `{ source, target, value = 1 }`. Cycles and self-links are allowed and
+repeated `(source, target)` pairs are rejected, with caps of 4,096 nodes and 16,384 edges.
+
+| Family | API | Reference behaviour |
+| --- | --- | --- |
+| Gauge | `add_layout_series("gauge")` with `{ type: "gauge", value, min, max, label, unit, decimals, bands, progress }` | ECharts 6.1.0 defaults (225° → -45°, ≤32 bands, progress arc, ticks, kite pointer); value transitions |
+| Chord | `"chord"` over `graph` | ECharts chord layout with d3-chord ribbons; pads only after nonempty groups, capped at half the circle (documented difference) |
+| Tree / dendrogram | `"tree"`, `"dendrogram"` over `hierarchy`; `hierarchy_orientation`, `collapsed` | d3-hierarchy `tree()` (Buchheim) and `cluster()`; horizontal, vertical, radial; engine-owned collapse |
+| Circle packing / icicle | `"circle_packing"`, `"icicle"` over `hierarchy` | d3-hierarchy `pack()` (seeded LCG Welzl) and `partition()` |
+| Network | `"network"` over `graph`; `network_layout`, `network_link_distance`, `pinned`, `network_view`, `positions` | d3-force 3.0 (phyllotaxis start, Barnes–Hut, 300 ticks), circular, fixed |
+| Venn | `"venn"` over `{ type: "sets" }` exclusive regions | ≤3 sets area-proportional (bisection lens, bounded Nelder–Mead); >3 sets labelled approximation; ≤8 sets, 255 regions; venn.js named reference |
+| Word cloud | `"word_cloud"` over `{ type: "words" }`; size, scaling and rotation options | ≤500 words, deterministic spiral, measured text boxes in a spatial grid, `placed` state; d3-cloud named reference |
+
+Collapse state is persisted and toggled only by the engine input controller (primary click, or
+Enter/Space on a focused layout datum); accessibility items carry optional `expanded`. The
+controller also owns network node drag and pin, background pan, wheel and pinch zoom with
+priority over the time scale, and Escape cancel. The force simulation takes at most two ticks
+per clock call on two clock sources sharing one timebase (`set_general_animation_time_ms` and
+`input_tick`). The measured release per-tick cost at the caps is a median of 2.553 ms and a 95th
+percentile of 2.827 ms. Under reduced motion the simulation settles synchronously (about 0.8 s at
+the caps). V2 persists the settled positions, so a restore needs no simulation, and the engine
+enables serde_json `float_roundtrip` so export → import → export is bit-exact. The browser
+`gestures.ts` detach now stops input frames after cancelling the active press, which fixed a
+use-after-free of the WASM chart while a simulation was running. The demo catalog has 78
+complete-build and 56 standard examples. The ECharts reference matrix gains gauge, chord, tree,
+dendrogram and network pairs, and circle packing, icicle, Venn and word cloud rows name their
+algorithm references. `g12_relationships.spec.mjs` runs on `chromium-complete`.
+
+Gate evidence (2026-11-07, local Windows): `cargo fmt`; workspace clippy on both feature sets;
+wasm32 clippy on both builds; workspace tests (2,197 passed standard, 2,278 passed with
+`aeris_charts_engine/complete`; engine alone 1,441 standard and 1,522 complete plus the ignored
+release-only tick-cost measurement); `perf_gate` in strict mode (60 targets pass); GPUI clippy and
+tests with `gpui-backend` on both feature sets (237 passed each, including the gallery example)
+and GPUI pixel parity all pass. The package gates (lint, build, typecheck, API snapshot,
+release-gate simulation, build-variant, SSR and pack smoke) and the namespace guard pass. The web
+demo build passes; the focused G12, build-variant, general-chart, G8 and G11 specs passed 419/419
+on `chromium` and `chromium-complete`, and the full Playwright run had 1,317 passed, 64 skipped
+and 0 failed. Gating the remaining G12-only code behind `complete` (layout dispatch, the option
+and V2 persistence fields, the controller's collapse toggles and the WASM input and option
+parsing) cut the standard Brotli WebAssembly growth over the pre-G12 commit `4fc9e44` (1,332,764
+bytes, same local toolchain) from 20,915 to 9,270 bytes: `float_roundtrip`, which both builds
+keep for bit-exact persistence, accounts for 6,745 bytes, and the remaining 2,525 bytes are what
+the standard build still compiles for the unconditional kind, input and element variants. Standard raw WebAssembly fell from 5,535,980 to
+5,456,902 bytes. Measured sizes raised four ceilings with that evidence: standard brotli
+1,335,000 → 1,344,000 (measured 1,342,034), complete brotli 1,380,000 → 1,426,000 (1,424,754),
+tarball 4,160,000 → 4,246,000 (4,244,897) and unpacked 12,600,000 → 12,792,000 (12,790,803).
+The other six ceilings are unchanged and pass; complete raw WebAssembly measures 5,779,172 under
+5,780,000, and the JavaScript bundles measure 464,948 raw and 78,885 Brotli (standard) and 464,969
+and 78,892 (complete).
+
+Known limits and deferrals: gauge multiple pointers and custom angles; chord minimum angle and
+legend toggling; network keyboard zoom, edge arrows, `apply_options` for network options and
+a category legend. In the browser, two render loops run while a simulation is active (general
+animation and input frames). Reduced motion settles synchronously instead of in bounded slices.
+No calibrated visual review has been done.
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1472,21 +1544,22 @@ tolerances, and every family meets the standing exit rules on the complete build
 
 ### R12 — Relationships and hierarchy (group D, complete build)
 
-**Batch:** G12. **Depends on:** R9 two builds. **Status:** planned.
+**Batch:** G12. **Depends on:** R9 two builds. **Status:** complete.
 
-- [ ] Gauge with value ranges, pointer, progress arc, ticks and labels, and value transitions.
-- [ ] Shared graph store: typed nodes and edges, identity, validation and bounded capacity,
+- [x] Gauge with value ranges, pointer, progress arc, ticks and labels, and value transitions.
+- [x] Shared graph store: typed nodes and edges, identity, validation and bounded capacity,
       alongside the existing layout store.
-- [ ] Chord diagram with ribbons, groups and ticks.
-- [ ] Network graph with force (deterministic seed, fixed-step simulation on the engine clock,
+- [x] Chord diagram with ribbons, groups and ticks (group labels; the ECharts 6.1.0 chord
+      series draws no ticks by default).
+- [x] Network graph with force (deterministic seed, fixed-step simulation on the engine clock,
       bounded iterations), circular and fixed layouts; node drag, pan/zoom, and edge and node caps.
-- [ ] Tree and dendrogram, orthogonal and radial, with collapse/expand.
-- [ ] Circle packing and icicle/partition.
-- [ ] Venn/Euler diagrams for up to three sets with area-proportional circles, and labelled
+- [x] Tree and dendrogram, orthogonal and radial, with collapse/expand.
+- [x] Circle packing and icicle/partition.
+- [x] Venn/Euler diagrams for up to three sets with area-proportional circles, and labelled
       approximations beyond that.
-- [ ] Word cloud with deterministic spiral placement from engine text metrics and a bounded word
+- [x] Word cloud with deterministic spiral placement from engine text metrics and a bounded word
       count.
-- [ ] G12 full gate green on both builds; batch committed and pushed.
+- [x] G12 full gate green on both builds; batch committed and pushed.
 
 **Exit:** layouts are deterministic for equal input and seed, with bounded work per frame and
 bounded convergence. Every family meets the standing exit rules on the complete build.
@@ -1556,13 +1629,13 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
-| Two builds (standard and complete) | Partial (G9 delivered; G11 shipped the first complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Two builds (standard and complete) | Partial (G9 delivered; G11 and G12 shipped complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
 | Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
 | Financial chart styles | Delivered (G10) | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
 | Statistical distributions | Delivered (G11, complete build) | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
 | 2D density and multivariate | Delivered (G11, complete build) | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
-| Gauge, chord and network | Open | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
-| Hierarchy extensions, Venn and word cloud | Open | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
+| Gauge, chord and network | Delivered (G12, complete build) | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
+| Hierarchy extensions, Venn and word cloud | Delivered (G12, complete build) | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
 | Geographic maps | Open | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |
 | 3D charts | Open | Engine camera and depth ordering, 3D bar/scatter/line/surface, orbit interaction and bounded meshes on every executor | R14 |
 

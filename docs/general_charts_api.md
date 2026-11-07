@@ -64,6 +64,62 @@ reference rows and open differences). Each uses an axis-free layout pane and
 Hits return `element: "task"`, `"day"` or `"cell"` with the task ID, `YYYY-MM-DD` date or
 `column/segment` ID. Value updates of these families apply immediately without a transition.
 
+### Relationship and hierarchy layout families (complete build)
+
+Nine more layout kinds ship only in the complete build. The standard build rejects the kinds and
+their `gauge`, `graph`, `sets` and `words` inputs with `complete_build_required` before any engine
+state changes, including on V2 restore. It rejects the hierarchy, network and word cloud options
+below the same way on any layout kind, while V2 restore ignores those keys so saved state that
+carries only their defaults still restores. Each uses an axis-free layout pane and
+`add_layout_series(kind, options, data)`:
+
+| Kind | Data | Layout and reference |
+| --- | --- | --- |
+| `gauge` | `{ type: "gauge", value, min?, max?, label?, unit?, decimals?, bands?, progress? }` | ECharts 6.1.0 `gauge` defaults: 270° track from 225° to -45°, up to 32 ascending `{ to, color, label? }` bands, optional progress arc, ten split lines with five ticks, kite pointer; values clamp to `min..max` and animate between updates |
+| `chord` | `graph` | ECharts chord layout with d3-chord ribbons; the 3° pad follows only nonempty groups and is capped at half the circle |
+| `tree` | `hierarchy` | d3-hierarchy `tree()` (Buchheim) with curved links; collapsible |
+| `dendrogram` | `hierarchy` | d3-hierarchy `cluster()`: every leaf on the deepest level, elbow links; collapsible |
+| `circle_packing` | `hierarchy` | d3-hierarchy `pack()`: leaf area proportional to value, nested parents, deepest-first hits |
+| `icicle` | `hierarchy` | d3-hierarchy `partition()`: one band per depth, breadth by summed value |
+| `network` | `graph` | d3-force 3.0 simulation (`force`), nodes on a circle in input order (`circular`), or node `x`/`y` (`fixed`) |
+| `venn` | `{ type: "sets", sets: [{ sets, size, label? }] }` | Exclusive venn.js-shaped regions; two and three sets are area-proportional, more sets (up to 8, 255 regions) are a labelled approximation whose overlaps carry no area meaning |
+| `word_cloud` | `{ type: "words", words: [{ text, weight, color? }] }` | Up to 500 words placed by descending weight on a deterministic spiral from measured text; words without room are omitted |
+
+The shared `graph` input is `{ type: "graph", nodes, edges? }`. Nodes are
+`{ id, label, category?, value?, x?, y? }` (`x` and `y` together or not at all) and edges are
+directed `{ source, target, value? }` with `value` defaulting to 1. Cycles and self-links are
+allowed; a repeated `(source, target)` pair is rejected. Graphs hold at most 4,096 nodes and
+16,384 edges, and nodes sharing a `category` share a color.
+
+Layout options added for these kinds:
+
+- `hierarchy_orientation`: `"horizontal"` (root on the left, the default), `"vertical"` (root on
+  top) or `"radial"` (root at the center). Trees and dendrograms accept all three, icicles the
+  first two, and other kinds only the default.
+- `collapsed`: IDs of collapsed tree or dendrogram nodes with children. A primary click or
+  Enter/Space on a focused node folds and unfolds it inside the engine; `options()` reports the
+  current set, V2 state persists it, and new data drops IDs that no longer name a node with
+  children. Accessibility items of such nodes carry `expanded`.
+- `network_layout` (`"force"`, `"circular"`, `"fixed"`; `fixed` needs `x`/`y` on every node),
+  `network_link_distance` (1 to 1000 CSS px, default 30), `pinned` (`{ id, x, y }` nodes held in
+  place), `network_view` (`{ x, y, zoom }`, zoom 0.1 to 10) and `positions` (settled force
+  positions from a state export; passing them back restores the layout without simulating).
+  Dragging a node pins it where it is released, Escape cancels a drag, dragging empty space pans,
+  and the wheel or a pinch zooms around the pointer ahead of the time-scale policy. The force
+  simulation settles in 300 ticks on the chart's animation clock; under reduced motion it settles
+  at once and never animates.
+- `word_cloud_min_size` and `word_cloud_max_size` (4 to 256 CSS px, defaults 10 and 48),
+  `word_cloud_scaling` (`"sqrt"`, the default, keeps area linear in weight; `"linear"` keeps the
+  font size linear) and `word_cloud_rotate` (rotate every second word by 90°). Accessibility items
+  of words carry `placed`, and a font load re-places every word.
+
+`apply_options` does not accept `collapsed`, the network options or the word cloud options:
+collapse, pins and view change through interaction, and the layout options are fixed at creation.
+Hits return `element: "node"`, `"link"`, `"band"`, `"progress"`, `"pointer"`, `"region"` or
+`"word"`. Gauge values and hierarchy leaf values transition like the other layout families.
+`examples/web_demo/fixtures/echarts_6_1_0/matrix.json` records the reference rows and open
+differences for every G12 kind.
+
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
 engine transaction; brush controls support controlled and uncontrolled ranges. See

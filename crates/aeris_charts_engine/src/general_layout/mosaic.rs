@@ -247,6 +247,10 @@ impl ChartEngine {
                         element: GeneralLayoutElement::Cell,
                         row,
                     }),
+                #[cfg(feature = "complete")]
+                expanded: None,
+                #[cfg(feature = "complete")]
+                placed: None,
             })
             .collect()
     }

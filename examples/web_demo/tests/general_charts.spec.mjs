@@ -1224,9 +1224,11 @@ test("general dashboard showcases every catalog example", async ({ page, browser
     "box_plot", "heatmap_grid", "scatter", "bubble", "pie", "radar", "polar_area", "radial_bar",
     "waterfall", "bullet",
     "funnel", "treemap", "sankey", "sunburst", "gantt", "calendar_heatmap", "marimekko",
-    // Complete-build statistics families; the standard build lists these cards but skips mounting them.
+    // Complete-build statistics, gauge, relationship, and hierarchy families; the standard build
+    // lists these cards but skips mounting them.
     "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot",
     "ecdf", "qq_plot", "hexbin", "contour", "parallel_coordinates", "scatter_matrix",
+    "gauge", "chord", "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud",
   ]));
 
   const first_host = page.locator("#general_workspace .general-chart-host").first();

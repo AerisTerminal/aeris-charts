@@ -19,11 +19,15 @@ use aeris_charts_engine::{
 };
 #[cfg(feature = "complete")]
 use aeris_charts_engine::{
-    GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel, GeneralStatsOptions,
-    GeneralViolinOverlay, GeneralViolinSide,
+    GaugeInput, GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel,
+    GeneralStatsOptions, GeneralViolinOverlay, GeneralViolinSide, GraphEdge, GraphNode,
+    HierarchyOrientation, NetworkLayout, NetworkPin, NetworkView, VennSet, WordCloudScaling,
+    WordCloudWord,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
+#[cfg(not(feature = "complete"))]
+use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
 use super::ChartInner;
@@ -57,6 +61,27 @@ enum LayoutInput {
     Mosaic {
         cells: Vec<MosaicCell>,
     },
+    #[cfg(feature = "complete")]
+    Gauge(GaugeInput),
+    #[cfg(feature = "complete")]
+    Graph {
+        nodes: Vec<GraphNode>,
+        #[serde(default)]
+        edges: Vec<GraphEdge>,
+    },
+    #[cfg(feature = "complete")]
+    Sets {
+        sets: Vec<VennSet>,
+    },
+    #[cfg(feature = "complete")]
+    Words {
+        words: Vec<WordCloudWord>,
+    },
+    /// Complete-build data kinds. The standard build skips their contents; the engine then
+    /// rejects the placeholder with the typed complete-build error.
+    #[cfg(not(feature = "complete"))]
+    #[serde(rename = "gauge", alias = "graph", alias = "sets", alias = "words")]
+    CompleteOnly(IgnoredAny),
 }
 
 impl From<LayoutInput> for GeneralLayoutInput {
@@ -68,6 +93,16 @@ impl From<LayoutInput> for GeneralLayoutInput {
             LayoutInput::Gantt { tasks, now } => Self::Gantt { tasks, now },
             LayoutInput::Calendar(calendar) => Self::Calendar(calendar),
             LayoutInput::Mosaic { cells } => Self::Mosaic(cells),
+            #[cfg(feature = "complete")]
+            LayoutInput::Gauge(gauge) => Self::Gauge(gauge),
+            #[cfg(feature = "complete")]
+            LayoutInput::Graph { nodes, edges } => Self::Graph { nodes, edges },
+            #[cfg(feature = "complete")]
+            LayoutInput::Sets { sets } => Self::Sets(sets),
+            #[cfg(feature = "complete")]
+            LayoutInput::Words { words } => Self::Words(words),
+            #[cfg(not(feature = "complete"))]
+            LayoutInput::CompleteOnly(_) => Self::Words(Vec::new()),
         }
     }
 }
@@ -83,6 +118,76 @@ struct LayoutSeriesInput {
     data_labels: bool,
     #[serde(default = "default_true")]
     visible: bool,
+    // Hierarchy, network and word cloud options configure complete-build families only.
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    hierarchy_orientation: HierarchyOrientation,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    collapsed: Vec<String>,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    network_layout: NetworkLayout,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    network_link_distance: Option<f64>,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    pinned: Vec<NetworkPin>,
+    /// Settled network positions from a previous export; restore seeds from them directly.
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    positions: Vec<NetworkPin>,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    network_view: NetworkView,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    word_cloud_min_size: Option<f64>,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    word_cloud_max_size: Option<f64>,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    word_cloud_scaling: WordCloudScaling,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    word_cloud_rotate: bool,
+    // Present only to reject complete-build family options in the standard build instead of
+    // ignoring them.
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    hierarchy_orientation: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    collapsed: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    network_layout: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    network_link_distance: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    pinned: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    positions: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    network_view: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    word_cloud_min_size: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    word_cloud_max_size: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    word_cloud_scaling: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    word_cloud_rotate: Option<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -91,6 +196,11 @@ struct LayoutPresentationPatch {
     color: Option<String>,
     data_labels: Option<bool>,
     visible: Option<bool>,
+    #[cfg(feature = "complete")]
+    hierarchy_orientation: Option<HierarchyOrientation>,
+    /// Present only to reject the option in the standard build instead of ignoring it.
+    #[cfg(not(feature = "complete"))]
+    hierarchy_orientation: Option<IgnoredAny>,
 }
 fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
     match kind {
@@ -101,6 +211,15 @@ fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
         "gantt" => Some(GeneralLayoutSeriesKind::Gantt),
         "calendar_heatmap" => Some(GeneralLayoutSeriesKind::CalendarHeatmap),
         "marimekko" => Some(GeneralLayoutSeriesKind::Marimekko),
+        "gauge" => Some(GeneralLayoutSeriesKind::Gauge),
+        "chord" => Some(GeneralLayoutSeriesKind::Chord),
+        "tree" => Some(GeneralLayoutSeriesKind::Tree),
+        "dendrogram" => Some(GeneralLayoutSeriesKind::Dendrogram),
+        "circle_packing" => Some(GeneralLayoutSeriesKind::CirclePacking),
+        "icicle" => Some(GeneralLayoutSeriesKind::Icicle),
+        "network" => Some(GeneralLayoutSeriesKind::Network),
+        "venn" => Some(GeneralLayoutSeriesKind::Venn),
+        "word_cloud" => Some(GeneralLayoutSeriesKind::WordCloud),
         _ => None,
     }
 }
@@ -113,6 +232,11 @@ pub(super) fn layout_element(name: &str) -> Option<GeneralLayoutElement> {
         "task" => Some(GeneralLayoutElement::Task),
         "day" => Some(GeneralLayoutElement::Day),
         "cell" => Some(GeneralLayoutElement::Cell),
+        "band" => Some(GeneralLayoutElement::Band),
+        "progress" => Some(GeneralLayoutElement::Progress),
+        "pointer" => Some(GeneralLayoutElement::Pointer),
+        "region" => Some(GeneralLayoutElement::Region),
+        "word" => Some(GeneralLayoutElement::Word),
         _ => None,
     }
 }
@@ -1703,10 +1827,37 @@ impl ChartInner {
         let Some(kind) = layout_kind(kind) else {
             return input_error("unknown layout series kind");
         };
+        #[cfg(not(feature = "complete"))]
+        if kind.requires_complete_build() {
+            return result_error(&complete_build_required(
+                "gauge, relationship, and hierarchy layout families",
+            ));
+        }
         let options = match parse_json::<LayoutSeriesInput>(options_json) {
             Ok(value) => value,
             Err(error) => return error,
         };
+        #[cfg(not(feature = "complete"))]
+        if [
+            options.hierarchy_orientation,
+            options.collapsed,
+            options.network_layout,
+            options.network_link_distance,
+            options.pinned,
+            options.positions,
+            options.network_view,
+            options.word_cloud_min_size,
+            options.word_cloud_max_size,
+            options.word_cloud_scaling,
+            options.word_cloud_rotate,
+        ]
+        .iter()
+        .any(Option::is_some)
+        {
+            return result_error(&complete_build_required(
+                "hierarchy, network, and word cloud options",
+            ));
+        }
         let input = match parse_json::<LayoutInput>(data_json) {
             Ok(value) => value,
             Err(error) => return error,
@@ -1719,6 +1870,26 @@ impl ChartInner {
         series_options.title = options.title;
         series_options.data_labels = options.data_labels;
         series_options.visible = options.visible;
+        #[cfg(feature = "complete")]
+        {
+            series_options.hierarchy_orientation = options.hierarchy_orientation;
+            series_options.collapsed = options.collapsed;
+            series_options.network_layout = options.network_layout;
+            if let Some(distance) = options.network_link_distance {
+                series_options.network_link_distance = distance;
+            }
+            series_options.pinned = options.pinned;
+            series_options.positions = options.positions;
+            series_options.network_view = options.network_view;
+            if let Some(min) = options.word_cloud_min_size {
+                series_options.word_cloud_min_size = min;
+            }
+            if let Some(max) = options.word_cloud_max_size {
+                series_options.word_cloud_max_size = max;
+            }
+            series_options.word_cloud_scaling = options.word_cloud_scaling;
+            series_options.word_cloud_rotate = options.word_cloud_rotate;
+        }
         if let Some(color) = options.color {
             series_options.color = color;
         }
@@ -1738,13 +1909,45 @@ impl ChartInner {
         self.engine
             .general_layout_series_options(series)
             .map_or(Value::Null, |options| {
-                json!({
+                let value = json!({
                     "pane": options.pane,
                     "title": options.title,
                     "color": options.color,
                     "data_labels": options.data_labels,
                     "visible": options.visible,
-                })
+                });
+                #[cfg(not(feature = "complete"))]
+                {
+                    value
+                }
+                #[cfg(feature = "complete")]
+                {
+                    let mut value = value;
+                    // Only the families that read these options report them.
+                    if options
+                        .kind
+                        .supports_orientation(HierarchyOrientation::Vertical)
+                    {
+                        value["hierarchy_orientation"] = json!(options.hierarchy_orientation);
+                    }
+                    if options.kind.is_collapsible() {
+                        value["collapsed"] = json!(options.collapsed);
+                    }
+                    if options.kind == GeneralLayoutSeriesKind::Network {
+                        value["network_layout"] = json!(options.network_layout);
+                        value["network_link_distance"] = json!(options.network_link_distance);
+                        value["pinned"] = json!(options.pinned);
+                        value["positions"] = json!(options.positions);
+                        value["network_view"] = json!(options.network_view);
+                    }
+                    if options.kind == GeneralLayoutSeriesKind::WordCloud {
+                        value["word_cloud_min_size"] = json!(options.word_cloud_min_size);
+                        value["word_cloud_max_size"] = json!(options.word_cloud_max_size);
+                        value["word_cloud_scaling"] = json!(options.word_cloud_scaling);
+                        value["word_cloud_rotate"] = json!(options.word_cloud_rotate);
+                    }
+                    value
+                }
             })
             .to_string()
     }
@@ -1764,6 +1967,20 @@ impl ChartInner {
         let color = patch.color.unwrap_or_else(|| options.color.clone());
         let data_labels = patch.data_labels.unwrap_or(options.data_labels);
         let visible = patch.visible.unwrap_or(options.visible);
+        #[cfg(not(feature = "complete"))]
+        if patch.hierarchy_orientation.is_some() {
+            return result_error(&complete_build_required("hierarchy orientation"));
+        }
+        #[cfg(feature = "complete")]
+        let previous_orientation = options.hierarchy_orientation;
+        #[cfg(feature = "complete")]
+        if let Some(orientation) = patch.hierarchy_orientation
+            && let Err(error) = self
+                .engine
+                .set_general_layout_hierarchy_orientation(series, orientation)
+        {
+            return result_error(&error);
+        }
         match self.engine.update_general_layout_series_presentation(
             series,
             title,
@@ -1772,7 +1989,15 @@ impl ChartInner {
             visible,
         ) {
             Ok(()) => result_ok(Value::Null),
-            Err(error) => result_error(&error),
+            Err(error) => {
+                // The previous orientation was valid for this series, so restoring it keeps the
+                // patch atomic.
+                #[cfg(feature = "complete")]
+                let _ = self
+                    .engine
+                    .set_general_layout_hierarchy_orientation(series, previous_orientation);
+                result_error(&error)
+            }
         }
     }
     pub fn replace_layout_data_result_json(&mut self, series: u32, data_json: &str) -> String {
@@ -1852,6 +2077,15 @@ impl ChartInner {
                         GeneralLayoutSeriesKind::Gantt => "gantt",
                         GeneralLayoutSeriesKind::CalendarHeatmap => "calendar_heatmap",
                         GeneralLayoutSeriesKind::Marimekko => "marimekko",
+                        GeneralLayoutSeriesKind::Gauge => "gauge",
+                        GeneralLayoutSeriesKind::Chord => "chord",
+                        GeneralLayoutSeriesKind::Tree => "tree",
+                        GeneralLayoutSeriesKind::Dendrogram => "dendrogram",
+                        GeneralLayoutSeriesKind::CirclePacking => "circle_packing",
+                        GeneralLayoutSeriesKind::Icicle => "icicle",
+                        GeneralLayoutSeriesKind::Network => "network",
+                        GeneralLayoutSeriesKind::Venn => "venn",
+                        GeneralLayoutSeriesKind::WordCloud => "word_cloud",
                     },
                 }))
             })
@@ -4810,6 +5044,28 @@ mod tests {
         let error = proposal_series(proposal).unwrap_err();
         assert!(error.contains("\"unsupported_operation\""));
         assert!(error.contains("complete build"));
+    }
+
+    #[cfg(not(feature = "complete"))]
+    #[test]
+    fn standard_build_skips_complete_layout_data_and_flags_complete_layout_options() {
+        for data in [
+            r#"{"type":"gauge","value":5.0,"bands":[{"to":10.0,"color":"red"}]}"#,
+            r#"{"type":"graph","nodes":[{"id":"a","label":"A"}],"edges":[]}"#,
+            r#"{"type":"sets","sets":[{"sets":["a"],"size":1.0}]}"#,
+            r#"{"type":"words","words":[{"text":"a","weight":1.0}]}"#,
+        ] {
+            let input: LayoutInput = serde_json::from_str(data).unwrap();
+            assert!(matches!(input, LayoutInput::CompleteOnly(_)));
+        }
+        let plain: LayoutSeriesInput = serde_json::from_str(r#"{"pane":0}"#).unwrap();
+        assert!(plain.hierarchy_orientation.is_none() && plain.word_cloud_rotate.is_none());
+        let tuned: LayoutSeriesInput =
+            serde_json::from_str(r#"{"pane":0,"hierarchy_orientation":"horizontal"}"#).unwrap();
+        assert!(tuned.hierarchy_orientation.is_some());
+        let patch: LayoutPresentationPatch =
+            serde_json::from_str(r#"{"hierarchy_orientation":"vertical"}"#).unwrap();
+        assert!(patch.hierarchy_orientation.is_some());
     }
 
     #[test]

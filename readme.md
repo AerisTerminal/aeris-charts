@@ -56,7 +56,9 @@ npm install @aeristerminal/aeris-charts
 
 The package contains two builds with the same API. The standard build is the root entry and
 `/react`. The complete build adds chart families whose size does not fit the standard build's
-budget; import it from `/complete` or `/complete/react` instead:
+budget (statistics such as violin, hexbin and contour; gauge, chord, network, tree, dendrogram,
+circle packing, icicle, Venn and word cloud); import it from `/complete` or `/complete/react`
+instead:
 
 ```ts
 import { createChart, buildVariant } from "@aeristerminal/aeris-charts/complete";

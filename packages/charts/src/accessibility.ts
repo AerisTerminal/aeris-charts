@@ -941,7 +941,7 @@ class PaneAccessibility {
       const item = this.layout_item(index);
       if (item === undefined) return "";
       const value = item.value === null ? this.controller.options.messages.no_value : this.format_value(item.value, series);
-      return `${this.series_label(series, this.series_index)}, ${item.element} ${item.label}, ${value}. Item ${index + 1} of ${this.layout_snapshot?.total ?? 0}${item.selected ? ", selected" : ""}.`;
+      return `${this.series_label(series, this.series_index)}, ${item.element} ${item.label}, ${value}. Item ${index + 1} of ${this.layout_snapshot?.total ?? 0}${item.expanded === undefined ? "" : item.expanded ? ", expanded" : ", collapsed"}${item.selected ? ", selected" : ""}.`;
     }
     if (is_general_series(series)) {
       const item = this.general_item(index);

@@ -216,6 +216,72 @@ ordered-frame marks. `general_layout/mosaic.rs` sizes Marimekko columns by colum
 segments by share, in first-appearance order, and paints an in-canvas legend with one entry per
 segment because the series-level legend toggles whole series, not segments. These three families
 have no value transitions; updates apply immediately.
+G12 adds nine relationship and hierarchy layout families that ship only in the complete build:
+gauge, chord, tree, dendrogram, circle packing, icicle, network, Venn and word cloud. Their
+modules (`general_layout/gauge.rs`, `graph.rs`, `chord.rs`, `tree.rs`, `packing.rs`, `icicle.rs`,
+`network.rs`, `venn.rs`, `word_cloud.rs`) compile only with the `complete` feature. The kinds
+and the `Gauge`, `Graph`, `Sets` and `Words` layout inputs are unconditional enum variants.
+`GeneralLayoutSeriesKind::requires_complete_build()` gates creation in
+`add_general_layout_series`, which V2 restore also passes through, and the standard build rejects
+those inputs at dataset validation. Both fail with `complete_build_required` before any state
+changes. Everything only those families consume also compiles only with `complete`: the
+`hierarchy_orientation`, `collapsed`, network and word cloud fields of
+`GeneralLayoutSeriesOptions` and of the V2 layout series record, their option types, the
+collapse toggles in the input controller, the accessibility `expanded` and `placed` item fields,
+and the matching WASM option parsing. The standard build keeps the four input variants but skips
+their serde field code, so persisted data deserializes as an empty placeholder that validation
+rejects. Its V2 restore ignores the option keys, so state carrying only their defaults on shared
+families restores, while the package and WASM boundary reject the options with
+`complete_build_required`. `general_layout/graph.rs` is the shared graph input of chord and network: nodes
+`{ id, label, category?, value?, x?, y? }` and directed edges `{ source, target, value = 1 }`.
+Cycles and self-links are allowed, a repeated `(source, target)` pair is rejected, and the store
+caps graphs at 4,096 nodes and 16,384 edges. Nodes sharing a category share a color slot.
+Gauge follows the pinned ECharts 6.1.0 `gauge` defaults: a 75% radius, a 270° clockwise track from
+225° to -45°, at most 32 ascending value bands, an optional progress arc, ten split lines with five
+ticks each, a kite pointer, and title and value text. Values clamp to the track ends. Value
+updates use the shared layout transition, which paints the presentation value while the text
+reports the committed value. Chord follows the ECharts chord layout with d3-chord ribbon
+semantics: groups span the larger of a node's explicit value and its edge flow, and edges claim
+subgroups in input order. The 3° pad follows only nonempty groups and is capped at half the
+circle; ECharts also pads empty groups. Tree (d3-hierarchy `tree()`, Buchheim), dendrogram
+(`cluster()`), circle packing (`pack()` with the seeded d3 LCG shuffle) and icicle
+(`partition()`) reuse the hierarchy input. The `hierarchy_orientation` option (`horizontal`,
+`vertical`, `radial`) is validated per family: trees and dendrograms accept all three, icicles
+the first two, and other families only the default. Tree and dendrogram collapse state is a
+persisted list of node IDs with children. Only the engine input controller toggles it, on a
+primary click or on Enter/Space while a layout datum has keyboard focus. A collapsed node lays
+out as a leaf, its descendants leave hits and accessibility, and accessibility items carry
+`expanded`. New data drops IDs that no longer name a node with children.
+Network lays out a graph by `network_layout`. `force` follows d3-force 3.0: phyllotaxis start,
+seeded jiggle, `forceLink`, Barnes–Hut `forceManyBody`, `forceCenter`, velocity decay 0.4 and an
+alpha schedule that settles in 300 ticks. `circular` places nodes on a circle in input order, and
+`fixed` uses each node's `x`/`y`. The simulation steps at a fixed 60 Hz tick on the host clock and
+takes at most two ticks per clock call. Two clock sources share one timebase,
+`set_general_animation_time_ms` and `input_tick`, so `general_transition_active` and
+`input_animating` both report a running simulation and either host loop can drive it. Measured in
+release builds at the caps, one tick costs a median 2.553 ms and a 95th percentile 2.827 ms. Under
+reduced motion every simulation settles synchronously instead of animating (about 0.8 s at the
+caps) and never requests frames. The input controller owns the network gestures inside the shared
+press arbitration. A press on a node becomes a drag past the 5 px threshold: the node follows the
+pointer with d3's drag alpha target and pins where it is released (`pinned`). Escape or capture
+loss restores its prior pin and position. A press on empty network space pans `network_view`, and
+the wheel and pinch zoom that view around the pointer (0.1 to 10) before any time-scale policy.
+An unmoved press is an ordinary layout click. V2 stores `network_layout`,
+`network_link_distance`, `pinned`, `network_view`, and the settled force `positions`. An export
+during a running simulation keeps the previously persisted positions, and a restore with
+positions installs them settled without simulating. The engine enables serde_json's
+`float_roundtrip` feature so persisted `f64` values survive export, import and export bit-exactly.
+Venn takes exclusive venn.js-shaped regions (at most 8 sets and 255 regions). Two and three sets
+are area-proportional (bisection on the lens area, then a bounded Nelder–Mead fit for three);
+larger diagrams are a labelled ring approximation whose overlaps carry no area meaning. Word cloud
+places at most 500 words by descending weight on a deterministic spiral. Engine-measured text
+boxes collide through a bounded spatial grid, and every second word may rotate 90°. Words that
+find no spot are omitted and reported through the accessibility `placed` state.
+`invalidate_text_measurements` drops the placement cache so a loaded font re-places every word.
+venn.js 0.2 and d3-cloud 1.2 are named algorithm references; no implementation code was copied.
+Frame construction, exact hits and focus anchors of each G12 family read the same per-series
+geometry: plot-keyed caches for chord, hierarchy, Venn and word cloud, and the simulated
+positions through one view transform for network.
 The layout pane blocks financial series and cannot be removed while a layout series is bound.
 V2 state stores layout datasets and series in input order with dataset references, preserving
 shared input identity and styles. Restore validates the complete layout graph in the staged
@@ -904,6 +970,10 @@ applies the configured next-tap or touch-end exit rule. Browser and worker hosts
 engine deadline and call `input_tick` when it arrives.
 For consumed wheel input, the controller uses the wheel event's position to promote hover and
 resolve the cursor; the browser applies that cursor after the event even without pointer motion.
+Complete-build network series add node drag and pin, background pan, and wheel or pinch zoom to
+the same press arbitration, ahead of the time-scale wheel and pinch policies (see the layout
+families above). A running force simulation keeps `input_animating` true, so the browser gesture
+layer cancels the active press before it stops input frames on detach.
 The hosts supply CSS-logical coordinates, pointer identity and device, and configured interaction
 switches; the controller owns capture identity, the 5 px press threshold (`CLICK_SLOP_MANHATTAN`,
 which the browser also reads for page-scroll direction arbitration), click recognition, pan,
@@ -1645,11 +1715,11 @@ The package also ships `aeris_charts.css` as the portable host design system. It
 
 The package preserves its complete `snake_case` surface and adds camel-case aliases for the common JavaScript chart/series/scale lifecycle without creating parallel state or handles. Financial and general series use the same chart object and ordered frame. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. The published artifact exports the optimized WASM asset explicitly and the generated glue also resolves that sibling asset by `import.meta.url`; source-tree `pkg/`, crate, benchmark, and demo paths are not runtime dependencies. `examples/web_demo` remains an integration and parity test host, while `examples/all_in_one` contains consumer-facing framework-neutral and React compositions.
 
-The package ships two builds of the same crates because the compressed standard WebAssembly module is close to its measured size ceiling. `@aeristerminal/aeris-charts` and `/react` load the standard module (`dist/aeris_charts_wasm_bg.wasm`). `@aeristerminal/aeris-charts/complete` and `/complete/react` load `dist/aeris_charts_wasm_complete_bg.wasm`, which is compiled with the `complete` Cargo feature of `aeris_charts_engine` (forwarded by `aeris_charts_wasm`'s own `complete` feature). It is the only Cargo feature. It gates whole chart-family modules and the options and data shapes only those families read (for G11, the `stats` options object and matrix datasets), never shared options, defaults or behavior, so every family that both builds contain must produce the same frames, hits, events and persisted state in either build. Rust hosts (GPUI, native) enable the same feature on their `aeris_charts_engine` dependency. `scripts/build_wasm.mjs` runs `wasm-pack` once per build with the same release profile and wasm-opt flags, into `pkg/` and `pkg_complete/`. Its `--out-name` sets the sibling `.wasm` file that each generated glue module resolves through `import.meta.url`. `scripts/build_js.mjs` bundles the same TypeScript sources four times. `src/complete.ts` and `src/complete_react.ts` only re-export the root and React entries; the complete bundles resolve the generated glue to `pkg_complete/` and the React adapter's core import to `./complete.js`. Both builds share one set of declarations. `./complete/wasm` exports the complete module for bundlers that pass an explicit `init_wasm` URL.
+The package ships two builds of the same crates because the compressed standard WebAssembly module is close to its measured size ceiling. `@aeristerminal/aeris-charts` and `/react` load the standard module (`dist/aeris_charts_wasm_bg.wasm`). `@aeristerminal/aeris-charts/complete` and `/complete/react` load `dist/aeris_charts_wasm_complete_bg.wasm`, which is compiled with the `complete` Cargo feature of `aeris_charts_engine` (forwarded by `aeris_charts_wasm`'s own `complete` feature). It is the only Cargo feature. It gates whole chart-family modules and the options and data shapes only those families read (for G11, the `stats` options object and matrix datasets; for G12, the relationship and hierarchy layout modules, their inputs, and the hierarchy, network and word cloud series options), never shared options, defaults or behavior, so every family that both builds contain must produce the same frames, hits, events and persisted state in either build. Rust hosts (GPUI, native) enable the same feature on their `aeris_charts_engine` dependency. `scripts/build_wasm.mjs` runs `wasm-pack` once per build with the same release profile and wasm-opt flags, into `pkg/` and `pkg_complete/`. Its `--out-name` sets the sibling `.wasm` file that each generated glue module resolves through `import.meta.url`. `scripts/build_js.mjs` bundles the same TypeScript sources four times. `src/complete.ts` and `src/complete_react.ts` only re-export the root and React entries; the complete bundles resolve the generated glue to `pkg_complete/` and the React adapter's core import to `./complete.js`. Both builds share one set of declarations. `./complete/wasm` exports the complete module for bundlers that pass an explicit `init_wasm` URL.
 
-The engine reports its build through `ChartEngine::build_includes_complete_families()`, exported to WASM as `build_includes_complete_families`. The package records the answer once at initialization and exposes it as `build_variant()`. A family whose module is gated registers its creation kind in `complete_only_families` (`src/build_variant.ts`). `add_series` and `add_layout_series` call `require_family_in_build` before any engine mutation, so creating a complete-only family through the standard build fails atomically with an `AerisChartsError` of code `complete_build_required` that names `@aeristerminal/aeris-charts/complete`. General series options that carry a `stats` object (`add_series`, `apply_options`, pane proposals and composition) fail the same way in the standard build, and the WASM boundary repeats both checks so non-package callers get the same typed error. Any new creation API for a complete-only family must make the same calls first.
+The engine reports its build through `ChartEngine::build_includes_complete_families()`, exported to WASM as `build_includes_complete_families`. The package records the answer once at initialization and exposes it as `build_variant()`. A family whose module is gated registers its creation kind in `complete_only_families` (`src/build_variant.ts`). `add_series` and `add_layout_series` call `require_family_in_build` before any engine mutation, so creating a complete-only family through the standard build fails atomically with an `AerisChartsError` of code `complete_build_required` that names `@aeristerminal/aeris-charts/complete`. General series options that carry a `stats` object (`add_series`, `apply_options`, pane proposals and composition) and layout series options that carry a hierarchy, network or word cloud option (`add_layout_series` and layout `apply_options`, through `require_layout_options_in_build`) fail the same way in the standard build, and the WASM boundary repeats these checks so non-package callers get the same typed error. Any new creation API for a complete-only family must make the same calls first.
 
-Both builds run the package gates. `npm run test:build-variant` drives that guard with a fake complete-only family against both engine answers. `test:react-ssr` imports both React entries. `test:pack` initializes each installed entry from its own sibling module and bundles every consumer recipe against each build. `check:api` snapshots the shared declarations together with both entry declarations. `node benchmarks/benchmark.mjs size` enforces separate standard and complete JavaScript and WebAssembly ceilings from `budgets.json`; the complete ceilings rise only with measured evidence as gated families arrive, and the standard ceilings stay fixed. The npm tarball and unpacked ceilings cover both modules. Playwright's `chromium-complete` project runs the build, general-chart, G8-default, accessibility and license specs against a second test server (`AERIS_CHARTS_BUILD=complete`, default port `AERIS_CHARTS_TEST_PORT + 1`, overridable by `AERIS_CHARTS_COMPLETE_TEST_PORT`), which answers the shared bundle and React-fixture paths with their complete builds (`examples/web_demo/build_react_fixtures.mjs` bundles the fixture against each build). CI also runs workspace clippy and tests with `--features aeris_charts_engine/complete`, and wasm32 clippy with `--features complete`.
+Both builds run the package gates. `npm run test:build-variant` drives that guard with a fake complete-only family against both engine answers. `test:react-ssr` imports both React entries. `test:pack` initializes each installed entry from its own sibling module and bundles every consumer recipe against each build. `check:api` snapshots the shared declarations together with both entry declarations. `node benchmarks/benchmark.mjs size` enforces separate standard and complete JavaScript and WebAssembly ceilings from `budgets.json`; the complete ceilings rise only with measured evidence as gated families arrive, and the standard ceilings rise only with measured evidence for code both builds ship (such as the G12 `float_roundtrip` persistence fix). The npm tarball and unpacked ceilings cover both modules. Playwright's `chromium-complete` project runs the build, general-chart, G8-default, accessibility, license, G11 statistics and G12 relationship specs against a second test server (`AERIS_CHARTS_BUILD=complete`, default port `AERIS_CHARTS_TEST_PORT + 1`, overridable by `AERIS_CHARTS_COMPLETE_TEST_PORT`), which answers the shared bundle and React-fixture paths with their complete builds (`examples/web_demo/build_react_fixtures.mjs` bundles the fixture against each build). CI also runs workspace clippy and tests with `--features aeris_charts_engine/complete`, and wasm32 clippy with `--features complete`.
 
 `GeneralPane` still accepts keyed axis/series arrays. Its React child declarations add axes,
 canonical or mapped series, data labels, and keyed references through the same reconciliation.

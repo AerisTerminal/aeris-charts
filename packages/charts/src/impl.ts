@@ -96,6 +96,27 @@ function require_options_in_build(options: { readonly stats?: unknown } | undefi
   );
 }
 
+const COMPLETE_LAYOUT_OPTIONS = [
+  "hierarchy_orientation", "collapsed", "network_layout", "network_link_distance", "pinned",
+  "positions", "network_view", "word_cloud_min_size", "word_cloud_max_size", "word_cloud_scaling",
+  "word_cloud_rotate",
+] as const;
+
+/**
+ * Throw `complete_build_required` when layout series options carry hierarchy, network or word
+ * cloud options and the standard build is loaded; only complete-build families read them.
+ */
+function require_layout_options_in_build(options: Partial<layout_series_options> | undefined): void {
+  if (build_variant() === "complete" || options === undefined) return;
+  const key = COMPLETE_LAYOUT_OPTIONS.find((name) => options[name] !== undefined);
+  if (key === undefined) return;
+  throw new AerisChartsError(
+    "complete_build_required",
+    `${key} is only in the complete build; import from "${COMPLETE_BUILD_ENTRY}" `
+      + `(React: "${COMPLETE_BUILD_ENTRY}/react") instead of "@aeristerminal/aeris-charts"`,
+  );
+}
+
 type persistence_error_result = {
   ok: false;
   error: { code: AerisChartsErrorCode; message: string };
@@ -8217,6 +8238,9 @@ export class chart_impl implements chart_api {
 
   add_layout_series(kind: layout_series_kind, options: layout_series_options, data: layout_input): layout_series_api {
     require_family_in_build(kind);
+    require_layout_options_in_build(options);
+    // A force network settles at once under reduced motion and otherwise animates from here.
+    this.prepare_general_transition_update();
     const created = parse_general_result<{ series: number; dataset: number }>(
       this.wasm.add_layout_series_result_json(kind, JSON.stringify(options), JSON.stringify(data)),
     );
@@ -8270,8 +8294,9 @@ export class chart_impl implements chart_api {
         if (options === null) throw new AerisChartsError("invalid_handle", "layout series has been removed");
         return options;
       },
-      apply_options: (patch: Partial<Omit<layout_series_options, "pane">>) => {
+      apply_options: (patch: Parameters<layout_series_api["apply_options"]>[0]) => {
         assert_live();
+        require_layout_options_in_build(patch);
         parse_general_result<null>(this.wasm.update_layout_series_result_json(id, JSON.stringify(patch)));
         for (const subscriber of subscribers) subscriber();
         this.notify_general_legend_change();

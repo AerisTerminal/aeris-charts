@@ -4,3 +4,6 @@ to = {value} तक
 hexbin_cell = हेक्सबिन सेल
 samples[one] = {count} सैंपल
 samples[other] = {count} सैंपल
+gauge_value = मान
+value_range = {start} – {end}
+graph_link = {source} से {target}

@@ -10,11 +10,12 @@ use std::collections::HashMap;
 use aeris_charts_core::options::ChartTheme;
 use aeris_charts_engine::{
     CalendarInput, CategoryScaleType, ChartEngine, ChartFrame, ContinuousScaleType,
-    FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GanttTask, GeneralAxisOptions,
-    GeneralAxisTick, GeneralHistogramOptions, GeneralLayoutInput, GeneralLayoutSeriesKind,
-    GeneralLayoutSeriesOptions, GeneralPolarOptions, GeneralReferenceOptions, GeneralScaleType,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralWaterfallOptions, GeneralXyInput,
-    HierarchyNode, HorizontalDomain, MosaicCell,
+    FinancialFrameRequest, FlowLink, FlowNode, FunnelStage, GanttTask, GaugeInput,
+    GeneralAxisOptions, GeneralAxisTick, GeneralHistogramOptions, GeneralLayoutInput,
+    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeneralPolarOptions,
+    GeneralReferenceOptions, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralWaterfallOptions, GeneralXyInput, GraphEdge, GraphNode, HierarchyNode, HorizontalDomain,
+    MosaicCell, VennSet, WordCloudWord,
 };
 use aeris_charts_render::draw_list::Prim;
 use aeris_charts_render_gpui::{
@@ -62,7 +63,7 @@ struct Example {
     layout_series: Vec<LayoutSpec>,
     #[serde(default)]
     references: Vec<Map<String, Value>>,
-    /// Statistics families ship only in the complete build; this gallery links the standard
+    /// Statistics, gauge and relationship families ship only in the complete build; this gallery links the standard
     /// engine, so it lists those entries as skipped instead of painting them.
     #[serde(default)]
     complete_only: bool,
@@ -165,6 +166,11 @@ struct LayoutSpec {
     color: Option<String>,
     data_labels: Option<bool>,
     visible: Option<bool>,
+    /// Hierarchy and network tuning; complete-only examples are skipped before these are read.
+    #[serde(rename = "hierarchy_orientation")]
+    _hierarchy_orientation: Option<Value>,
+    #[serde(rename = "network_layout")]
+    _network_layout: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -187,6 +193,17 @@ enum LayoutData {
     Calendar(CalendarInput),
     Mosaic {
         cells: Vec<MosaicCell>,
+    },
+    Gauge(GaugeInput),
+    Graph {
+        nodes: Vec<GraphNode>,
+        edges: Vec<GraphEdge>,
+    },
+    Sets {
+        sets: Vec<VennSet>,
+    },
+    Words {
+        words: Vec<WordCloudWord>,
     },
 }
 
@@ -819,6 +836,13 @@ fn build_engine(example: &Example) -> ChartEngine {
             },
             LayoutData::Calendar(calendar) => GeneralLayoutInput::Calendar(calendar.clone()),
             LayoutData::Mosaic { cells } => GeneralLayoutInput::Mosaic(cells.clone()),
+            LayoutData::Gauge(gauge) => GeneralLayoutInput::Gauge(gauge.clone()),
+            LayoutData::Graph { nodes, edges } => GeneralLayoutInput::Graph {
+                nodes: nodes.clone(),
+                edges: edges.clone(),
+            },
+            LayoutData::Sets { sets } => GeneralLayoutInput::Sets(sets.clone()),
+            LayoutData::Words { words } => GeneralLayoutInput::Words(words.clone()),
         };
         let dataset = engine
             .create_general_layout_dataset(input)
@@ -1025,7 +1049,7 @@ impl Gallery {
             .filter(|example| {
                 if example.complete_only {
                     eprintln!(
-                        "gpui_general_gallery: skipping `{}` (complete-build statistics family)",
+                        "gpui_general_gallery: skipping `{}` (complete-build family)",
                         example.id
                     );
                 }

@@ -4,3 +4,6 @@ to = hasta {value}
 hexbin_cell = celda hexagonal
 samples[one] = {count} muestra
 samples[other] = {count} muestras
+gauge_value = Valor
+value_range = {start} – {end}
+graph_link = {source} a {target}

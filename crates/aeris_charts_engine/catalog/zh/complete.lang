@@ -3,3 +3,6 @@ from = 从 {value}
 to = 到 {value}
 hexbin_cell = 六边形分箱单元
 samples[other] = {count} 个样本
+gauge_value = 数值
+value_range = {start}–{end}
+graph_link = {source} → {target}

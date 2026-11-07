@@ -4,3 +4,6 @@ to = to {value}
 hexbin_cell = hexbin cell
 samples[one] = {count} sample
 samples[other] = {count} samples
+gauge_value = Value
+value_range = {start} – {end}
+graph_link = {source} to {target}

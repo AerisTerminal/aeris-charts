@@ -26,6 +26,15 @@ export const complete_only_families: ReadonlySet<string> = new Set<string>([
   "contour",
   "parallel_coordinates",
   "scatter_matrix",
+  "gauge",
+  "chord",
+  "tree",
+  "dendrogram",
+  "circle_packing",
+  "icicle",
+  "network",
+  "venn",
+  "word_cloud",
 ]);
 
 let loaded_variant: chart_build_variant | null = null;

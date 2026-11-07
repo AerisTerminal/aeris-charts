@@ -3,3 +3,6 @@ from = 시작 {value}
 to = 끝 {value}
 hexbin_cell = 육각 빈 셀
 samples[other] = 표본 {count}개
+gauge_value = 값
+value_range = {start}~{end}
+graph_link = {source} → {target}

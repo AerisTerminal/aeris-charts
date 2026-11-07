@@ -5,3 +5,6 @@ hexbin_cell = шестиугольная ячейка
 samples[one] = {count} наблюдение
 samples[few] = {count} наблюдения
 samples[many] = {count} наблюдений
+gauge_value = Значение
+value_range = {start} – {end}
+graph_link = {source} → {target}

@@ -12,6 +12,8 @@
 //! here once and every native host inherits it without wiring.
 
 use super::*;
+#[cfg(feature = "complete")]
+use crate::general_layout::NetworkDragPhase;
 use crate::general_series::GeneralBrushSelection;
 
 /// Manhattan distance before a press becomes a drag (reference CancelClickManhattanDistance).
@@ -440,6 +442,22 @@ enum PressMode {
     /// visible reticle by its own delta, and a tap commits the next anchor at the reticle,
     /// never under the finger (TradingView mobile placement).
     TouchReticle,
+    /// A press on a network node: past the drag threshold it moves the node and pins it where
+    /// it is released; without movement it is a click.
+    #[cfg(feature = "complete")]
+    NetworkNode {
+        series: crate::GeneralLayoutSeriesId,
+        row: usize,
+        dragging: bool,
+    },
+    /// A press on empty network space: past the drag threshold it pans the network view from
+    /// `before`; without movement it is a click.
+    #[cfg(feature = "complete")]
+    NetworkPan {
+        series: crate::GeneralLayoutSeriesId,
+        before: crate::NetworkView,
+        panning: bool,
+    },
 }
 
 impl PressMode {
@@ -462,6 +480,8 @@ impl PressMode {
             | Self::GeneralBrush
             | Self::GeneralLegend { .. }
             | Self::Inert => InputTarget::Pane,
+            #[cfg(feature = "complete")]
+            Self::NetworkNode { .. } | Self::NetworkPan { .. } => InputTarget::Pane,
         }
     }
 }
@@ -589,6 +609,8 @@ impl ChartEngine {
             self.stop_input_motion();
         }
         self.input.options = options;
+        #[cfg(feature = "complete")]
+        self.settle_network_simulations();
     }
 
     /// Arm an existing Cartesian general axis for mouse and single-touch range brushing.
@@ -750,7 +772,10 @@ impl ChartEngine {
     /// Whether an input-owned animation (kinetic coast, held keyboard pan, animated scroll) needs
     /// another frame. Hosts request animation frames only while this holds.
     pub fn input_animating(&self) -> bool {
-        self.input.kinetic_active || self.keyboard_scroll_active() || self.scroll_animation_active()
+        self.input.kinetic_active
+            || self.keyboard_scroll_active()
+            || self.scroll_animation_active()
+            || self.general_simulation_active()
     }
 
     /// Earliest host-clock time at which [`Self::input_tick`] has deferred work, if any.
@@ -821,6 +846,10 @@ impl ChartEngine {
         }
         changed |= self.tick_drawing_text_caret(now_ms);
         changed |= self.tick_replay(now_ms);
+        #[cfg(feature = "complete")]
+        {
+            changed |= self.advance_network_simulations(1, now_ms);
+        }
         if changed {
             self.input.frame_dirty = true;
         }
@@ -1293,6 +1322,42 @@ impl ChartEngine {
             Some(PressMode::Pane { price_pan, panning }) if primary_pressed => {
                 self.continue_pan(input, update.kind, price_pan, panning);
             }
+            #[cfg(feature = "complete")]
+            Some(PressMode::NetworkNode {
+                series,
+                row,
+                dragging,
+            }) if primary_pressed => {
+                if let Some(press) = self.input.press.filter(|press| press.moved) {
+                    if !dragging {
+                        let (sx, sy) = press.start;
+                        self.network_drag(series, row, NetworkDragPhase::Begin(sx, sy));
+                        self.set_press_mode(PressMode::NetworkNode {
+                            series,
+                            row,
+                            dragging: true,
+                        });
+                    }
+                    self.network_drag(series, row, NetworkDragPhase::Move(x, y));
+                }
+            }
+            #[cfg(feature = "complete")]
+            Some(PressMode::NetworkPan {
+                series,
+                before,
+                panning,
+            }) if primary_pressed => {
+                if let Some(press) = self.input.press.filter(|press| press.moved) {
+                    if !panning {
+                        self.set_press_mode(PressMode::NetworkPan {
+                            series,
+                            before,
+                            panning: true,
+                        });
+                    }
+                    self.network_pan(series, before, x - press.start.0, y - press.start.1);
+                }
+            }
             None => {
                 if self.active_drawing_tool().is_some() {
                     self.drawing_tool_pointer_move(x, y, modifiers, false);
@@ -1455,6 +1520,10 @@ impl ChartEngine {
                 | PressMode::GeneralLegend { .. }
                 | PressMode::TextEditor
                 | PressMode::Inert => {}
+                // Network gestures begin only past the drag threshold, so an unmoved second
+                // press has nothing to undo.
+                #[cfg(feature = "complete")]
+                PressMode::NetworkNode { .. } | PressMode::NetworkPan { .. } => {}
             }
             self.input.touch_reticle_base = None;
             self.input.last_click = None;
@@ -1617,6 +1686,26 @@ impl ChartEngine {
                     self.push_input_event(ChartInputEvent::Click { x, y });
                 }
             }
+            #[cfg(feature = "complete")]
+            PressMode::NetworkNode {
+                series,
+                row,
+                dragging,
+            } => {
+                if dragging {
+                    self.network_drag(series, row, NetworkDragPhase::End);
+                } else if !moved {
+                    self.input_primary_click(x, y, press.text_press_selected);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
+                }
+            }
+            #[cfg(feature = "complete")]
+            PressMode::NetworkPan { .. } => {
+                if !moved {
+                    self.input_primary_click(x, y, press.text_press_selected);
+                    self.push_input_event(ChartInputEvent::Click { x, y });
+                }
+            }
         }
         self.apply_input_magnet();
         if input.device == InputDevice::Touch {
@@ -1756,6 +1845,25 @@ impl ChartEngine {
             self.refresh_input_cursor();
             return true;
         }
+        // A network view under the pointer zooms around it, as d3-zoom does: 2^(Δ/5) per
+        // normalized notch, so one notch (Δ = 1) is about ±15%.
+        #[cfg(feature = "complete")]
+        if sample.delta_y != 0.0
+            && options.wheel_zoom
+            && self.network_zoom_at(
+                sample.x,
+                sample.y,
+                (wheel_zoom_scale(sample.delta_y) * 0.2).exp2(),
+            )
+        {
+            self.stop_input_motion();
+            self.input.pointer = Some((sample.x, sample.y));
+            self.input.modifiers = sample.modifiers;
+            self.input.frame_dirty = true;
+            self.refresh_pointer_hover(sample.x, sample.y, sample.timestamp_ms);
+            self.refresh_input_cursor();
+            return true;
+        }
         if !zoom && !scroll {
             return false;
         }
@@ -1811,7 +1919,13 @@ impl ChartEngine {
             return false;
         }
         self.stop_input_motion();
-        self.time_scale_zoom_focused(x, pinch_zoom_scale(scale_delta));
+        #[cfg(feature = "complete")]
+        let network = self.network_zoom_at(x, y, 1.0 + scale_delta);
+        #[cfg(not(feature = "complete"))]
+        let network = false;
+        if !network {
+            self.time_scale_zoom_focused(x, pinch_zoom_scale(scale_delta));
+        }
         self.input.frame_dirty = true;
         self.refresh_pointer_hover(x, y, timestamp_ms);
         self.refresh_input_cursor();
@@ -2156,6 +2270,12 @@ impl ChartEngine {
                 if !self.select_general_layout_item(series, element, row) {
                     return false;
                 }
+                #[cfg(feature = "complete")]
+                self.toggle_general_layout_node_collapsed(crate::GeneralLayoutHit {
+                    series,
+                    element,
+                    row,
+                });
                 self.set_selected_drawing(None);
                 self.set_selected_series(None);
                 self.clear_general_selection();
@@ -2500,6 +2620,22 @@ impl ChartEngine {
                         self.push_input_event(ChartInputEvent::GeneralBrushChanged);
                     }
                 }
+                #[cfg(feature = "complete")]
+                PressMode::NetworkNode {
+                    series,
+                    row,
+                    dragging: true,
+                } => {
+                    self.network_drag(series, row, NetworkDragPhase::Cancel);
+                }
+                #[cfg(feature = "complete")]
+                PressMode::NetworkPan {
+                    series,
+                    before,
+                    panning: true,
+                } => {
+                    self.set_network_view(series, before);
+                }
                 _ => {}
             }
         }
@@ -2662,7 +2798,33 @@ impl ChartEngine {
             self.input.general_brush_before = Some(self.general_brush_state());
             return PressMode::GeneralBrush;
         }
+        #[cfg(feature = "complete")]
+        if let Some((series, node)) = self.network_press_target(x, y) {
+            if let Some(row) = node {
+                return PressMode::NetworkNode {
+                    series,
+                    row,
+                    dragging: false,
+                };
+            }
+            if self.input.options.pan_for(input.device)
+                && let Some(before) = self.network_view(series)
+            {
+                return PressMode::NetworkPan {
+                    series,
+                    before,
+                    panning: false,
+                };
+            }
+        }
         self.pane_pan_press(input)
+    }
+
+    #[cfg(feature = "complete")]
+    fn set_press_mode(&mut self, mode: PressMode) {
+        if let Some(press) = self.input.press.as_mut() {
+            press.mode = mode;
+        }
     }
 
     fn pane_pan_press(&self, input: PointerInput) -> PressMode {
@@ -2800,6 +2962,11 @@ impl ChartEngine {
                 .is_some();
         if layout_hit {
             self.select_general_layout_hovered();
+            // A primary click on a tree or dendrogram node with children also folds or unfolds it.
+            #[cfg(feature = "complete")]
+            if let Some(hit) = self.general_layout_hovered_hit() {
+                self.toggle_general_layout_node_collapsed(hit);
+            }
         } else {
             self.clear_general_layout_selection();
         }
@@ -3172,6 +3339,12 @@ impl ChartEngine {
                     return ChartCursor::Crosshair;
                 }
                 PressMode::Pane { panning: false, .. } | PressMode::Inert => {}
+                #[cfg(feature = "complete")]
+                PressMode::NetworkNode { .. } | PressMode::NetworkPan { panning: true, .. } => {
+                    return ChartCursor::Grabbing;
+                }
+                #[cfg(feature = "complete")]
+                PressMode::NetworkPan { panning: false, .. } => {}
             }
         }
         match self.region_at(x, y) {
@@ -3226,6 +3399,13 @@ impl ChartEngine {
         }
         if self.general_brush_input_active_at(y) {
             return ChartCursor::Crosshair;
+        }
+        #[cfg(feature = "complete")]
+        if self
+            .network_press_target(x, y)
+            .is_some_and(|(_, node)| node.is_some())
+        {
+            return ChartCursor::Move;
         }
         if self.hovered_series().is_some()
             || self.hovered_volume_profile_indicator().is_some()
