@@ -28,6 +28,14 @@ with its commit, and update the status table in the same commit. A phase or matr
 Updated 2026-11-08. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
+**Plan closed 2026-11-08 by maintainer decision.** Every batch G1–G14 is delivered with its
+automated gates green and pushed, and the general-chart program is in production. The maintainer
+waived the remaining manual phase-closure evidence (screen-reader session, human contrast sign-off,
+competitor screenshot review, calibrated GPUI captures at DPR 1.5/2, official-runner benchmarks and
+a real-touchscreen pass). Those items were not performed; they are deferred and will be collected
+only if a future need arises. Matrix rows keep their recorded status and are not marked
+**Verified**.
+
 | Batch | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- | --- |
 | G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Complete** | Recharts 3.10.1 matrix and rendered-mark fixtures; general-first topology; atomic handles; host cleanup; focus retention; validated general-first V2 restore | G2 |
@@ -37,13 +45,13 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G5 | R5 | React and framework-neutral authoring | **Complete** | Keyed declarations and mapped rows; atomic shared composition; controlled brush; first-pane ownership; lifecycle, SSR, packed-consumer and browser evidence | G6; manual assistive-technology review remains pending |
 | G6 | R6 | Polar families and transitions | **Complete** | `f64` polar geometry and axes; pie/donut, radar, polar-area and radial-bar paths; single-fill ordered polar mesh; bounded cached hits, slice legends, shared-frame leader labels, pointer and keyboard selection; WASM/TS bindings; opt-in fixed-clock value and numeric/temporal X updates, Cartesian and angular category-axis and matched-row category movement, identity-matched entry and exit rows, missing/valid Y, error-bound and bubble-size motion, pie row-order motion, fixed-spoke and changing-count radar morphs, compatible optional-channel changes, collapsed error-bound entry, persisted duration and browser scheduling; polar and Cartesian family fixed-clock frame/hit fixtures, GPUI/Canvas2D structural fill, bounded Canvas2D/WebGPU pixels, and measured 1.25× GPUI/native polar window parity; strict release performance, six package-size limits, and 735 portable browser tests passed | G7; manual assistive-technology and broader device-scale image evidence remain pending |
 | G7 | R7 | Hierarchy and flow families | **Complete** | Axis-free `layout` pane topology is available in engine, WASM, and TypeScript; lazy typed stage/tree/flow store validates IDs, values, cycles, depth and bounded retained capacity; funnel, treemap, Sankey and sunburst emit shared ordered-frame geometry with direct or cached exact hits; focused financial-isolation, persistence, atomic-store and geometry fixtures pass; V2 layout data/series round-trip and public restored-series handles, pointer hover/click/Escape and focused-key selection, bounded accessibility snapshots integrated with browser keyboard navigation and announcements, shared-frame visual focus, shared-dataset update fanout, built-in pointer tooltip and toggling legend, opt-in shared-frame labels, atomic live presentation patches, and fixed-clock compatible value transitions are implemented with focused engine/browser evidence; four-family Canvas2D/WebGPU interior pixels and GPUI/Canvas2D structural focus/mark parity pass | G8; manual assistive-technology, competitor screenshot and calibrated GPUI window evidence remain for parity closure |
-| G8 | R8 | Parity closure and release readiness | **Automated work complete; manual evidence pending** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | Maintainer-run manual evidence in **Manual phase-closure evidence**, then mark matrix rows Verified and close R8 |
+| G8 | R8 | Parity closure and release readiness | **Closed (manual evidence waived 2026-11-08)** | Every matrix row has pinned Recharts 3.10.1 and Aeris public-path pairs in Chromium/Firefox/WebKit; percent stacks now copy Recharts `expand` exactly by maintainer decision; all 46 catalog examples keep byte-identical exports across live WebGPU loss, accept post-loss updates and restore; general-only, mixed and financial-only browser workloads plus general/mixed lifecycles are measured locally beside native Targets F–I; the migration guide maps every matrix row | None; the items in **Manual phase-closure evidence** are deferred until a future need |
 | G9 | R9 | Two builds and business/comparison charts | **Complete** | Standard and complete builds with typed missing-family error and dual gates; pinned ECharts 6.1.0 reference; waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt, calendar heatmap and Marimekko with reference pairs in three browsers | G10; calibrated visual review at R9 closure |
 | G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
 | G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | G12 |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Complete** | Complete-build gate for layout kinds; shared graph store; gauge, chord, tree/dendrogram with engine-owned collapse, circle packing, icicle, d3-force network with engine-owned drag/pin/pan/zoom and persisted settled positions, Venn and word cloud — complete build only | G13 |
 | G13 | R13 | Geographic maps (complete build) | **Complete** | Streaming GeoJSON/TopoJSON geometry store; six d3-geo projections with fitting, antimeridian and hemisphere clipping and adaptive resampling; earcut triangulation into the shared mesh; choropleth with sequential, diverging and quantized scales and legend; bubble and great-circle flow maps on the base projection; engine-owned pan/zoom, grid-indexed hits, tooltips, keyboard focus and persisted view — complete build only | G14 |
-| G14 | R14 | 3D charts (complete build) | **Complete** | Engine camera (perspective and orthographic) over an ECharts GL `grid3D` axis box; painter's-algorithm depth ordering with a stable tie-break and engine shading into one per-triangle-colored `ColorMesh` primitive on every executor; 3D bar, scatter, line and surface with color maps and level of detail; engine-owned orbit drag, zoom and keys, depth-ordered picking, tooltips, accessibility and persisted camera — complete build only | Phase closure (manual evidence) |
+| G14 | R14 | 3D charts (complete build) | **Complete** | Engine camera (perspective and orthographic) over an ECharts GL `grid3D` axis box; painter's-algorithm depth ordering with a stable tie-break and engine shading into one per-triangle-colored `ColorMesh` primitive on every executor; 3D bar, scatter, line and surface with color maps and level of detail; engine-owned orbit drag, zoom and keys, depth-ordered picking, tooltips, accessibility and persisted camera — complete build only | None; plan closed |
 
 Notes:
 
@@ -1222,6 +1230,9 @@ Earlier test counts and timings are historical observations in Git history, not 
 | G2 evidence after default changes | `867029a` changed automatic domains, vertical category order, general-only gutters and plot clipping after the G2 rows were verified; 34 current public browser cases and focused engine regressions pass, with two expected CDP-only skips | Complete calibrated viewport/theme screenshots and investigate any recurrence of the one WebKit zero-size page error in the final gate | R8 |
 | Pinned legend placement | Recharts 3.10.0 added legend `position`/`offset`; Aeris has shared top/bottom lanes, outside side gutters, inside side and center/corner insets with bounded offsets and engine hit coordinates; custom-coordinate placement now has chart-width/pane-height pixel or percent coordinates, lower-right anchoring, engine hits, Chromium/Firefox/WebKit canvas input, Canvas2D/WebGPU image-export pixels and GPUI/Canvas2D axis-layer stream parity at 1×, 1.5× and 2× DPR; calibrated GPUI window pixels remain open | Complete the legend/tooltip parity row and calibrated GPUI image evidence | R8 |
 
+Since the 2026-11-08 closure these rows are deferred: none blocks production, and each is picked up
+only if a future need arises.
+
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
 
@@ -1465,9 +1476,10 @@ required for competitive closure.
 
 ### R8 — Parity closure and release readiness
 
-**Batch:** G8. **Depends on:** R0–R7. **Status:** in progress.
+**Batch:** G8. **Depends on:** R0–R7. **Status:** closed 2026-11-08 by maintainer decision; the
+manual comparisons and evidence below are deferred, not performed.
 
-- [ ] Run the complete matrix against the pinned competitor. Automated pairs exist for every
+- [ ] *(Deferred 2026-11-08.)* Run the complete matrix against the pinned competitor. Automated pairs exist for every
       row; the manual comparisons below remain.
 - [x] Demonstrate financial-only, general-only and combined workloads (local browser and native
       evidence above; official-runner results remain manual).
@@ -1481,6 +1493,9 @@ required for competitive closure.
       alignment chosen by the maintainer (recorded below).
 
 #### Manual phase-closure evidence
+
+**Deferred 2026-11-08:** the maintainer closed R8 without these items. They remain the evidence
+to collect if a future release needs verified parity rows.
 
 These items need a person, hardware or a controlled runner. R8 closes, and matrix rows move to
 **Verified**, only after each one is recorded here with its date, environment and result.
@@ -1603,7 +1618,8 @@ Every phase also has the standing exit rules of R6/R7. The exit criteria cover:
 
 ### R9 — Two builds and business/comparison charts (group A)
 
-**Batch:** G9. **Depends on:** R8 automated work. **Status:** complete (closure review pending).
+**Batch:** G9. **Depends on:** R8 automated work. **Status:** complete (closure review waived
+2026-11-08).
 
 - [x] Two-build packaging. Add the `complete` feature, the `/complete` and `/complete/react`
       exports, and pack, size, API and SSR gates for both builds. Add Playwright projects that run
@@ -2033,6 +2049,7 @@ identity; invalid updates are atomic; controls are accessible; styles and layout
 resources and work are bounded; installation and migration are documented; and all release gates have
 current evidence.
 
-Until then, report delivered items and remaining gaps precisely against the phase checklists and
-matrix rows above. A working demo or a green subset of tests is progress, not completion of the
+The maintainer closed this plan on 2026-11-08 with every batch delivered and its automated gates
+green; the manual evidence above is waived and deferred, so matrix rows not marked **Verified**
+stay unverified. Report any later work against the phase checklists and matrix rows above. A working demo or a green subset of tests is progress, not completion of the
 all-in-one library.
