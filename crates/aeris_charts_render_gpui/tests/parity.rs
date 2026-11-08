@@ -178,6 +178,46 @@ fn translucent_polar_mesh_is_one_fill_on_canvas_and_one_gpui_mesh() {
 }
 
 #[test]
+fn color_mesh_runs_are_the_same_ordered_fills_on_canvas_and_gpui() {
+    let points = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [0.0, 10.0],
+        [10.0, 0.0],
+        [10.0, 10.0],
+        [0.0, 10.0],
+        [20.0, 0.0],
+        [30.0, 0.0],
+        [20.0, 10.0],
+        [5.0, 5.0],
+        [25.0, 5.0],
+        [15.0, 20.0],
+    ];
+    let (red, blue) = (Color::rgb(220, 40, 40), Color::rgba(40, 80, 220, 160));
+    let prims = [Prim::ColorMesh {
+        first_point: 0,
+        point_count: 12,
+        colors: std::sync::Arc::from([red, red, blue, red]),
+    }];
+    let canvas = canvas_rects(&prims, &points);
+    let (plan, metrics) = gpui_plan(&prims, &points);
+    assert_eq!(canvas.path_fills, 3);
+    assert_eq!(metrics.dropped_prims, 0);
+    let fills: Vec<Paint> = plan
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            SceneOp::Mesh { fill, .. } => Some(*fill),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        fills,
+        [Paint::Solid(red), Paint::Solid(blue), Paint::Solid(red)]
+    );
+}
+
+#[test]
 fn polar_window_fixture_retains_all_ordered_fills_at_fractional_dpr() {
     for dpr in [1.0, 1.25, 1.5, 2.0] {
         let fixture = fixtures::polar_meshes(dpr);

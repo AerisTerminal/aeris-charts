@@ -13,7 +13,7 @@
 //! unobservable. The adapter therefore must *not* wrap the chart in `Window::paint_layer`: a layer
 //! forces every primitive inside it to share one order, which would flatten the chart's z-order.
 
-use aeris_charts_render::draw_list::{LineStyle, Prim, positive_finite_extent};
+use aeris_charts_render::draw_list::{LineStyle, Prim, color_mesh_runs, positive_finite_extent};
 use aeris_charts_render::line::{normalized_round_rect_radii, round_rect_border};
 
 use crate::geometry::{
@@ -311,6 +311,18 @@ fn lower_prim(
             }
             let range = mesh_fill_mesh(&mut plan.vertices, mesh);
             push_mesh(plan, metrics, range, Paint::Solid(*color));
+        }
+
+        Prim::ColorMesh {
+            first_point,
+            point_count,
+            colors,
+        } => {
+            // A GPUI path has one paint, so each color run becomes its own path, in order.
+            for (run, color) in color_mesh_runs(points, *first_point, *point_count, colors) {
+                let range = mesh_fill_mesh(&mut plan.vertices, run);
+                push_mesh(plan, metrics, range, Paint::Solid(color));
+            }
         }
 
         Prim::RoundRect {
@@ -1061,6 +1073,40 @@ mod tests {
             SceneOp::Mesh { vertex_count: 30, fill: Paint::Solid(actual), .. } if actual == color
         ));
         assert_eq!(plan.vertices.len(), 30);
+    }
+
+    #[test]
+    fn color_mesh_paints_one_scene_op_per_color_run_in_order() {
+        let points = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [20.0, 0.0],
+            [30.0, 0.0],
+            [20.0, 10.0],
+        ];
+        let (red, blue) = (Color::rgb(255, 0, 0), Color::rgb(0, 0, 255));
+        let (plan, metrics) = run(
+            &[Prim::ColorMesh {
+                first_point: 0,
+                point_count: 9,
+                colors: Arc::from([red, red, blue]),
+            }],
+            &points,
+        );
+        let fills: Vec<Paint> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Mesh { fill, .. } => Some(*fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fills, [Paint::Solid(red), Paint::Solid(blue)]);
+        assert_eq!(metrics.triangles * 3, plan.vertices.len() as u32);
     }
 
     #[test]

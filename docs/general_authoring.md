@@ -435,6 +435,44 @@ chart.add_layout_series("flow_map", { pane: 0, title: "Order flow" }, {
   ],
 });
 ```
+
+### Migrating ECharts GL 3D charts (complete build)
+
+3D families also need `@aeristerminal/aeris-charts/complete`. They replace the ECharts GL
+extension; the engine draws them on every backend without WebGL:
+
+| ECharts GL authoring concept | Aeris equivalent |
+| --- | --- |
+| `grid3D` with `xAxis3D`, `yAxis3D`, `zAxis3D` | One shared axis box per pane; `x_axis`, `y_axis`, `z_axis` on the pane's first 3D dataset |
+| `xAxis3D: { type: "category", data }` | `x_axis: { categories }`; point values are category indices |
+| `grid3D.viewControl: { alpha, beta, distance, projection, orthographicSize }` | `camera_3d: { alpha, beta, distance, projection, orthographic_size }` (ECharts GL's `orthographicSize + 1`) |
+| `bar3D` with `data: [[x, y, z]]` | `add_layout_series("bar_3d", options, { type: "points_3d", points: [{ x, y, z }] })` |
+| `scatter3D` with `symbolSize` | `add_layout_series("scatter_3d", options, { type: "points_3d", points, size })` |
+| `line3D` with `lineStyle.width` | `add_layout_series("line_3d", options, { type: "points_3d", points, size })` |
+| `surface` with `equation: { x, y, z }` | `add_layout_series("surface_3d", options, { type: "surface", x, y, z })` with the sampled grid |
+| `visualMap` `inRange.color` on a surface | `colors` on the surface input |
+| `wireframe: { show }` | `wireframe` on the surface input (default `true`) |
+
+ECharts GL renders with a GPU depth buffer and optional realistic shading and post effects;
+Aeris shades each triangle with one light and sorts whole pieces by depth, so intersecting
+geometry can order differently and lighting is simpler by design. Orbit drag, the wheel, a pinch
+and the orbit keys are built in.
+
+```ts
+import { create_chart } from "@aeristerminal/aeris-charts/complete";
+
+const chart = await create_chart(container, {
+  initialPane: { horizontal_domain: { type: "layout" } },
+});
+const xs = Array.from({ length: 17 }, (_, i) => -1 + i * 0.125);
+chart.add_layout_series("surface_3d", { pane: 0, title: "Response", camera_3d: { alpha: 30 } }, {
+  type: "surface",
+  x: xs,
+  y: xs,
+  z: xs.flatMap((y) => xs.map((x) => Math.sin(x * Math.PI) * Math.cos(y * Math.PI))),
+  colors: ["#313695", "#e0f3f8", "#d73027"],
+});
+```
 ### Migrating ECharts waterfall, bullet, lollipop, dumbbell, slope and bump charts
 
 ECharts builds these from stacked bars, `custom` series, extra scatter series and host-computed

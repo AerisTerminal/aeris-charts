@@ -38,6 +38,10 @@ export const complete_only_families: ReadonlySet<string> = new Set<string>([
   "choropleth",
   "bubble_map",
   "flow_map",
+  "bar_3d",
+  "scatter_3d",
+  "line_3d",
+  "surface_3d",
 ]);
 
 let loaded_variant: chart_build_variant | null = null;

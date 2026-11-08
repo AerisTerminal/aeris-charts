@@ -14,6 +14,7 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
 mod calendar;
+mod chart3d;
 #[cfg(feature = "complete")]
 mod chord;
 mod gantt;
@@ -39,6 +40,9 @@ mod venn;
 mod word_cloud;
 
 pub use calendar::{CalendarDay, CalendarInput};
+pub use chart3d::{Axis3d, Point3d, Points3dInput, SurfaceInput};
+#[cfg(feature = "complete")]
+pub use chart3d::{Camera3d, Projection3d};
 pub use gantt::GanttTask;
 #[cfg(feature = "complete")]
 pub use geo::MapView;
@@ -127,6 +131,10 @@ pub enum GeneralLayoutElement {
     Feature,
     /// A bubble map bubble; its row is the point's input index.
     Bubble,
+    /// A 3D bar, scatter symbol or line vertex; its row is the point's input index.
+    Point,
+    /// A 3D surface grid sample; its row is `y index * x count + x index`.
+    Sample,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -193,6 +201,14 @@ pub enum GeneralLayoutSeriesKind {
     BubbleMap,
     /// Great-circle arcs between map positions over a geo links dataset (complete build).
     FlowMap,
+    /// Boxes rising from zero to each point's height in a 3D axis box (complete build).
+    Bar3d,
+    /// Screen-sized symbols at 3D points (complete build).
+    Scatter3d,
+    /// A polyline through 3D points in input order (complete build).
+    Line3d,
+    /// A shaded, height-colored surface over a 3D grid (complete build).
+    Surface3d,
 }
 
 impl GeneralLayoutSeriesKind {
@@ -213,6 +229,10 @@ impl GeneralLayoutSeriesKind {
                 | Self::Choropleth
                 | Self::BubbleMap
                 | Self::FlowMap
+                | Self::Bar3d
+                | Self::Scatter3d
+                | Self::Line3d
+                | Self::Surface3d
         )
     }
 
@@ -442,6 +462,11 @@ pub struct GeneralLayoutSeriesOptions {
     #[cfg(feature = "complete")]
     #[serde(default, skip_serializing_if = "MapView::is_default")]
     pub map_view: MapView,
+    /// Orbit camera of a 3D pane, held by every 3D series of the pane; other families accept
+    /// only the default.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "Camera3d::is_default")]
+    pub camera_3d: Camera3d,
 }
 
 pub(crate) fn layout_visible_default() -> bool {
@@ -486,6 +511,8 @@ impl GeneralLayoutSeriesOptions {
             word_cloud_rotate: false,
             #[cfg(feature = "complete")]
             map_view: MapView::default(),
+            #[cfg(feature = "complete")]
+            camera_3d: Camera3d::default(),
         }
     }
 
@@ -715,6 +742,18 @@ pub enum GeneralLayoutInput {
         serde(skip_serializing, deserialize_with = "skip_layout_fields")
     )]
     GeoLinks(GeoLinksInput),
+    /// Rows of a 3D bar, scatter or line series (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Points3d(Points3dInput),
+    /// A 3D surface height grid (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Surface(SurfaceInput),
 }
 
 #[cfg(not(feature = "complete"))]
@@ -819,6 +858,10 @@ impl GeneralLayoutInput {
                 .iter()
                 .map(|link| link.value.unwrap_or(f64::NAN))
                 .collect(),
+            #[cfg(feature = "complete")]
+            Self::Points3d(input) => input.points.iter().map(|point| point.z).collect(),
+            #[cfg(feature = "complete")]
+            Self::Surface(input) => input.z.iter().map(|z| z.unwrap_or(f64::NAN)).collect(),
             #[cfg(not(feature = "complete"))]
             Self::Gauge(_)
             | Self::Graph { .. }
@@ -826,7 +869,9 @@ impl GeneralLayoutInput {
             | Self::Words(_)
             | Self::Geo(_)
             | Self::GeoPoints(_)
-            | Self::GeoLinks(_) => Vec::new(),
+            | Self::GeoLinks(_)
+            | Self::Points3d(_)
+            | Self::Surface(_) => Vec::new(),
         }
     }
 
@@ -852,6 +897,10 @@ impl GeneralLayoutInput {
             Self::GeoPoints(input) => input.points.len(),
             #[cfg(feature = "complete")]
             Self::GeoLinks(input) => input.links.len(),
+            #[cfg(feature = "complete")]
+            Self::Points3d(input) => input.points.len(),
+            #[cfg(feature = "complete")]
+            Self::Surface(input) => input.z.len(),
             #[cfg(not(feature = "complete"))]
             Self::Gauge(_)
             | Self::Graph { .. }
@@ -859,7 +908,9 @@ impl GeneralLayoutInput {
             | Self::Words(_)
             | Self::Geo(_)
             | Self::GeoPoints(_)
-            | Self::GeoLinks(_) => 0,
+            | Self::GeoLinks(_)
+            | Self::Points3d(_)
+            | Self::Surface(_) => 0,
         }
     }
     fn validate(&self) -> Result<(), ChartError> {
@@ -894,6 +945,10 @@ impl GeneralLayoutInput {
             Self::GeoPoints(input) => geo::validate_points(input)?,
             #[cfg(feature = "complete")]
             Self::GeoLinks(input) => geo::validate_links(input)?,
+            #[cfg(feature = "complete")]
+            Self::Points3d(input) => chart3d::validate_points(input)?,
+            #[cfg(feature = "complete")]
+            Self::Surface(input) => chart3d::validate_surface(input)?,
             #[cfg(not(feature = "complete"))]
             Self::Gauge(_)
             | Self::Graph { .. }
@@ -901,9 +956,11 @@ impl GeneralLayoutInput {
             | Self::Words(_)
             | Self::Geo(_)
             | Self::GeoPoints(_)
-            | Self::GeoLinks(_) => {
+            | Self::GeoLinks(_)
+            | Self::Points3d(_)
+            | Self::Surface(_) => {
                 return Err(crate::complete_build_required(
-                    "gauge, graph, venn, word cloud and map layout datasets",
+                    "gauge, graph, venn, word cloud, map and 3D layout datasets",
                 ));
             }
         }
@@ -1012,6 +1069,10 @@ impl GeneralLayoutInput {
             Self::GeoPoints(input) => geo::points_heap_bytes(input),
             #[cfg(feature = "complete")]
             Self::GeoLinks(input) => geo::links_heap_bytes(input),
+            #[cfg(feature = "complete")]
+            Self::Points3d(input) => chart3d::points_heap_bytes(input),
+            #[cfg(feature = "complete")]
+            Self::Surface(input) => chart3d::surface_heap_bytes(input),
             #[cfg(not(feature = "complete"))]
             Self::Gauge(_)
             | Self::Graph { .. }
@@ -1019,7 +1080,9 @@ impl GeneralLayoutInput {
             | Self::Words(_)
             | Self::Geo(_)
             | Self::GeoPoints(_)
-            | Self::GeoLinks(_) => 0,
+            | Self::GeoLinks(_)
+            | Self::Points3d(_)
+            | Self::Surface(_) => 0,
         }
     }
 }
@@ -1235,6 +1298,9 @@ struct LayoutSeriesEntry {
     geo: RefCell<Option<geo::GeoCache>>,
     #[cfg(feature = "complete")]
     marks: RefCell<Option<geo::MarkCache>>,
+    /// Scene of the pane when this series is the pane's first 3D series.
+    #[cfg(feature = "complete")]
+    scene: RefCell<Option<chart3d::SceneCache>>,
     /// Simulated positions of a network series. Not a cache: positions evolve over time and
     /// survive data replacement, so only a series rebuild replaces them.
     #[cfg(feature = "complete")]
@@ -1823,6 +1889,7 @@ impl LayoutSeriesEntry {
             *self.word_cloud.borrow_mut() = None;
             *self.geo.borrow_mut() = None;
             *self.marks.borrow_mut() = None;
+            *self.scene.borrow_mut() = None;
         }
     }
 
@@ -1872,6 +1939,11 @@ impl LayoutSeriesEntry {
                     .borrow()
                     .as_ref()
                     .map_or(0, geo::MarkCache::heap_bytes)
+                + self
+                    .scene
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, chart3d::SceneCache::heap_bytes)
         }
         #[cfg(not(feature = "complete"))]
         {
@@ -2468,6 +2540,14 @@ impl GeneralLayoutStore {
             (GeneralLayoutInput::GeoLinks(input), GeneralLayoutElement::Link) => {
                 hit.row < input.links.len()
             }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Points3d(input), GeneralLayoutElement::Point) => {
+                hit.row < input.points.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Surface(input), GeneralLayoutElement::Sample) => {
+                hit.row < input.z.len()
+            }
             _ => false,
         }
     }
@@ -2678,6 +2758,8 @@ impl GeneralLayoutStore {
                 series.clear_caches();
             }
         }
+        #[cfg(feature = "complete")]
+        self.clear_scenes_showing(id);
         Ok(())
     }
 
@@ -2816,7 +2898,8 @@ impl GeneralLayoutStore {
     fn insert_series(
         &mut self,
         pane_id: PaneId,
-        options: GeneralLayoutSeriesOptions,
+        #[cfg_attr(not(feature = "complete"), allow(unused_mut))]
+        mut options: GeneralLayoutSeriesOptions,
     ) -> Result<GeneralLayoutSeriesId, ChartError> {
         if self.series.len() >= MAX_LAYOUT_SERIES {
             return Err(resource_limit("too many layout series"));
@@ -2858,6 +2941,16 @@ impl GeneralLayoutStore {
         } else {
             None
         };
+        // A pane has one camera: a later 3D series joins the camera of the pane's 3D series.
+        #[cfg(feature = "complete")]
+        if options.kind.is_3d()
+            && let Some(shared) = self
+                .series
+                .iter()
+                .find(|series| series.pane_id == pane_id && series.options.kind.is_3d())
+        {
+            options.camera_3d = shared.options.camera_3d;
+        }
         if self
             .reserved_bytes()
             .saturating_add(options.heap_bytes())
@@ -2900,6 +2993,8 @@ impl GeneralLayoutStore {
             geo: RefCell::new(None),
             #[cfg(feature = "complete")]
             marks: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            scene: RefCell::new(None),
             #[cfg(feature = "complete")]
             network,
             scroll_row: 0,
@@ -3015,6 +3110,11 @@ impl GeneralLayoutSeriesKind {
                 | (Self::Choropleth, GeneralLayoutInput::Geo(_))
                 | (Self::BubbleMap, GeneralLayoutInput::GeoPoints(_))
                 | (Self::FlowMap, GeneralLayoutInput::GeoLinks(_))
+                | (
+                    Self::Bar3d | Self::Scatter3d | Self::Line3d,
+                    GeneralLayoutInput::Points3d(_)
+                )
+                | (Self::Surface3d, GeneralLayoutInput::Surface(_))
         )
     }
 
@@ -3091,6 +3191,8 @@ fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) 
         (GeneralLayoutSeriesKind::FlowMap, GeneralLayoutInput::GeoLinks(input)) => {
             geo::mark_cache_reservation(geo::MarkInput::Links(input))
         }
+        #[cfg(feature = "complete")]
+        (kind, input) if kind.is_3d() => chart3d::cache_reservation(kind, input),
         _ => 0,
     }
 }
@@ -3565,6 +3667,12 @@ impl ChartEngine {
                             points,
                         );
                     }
+                    // One pane paints its whole 3D scene once, at its first visible 3D series,
+                    // so pieces of different series depth-sort together.
+                    #[cfg(feature = "complete")]
+                    (kind, _) if kind.is_3d() && store.scene_drawer(pane_id) == Some(series.id) => {
+                        self.build_scene_frame(store, pane_id, plot, (hpr, vpr), out, points);
+                    }
                     _ => {}
                 }
             }
@@ -3768,6 +3876,8 @@ impl ChartEngine {
                     cache.anchor(&view, hit.element, hit.row)
                 })
             }
+            #[cfg(feature = "complete")]
+            (_, kind, _) if kind.is_3d() => store.scene_anchor(pane_id, plot, hit),
             _ => None,
         }
     }
@@ -3790,6 +3900,16 @@ impl ChartEngine {
             .rev()
             .filter(|series| series.pane_id == pane_id && series.options.visible)
         {
+            // The pane's scene picks across every 3D series at once, through its drawer.
+            #[cfg(feature = "complete")]
+            if series.options.kind.is_3d() {
+                if store.scene_drawer(pane_id) == Some(series.id)
+                    && let Some(hit) = store.scene_hit(pane_id, plot, x, y)
+                {
+                    return Some(hit);
+                }
+                continue;
+            }
             if let (GeneralLayoutSeriesKind::Sunburst, Some(entry)) =
                 (series.options.kind, store.entry(series.options.dataset))
                 && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
@@ -4183,7 +4303,9 @@ impl ChartEngine {
             | (GeneralLayoutInput::Graph { .. }, GeneralLayoutElement::Node)
             | (GeneralLayoutInput::Geo(_), GeneralLayoutElement::Feature)
             | (GeneralLayoutInput::GeoPoints(_), GeneralLayoutElement::Bubble)
-            | (GeneralLayoutInput::GeoLinks(_), GeneralLayoutElement::Link) => hit.row,
+            | (GeneralLayoutInput::GeoLinks(_), GeneralLayoutElement::Link)
+            | (GeneralLayoutInput::Points3d(_), GeneralLayoutElement::Point)
+            | (GeneralLayoutInput::Surface(_), GeneralLayoutElement::Sample) => hit.row,
             #[cfg(feature = "complete")]
             (
                 GeneralLayoutInput::Gauge(_),
@@ -4269,6 +4391,15 @@ impl ChartEngine {
                     self.flow_label(input, base, hit.row)?,
                 ))
             }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Points3d(input), GeneralLayoutElement::Point) => {
+                Some((hit.row.to_string(), chart3d::point_label(input, hit.row)?))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Surface(input), GeneralLayoutElement::Sample) => Some((
+                chart3d::sample_id(input, hit.row)?,
+                chart3d::sample_label(input, hit.row)?,
+            )),
             _ => None,
         }
     }
@@ -4390,6 +4521,18 @@ impl ChartEngine {
                     store.map_base(series.pane_id).map(|(_, base)| base),
                     hit.row,
                 )?,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Points3d(input), GeneralLayoutElement::Point) => (
+                chart3d::point_label(input, hit.row)?,
+                chart3d::item_color(series.color, &entry.input, hit.row)?,
+                None,
+            ),
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Surface(input), GeneralLayoutElement::Sample) => (
+                chart3d::sample_label(input, hit.row)?,
+                chart3d::item_color(series.color, &entry.input, hit.row)?,
+                None,
+            ),
             _ => return None,
         };
         Some(LayoutItemTooltip {
@@ -4697,6 +4840,49 @@ impl ChartEngine {
                         .collect(),
                 )
             }
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Points3d(input) => (
+                input.points.len(),
+                (offset..input.points.len().min(offset.saturating_add(limit)))
+                    .map(|row| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Point,
+                        row,
+                        id: row.to_string(),
+                        label: chart3d::point_label(input, row).unwrap_or_default(),
+                        value: Some(input.points[row].z),
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Point,
+                                row,
+                            }),
+                        expanded: None,
+                        placed: None,
+                    })
+                    .collect(),
+            ),
+            // Holes stay addressable with no value so sample rows keep their grid positions.
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Surface(input) => (
+                input.z.len(),
+                (offset..input.z.len().min(offset.saturating_add(limit)))
+                    .map(|row| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Sample,
+                        row,
+                        id: chart3d::sample_id(input, row).unwrap_or_default(),
+                        label: chart3d::sample_label(input, row).unwrap_or_default(),
+                        value: input.z[row],
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Sample,
+                                row,
+                            }),
+                        expanded: None,
+                        placed: None,
+                    })
+                    .collect(),
+            ),
             #[cfg(not(feature = "complete"))]
             GeneralLayoutInput::Gauge(_)
             | GeneralLayoutInput::Graph { .. }
@@ -4704,7 +4890,9 @@ impl ChartEngine {
             | GeneralLayoutInput::Words(_)
             | GeneralLayoutInput::Geo(_)
             | GeneralLayoutInput::GeoPoints(_)
-            | GeneralLayoutInput::GeoLinks(_) => (0, Vec::new()),
+            | GeneralLayoutInput::GeoLinks(_)
+            | GeneralLayoutInput::Points3d(_)
+            | GeneralLayoutInput::Surface(_) => (0, Vec::new()),
         };
         Some(GeneralLayoutAccessibilitySnapshot {
             series: series_id,
@@ -4721,7 +4909,7 @@ impl ChartEngine {
     ) -> Result<GeneralLayoutSeriesId, ChartError> {
         if options.kind.requires_complete_build() && !Self::build_includes_complete_families() {
             return Err(crate::complete_build_required(
-                "gauge, relationship, hierarchy, and map layout families",
+                "gauge, relationship, hierarchy, map, and 3D layout families",
             ));
         }
         let pane_id = self
@@ -5035,6 +5223,13 @@ fn validate_relationship_options(
             "map views apply only to choropleth, bubble map and flow map series",
         ));
     }
+    if !options.kind.is_3d() && !options.camera_3d.is_default() {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "3D cameras apply only to 3D bar, scatter, line and surface series",
+        ));
+    }
+    chart3d::validate_camera(options.camera_3d)?;
     geo::validate_view(options.map_view)
 }
 

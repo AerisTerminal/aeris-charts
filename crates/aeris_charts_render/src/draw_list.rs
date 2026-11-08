@@ -289,6 +289,16 @@ pub enum Prim {
         point_count: u32,
         color: Color,
     },
+    /// Triangles in `points[range]` painted in order, triangle `i` filled with `colors[i]`;
+    /// `point_count` is three times `colors.len()`. Each maximal run of consecutive triangles
+    /// with one color ([`color_mesh_runs`]) is one fill with [`Prim::MeshFill`] semantics, and
+    /// runs composite source-over in order. Frame builders paint depth-sorted 3D geometry with
+    /// it, so every executor draws the same picture without a depth buffer.
+    ColorMesh {
+        first_point: u32,
+        point_count: u32,
+        colors: Arc<[Color]>,
+    },
     /// Vertical gradient over `rect` (bitmap px) — the reference `layout.background`
     /// `VerticalGradient` painted per pane (pane-widget.ts `_drawBackground` spans the pane's
     /// own bitmap, so a stacked pane each gets the full top→bottom ramp).
@@ -349,9 +359,60 @@ pub fn positive_finite_extent(value: f32) -> bool {
     value.is_finite() && value > 0.0
 }
 
+/// The drawable triangles of a [`Prim::ColorMesh`] as `(points, color)` runs in paint order:
+/// each run is a maximal sequence of consecutive triangles sharing one color. A mesh whose range
+/// is out of bounds, whose point and color counts disagree, or that holds a non-finite point
+/// draws nothing, like [`Prim::MeshFill`].
+pub fn color_mesh_runs<'a>(
+    points: &'a [[f32; 2]],
+    first_point: u32,
+    point_count: u32,
+    colors: &'a [Color],
+) -> impl Iterator<Item = (&'a [[f32; 2]], Color)> + 'a {
+    let first = first_point as usize;
+    let mesh = first
+        .checked_add(point_count as usize)
+        .and_then(|end| points.get(first..end))
+        .filter(|mesh| {
+            mesh.len() == colors.len() * 3 && mesh.iter().flatten().all(|value| value.is_finite())
+        })
+        .unwrap_or_default();
+    let colors = if mesh.is_empty() { &[][..] } else { colors };
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let color = *colors.get(start)?;
+        let end = colors[start..]
+            .iter()
+            .position(|next| *next != color)
+            .map_or(colors.len(), |offset| start + offset);
+        let run = &mesh[start * 3..end * 3];
+        start = end;
+        Some((run, color))
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{premultiply_rgba8, quantize_image_opacity, snap_image_rect};
+    use super::{
+        Color, color_mesh_runs, premultiply_rgba8, quantize_image_opacity, snap_image_rect,
+    };
+
+    #[test]
+    fn color_mesh_runs_split_on_color_changes_and_reject_bad_ranges() {
+        let points: Vec<[f32; 2]> = (0..12).map(|index| [index as f32, 0.0]).collect();
+        let (red, blue) = (Color::rgb(255, 0, 0), Color::rgb(0, 0, 255));
+        let colors = [red, red, blue, red];
+        let runs: Vec<_> = color_mesh_runs(&points, 0, 12, &colors)
+            .map(|(run, color)| (run.len(), run[0][0], color))
+            .collect();
+        assert_eq!(runs, [(6, 0.0, red), (3, 6.0, blue), (3, 9.0, red)]);
+        assert_eq!(color_mesh_runs(&points, 3, 9, &colors[..3]).count(), 2);
+        assert_eq!(color_mesh_runs(&points, 0, 9, &colors).count(), 0);
+        assert_eq!(color_mesh_runs(&points, 6, 12, &colors).count(), 0);
+        let mut bad = points.clone();
+        bad[4][1] = f32::NAN;
+        assert_eq!(color_mesh_runs(&bad, 0, 12, &colors).count(), 0);
+    }
 
     #[test]
     fn image_opacity_uses_one_rounded_byte_for_every_executor() {

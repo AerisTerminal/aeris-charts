@@ -51,6 +51,8 @@ pub use volume_profile::{
     MAX_VOLUME_PROFILE_INDICATORS, VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot,
 };
 #[cfg(test)]
+mod general_3d_tests;
+#[cfg(test)]
 mod general_business_tests;
 #[cfg(test)]
 mod general_geo_tests;
@@ -204,18 +206,20 @@ pub use general_data::{
 };
 #[doc(hidden)]
 pub use general_layout::{
-    CalendarDay, CalendarInput, ChoroplethScale, FlowLink, FlowNode, FunnelStage, GanttTask,
-    GaugeBand, GaugeInput, GeneralLayoutAccessibilityItem, GeneralLayoutAccessibilitySnapshot,
-    GeneralLayoutDatasetId, GeneralLayoutElement, GeneralLayoutHit, GeneralLayoutInput,
-    GeneralLayoutSeriesId, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeoAnchor,
-    GeoFeature, GeoInput, GeoLink, GeoLinksInput, GeoPoint, GeoPointsInput, GeoProjection,
-    GeoProjectionKind, GeoShape, GeoValue, GraphEdge, GraphNode, HierarchyNode, MosaicCell,
-    QuantizeMethod, VennSet, WordCloudWord,
+    Axis3d, CalendarDay, CalendarInput, ChoroplethScale, FlowLink, FlowNode, FunnelStage,
+    GanttTask, GaugeBand, GaugeInput, GeneralLayoutAccessibilityItem,
+    GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId, GeneralLayoutElement,
+    GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId, GeneralLayoutSeriesKind,
+    GeneralLayoutSeriesOptions, GeoAnchor, GeoFeature, GeoInput, GeoLink, GeoLinksInput, GeoPoint,
+    GeoPointsInput, GeoProjection, GeoProjectionKind, GeoShape, GeoValue, GraphEdge, GraphNode,
+    HierarchyNode, MosaicCell, Point3d, Points3dInput, QuantizeMethod, SurfaceInput, VennSet,
+    WordCloudWord,
 };
 #[cfg(feature = "complete")]
 #[doc(hidden)]
 pub use general_layout::{
-    HierarchyOrientation, MapView, NetworkLayout, NetworkPin, NetworkView, WordCloudScaling,
+    Camera3d, HierarchyOrientation, MapView, NetworkLayout, NetworkPin, NetworkView, Projection3d,
+    WordCloudScaling,
 };
 #[doc(hidden)]
 pub use general_series::{

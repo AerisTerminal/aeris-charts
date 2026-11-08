@@ -4,7 +4,7 @@
   "scripts": {
     "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const [source,target] of [['index.js','aeris_charts_financial.js'],['index.js.map','index.js.map'],['aeris_charts_wasm_bg.wasm','aeris_charts_wasm_bg.wasm'],['complete.js','aeris_charts_financial_complete.js'],['complete.js.map','complete.js.map'],['aeris_charts_wasm_complete_bg.wasm','aeris_charts_wasm_complete_bg.wasm'],['aeris_charts.css','aeris_charts.css']])fs.copyFileSync('../../packages/charts/dist/'+source,'dist/'+target)\" && node build_react_fixtures.mjs && npm run build:g1-reference && npm run build:echarts-reference",
     "build:g1-reference": "esbuild g1_recharts_reference.tsx --bundle --format=esm --jsx=automatic --outfile=dist/g1_recharts_reference.js",
-    "build:echarts-reference": "esbuild echarts_reference/index.js --bundle --format=esm --outfile=dist/echarts_reference.js",
+    "build:echarts-reference": "node build_echarts_reference.mjs",
     "test:browser": "playwright test",
     "test:gpui-webgpu": "npm run build && node run_gpui_webgpu_matrix.mjs"
   },
@@ -13,6 +13,7 @@
     "@playwright/test": "1.64.1",
     "axe-core": "^4.14.0",
     "echarts": "6.1.0",
+    "echarts-gl": "2.1.0",
     "esbuild": "^0.28.2",
     "lightweight-charts": "5.2.1",
     "pixelmatch": "7.2.0",

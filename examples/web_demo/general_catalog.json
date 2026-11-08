@@ -1253,6 +1253,67 @@
       ]
     },
     {
+      "id": "bar_3d", "title": "3D bars", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "bar_3d", "title": "Quarterly revenue", "color": "#5470c6", "data": { "type": "points_3d",
+          "x_axis": { "name": "Quarter", "categories": ["Q1", "Q2", "Q3", "Q4"] },
+          "y_axis": { "name": "Region", "categories": ["North", "South", "West"] },
+          "z_axis": { "name": "Revenue" },
+          "points": [
+            { "x": 0, "y": 0, "z": 4 }, { "x": 0, "y": 1, "z": 7 }, { "x": 0, "y": 2, "z": 5 },
+            { "x": 1, "y": 0, "z": 6 }, { "x": 1, "y": 1, "z": 9 }, { "x": 1, "y": 2, "z": 3 },
+            { "x": 2, "y": 0, "z": 8 }, { "x": 2, "y": 1, "z": 5 }, { "x": 2, "y": 2, "z": 6 },
+            { "x": 3, "y": 0, "z": 10 }, { "x": 3, "y": 1, "z": 6 }, { "x": 3, "y": 2, "z": 4 }
+          ] } }
+      ]
+    },
+    {
+      "id": "scatter_3d", "title": "3D scatter", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "scatter_3d", "title": "Runs", "color": "#91cc75", "camera_3d": { "alpha": 30, "beta": -45 },
+          "data": { "type": "points_3d", "size": 12,
+          "x_axis": { "name": "Distance" }, "y_axis": { "name": "Cost" }, "z_axis": { "name": "Score" },
+          "points": [
+            { "x": 0, "y": 0, "z": 0, "label": "zero" }, { "x": 100, "y": 50, "z": 10, "label": "far top" },
+            { "x": 20, "y": 40, "z": 8, "label": "A" }, { "x": 80, "y": 10, "z": 2, "label": "B" },
+            { "x": 50, "y": 25, "z": 5, "label": "center" }, { "x": 90, "y": 45, "z": 1, "label": "C" },
+            { "x": 10, "y": 5, "z": 9, "label": "D" }
+          ] } }
+      ]
+    },
+    {
+      "id": "line_3d", "title": "3D line", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "line_3d", "title": "Route", "color": "#ee6666", "data": { "type": "points_3d",
+          "points": [
+            { "x": 0, "y": 0, "z": 0 }, { "x": 1, "y": 2, "z": 1 }, { "x": 2, "y": 0, "z": 2 },
+            { "x": 3, "y": 2, "z": 3 }, { "x": 4, "y": 0, "z": 4 }, { "x": 5, "y": 2, "z": 5 }
+          ] } }
+      ]
+    },
+    {
+      "id": "surface_3d", "title": "3D surface", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "surface_3d", "title": "Saddle", "data": { "type": "surface",
+          "x": [-3, -2, -1, 0, 1, 2, 3], "y": [-3, -2, -1, 0, 1, 2, 3],
+          "z": [
+            0, -1.67, -2.67, -3, -2.67, -1.67, 0,
+            1.67, 0, -1, -1.33, -1, 0, 1.67,
+            2.67, 1, 0, -0.33, 0, 1, 2.67,
+            3, 1.33, 0.33, 0, 0.33, 1.33, 3,
+            2.67, 1, 0, -0.33, 0, 1, 2.67,
+            1.67, 0, -1, -1.33, -1, 0, 1.67,
+            0, -1.67, -2.67, -3, -2.67, -1.67, 0
+          ],
+          "x_axis": { "name": "x" }, "y_axis": { "name": "y" }, "z_axis": { "name": "z" },
+          "colors": ["#313695", "#74add1", "#e0f3f8", "#fdae61", "#d73027"] } }
+      ]
+    },
+    {
     "id": "violin_regional",
     "title": "Violin: response time by region",
     "category": "statistics",

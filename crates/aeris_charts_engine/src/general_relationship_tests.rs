@@ -266,6 +266,16 @@ fn standard_build_restores_layout_series_with_default_complete_family_options() 
             "map_view",
             serde_json::json!({ "x": 0.0, "y": 0.0, "zoom": 1.0 }),
         ),
+        (
+            "camera_3d",
+            serde_json::json!({
+                "alpha": 20.0,
+                "beta": 40.0,
+                "distance": 200.0,
+                "projection": "perspective",
+                "orthographic_size": 150.0
+            }),
+        ),
     ] {
         assert!(series.insert(key.into(), value).is_none());
     }

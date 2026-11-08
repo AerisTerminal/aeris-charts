@@ -58,7 +58,7 @@ The package contains two builds with the same API. The standard build is the roo
 `/react`. The complete build adds chart families whose size does not fit the standard build's
 budget (statistics such as violin, hexbin and contour; gauge, chord, network, tree, dendrogram,
 circle packing, icicle, Venn and word cloud; choropleth, bubble and flow maps from host-supplied
-GeoJSON or TopoJSON); import it from `/complete` or `/complete/react`
+GeoJSON or TopoJSON; 3D bar, scatter, line and surface charts); import it from `/complete` or `/complete/react`
 instead:
 
 ```ts

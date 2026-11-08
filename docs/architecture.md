@@ -320,6 +320,26 @@ Escape restores the prior view, an unmoved press is a layout click, and the whee
 around the pointer after network views and before any time-scale policy. Frame construction,
 exact hits, tooltips, accessibility items and focus anchors of the three families read the same
 caches through the same transform. Map value updates apply immediately without transitions.
+G14 adds four 3D layout families that ship only in the complete build: bar, scatter, line and
+surface, over the `Points3d` and `Surface` layout inputs, gated like G13's. `general_layout/chart3d`
+holds the input types in both builds; its `camera` and `scene` modules and the `camera_3d`
+series option compile only with `complete`. Every 3D series of a pane shares one ECharts GL
+`grid3D`-shaped 100-unit axis box and one camera owned by the pane's first 3D series. One scene
+cache per pane, held by that owner and admitted against the layout store budget, stores the
+projected, back-face culled, Lambert-shaded and depth-sorted triangles of every visible 3D series
+as one per-triangle-colored mesh, each triangle's owner for picking, and the projected box
+(back-face grid, axis lines, ticks and labels). A camera, plot, series set or color change
+rebuilds it, and a dataset replacement clears the caches showing that dataset. Depth ordering is
+a painter's algorithm over whole pieces (one bar box, symbol, half line segment, or surface cell
+with its wireframe), far to near with series then input order as the tie-break, so no executor
+needs a depth buffer; intersecting pieces show the nearer piece whole on top. A surface draws at
+most 64 by 64 cells and a pane at most 131,072 triangles; the piece that would cross the bound
+and every later piece are dropped. The scene lowers to one `Prim::ColorMesh` plus the shared
+polyline and text primitives. Hits, tooltips, accessibility items and focus anchors read the same
+cache. The input controller owns orbiting inside the shared press arbitration: a press inside a
+3D plot becomes `Orbit3d` past the drag threshold, capture loss or Escape restores the camera
+from before the drag, an unmoved press is a layout click, and the wheel, pinch, arrow, `+`/`-`
+and Home keys rotate or zoom the camera. V2 state persists the camera bit for bit.
 The layout pane blocks financial series and cannot be removed while a layout series is bound.
 V2 state stores layout datasets and series in input order with dataset references, preserving
 shared input identity and styles. Restore validates the complete layout graph in the staged
@@ -1661,6 +1681,12 @@ the shared `line::dash_split` routine; GPUI and WebGPU do not invent separate ph
 walk is capped at `MAX_DASH_STEPS`: a pattern too fine for the path strokes solid, and a
 non-finite path length strokes nothing, so host-supplied widths and coordinates cannot stall a
 frame.
+`Prim::ColorMesh` is a triangle mesh in the pane point pool with one color per triangle.
+`draw_list::color_mesh_runs` splits it into maximal same-color runs in paint order, each with
+`Prim::MeshFill` semantics, and every executor consumes those runs: Canvas2D (and native
+tiny-skia, which runs the Canvas2D executor) fills one path per run, GPUI paints one mesh per run,
+and WebGPU appends each run's triangles to its ordered triangle batch. Runs composite source-over
+in order, so the engine's depth-sorted 3D scene reads the same on every backend.
 `Prim::Image` carries immutable straight-alpha RGBA8 pixels, a texel-space `source` rectangle
 mapped onto the destination `rect`, and an `ImageSampling` mode. Its destination edges snap with
 the shared device-pixel rule; scaled pixels use bilinear sampling unless the primitive asks for

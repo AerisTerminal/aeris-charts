@@ -43,7 +43,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | G12 |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Complete** | Complete-build gate for layout kinds; shared graph store; gauge, chord, tree/dendrogram with engine-owned collapse, circle packing, icicle, d3-force network with engine-owned drag/pin/pan/zoom and persisted settled positions, Venn and word cloud — complete build only | G13 |
 | G13 | R13 | Geographic maps (complete build) | **Complete** | Streaming GeoJSON/TopoJSON geometry store; six d3-geo projections with fitting, antimeridian and hemisphere clipping and adaptive resampling; earcut triangulation into the shared mesh; choropleth with sequential, diverging and quantized scales and legend; bubble and great-circle flow maps on the base projection; engine-owned pan/zoom, grid-indexed hits, tooltips, keyboard focus and persisted view — complete build only | G14 |
-| G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
+| G14 | R14 | 3D charts (complete build) | **Complete** | Engine camera (perspective and orthographic) over an ECharts GL `grid3D` axis box; painter's-algorithm depth ordering with a stable tie-break and engine shading into one per-triangle-colored `ColorMesh` primitive on every executor; 3D bar, scatter, line and surface with color maps and level of detail; engine-owned orbit drag, zoom and keys, depth-ordered picking, tooltips, accessibility and persisted camera — complete build only | Phase closure (manual evidence) |
 
 Notes:
 
@@ -56,8 +56,8 @@ Notes:
 
 Seven of eight baseline batches are complete. G8's automated work is complete; its phase
 closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G11 are
-complete (`22303df`, `33e2dbc`, `36cea9c`), and G12 and G13 are complete. G14 has not started: no
-3D code exists yet, and it is the next batch. Work committed between G11 and G12
+complete (`22303df`, `33e2dbc`, `36cea9c`), and G12, G13 (`d04dc3a`) and G14 are complete. Every
+catalog expansion batch is delivered. Work committed between G11 and G12
 (ten-language chart text, linked sync, replay, drawing visibility and touch input) is shared or
 financial-chart work. Batch completion does not imply full parity-matrix verification.
 
@@ -1138,6 +1138,60 @@ Known limits and deferrals: keyboard zoom (as for networks), a missing-value leg
 ripple and trail effects, value transitions, and calibrated visual review. The GPUI gallery links
 the standard engine, so it skips the map examples as it does the other complete-only families.
 
+### G14 — 3D charts (2026-11-08)
+
+**Complete-build gate.** Four 3D layout kinds ship only in the complete build: `bar_3d`,
+`scatter_3d` and `line_3d` over `{ type: "points_3d" }`, and `surface_3d` over
+`{ type: "surface" }`. The kinds and inputs are unconditional enum variants;
+`general_layout/chart3d/` holds the input types in both builds, and its `camera` and `scene`
+modules and the `camera_3d` series option compile only with `complete`. The standard build
+rejects the kinds, inputs and option with `complete_build_required` in the engine, the WASM
+boundary and the package.
+
+| Capability | Delivered | Reference |
+| --- | --- | --- |
+| Camera and axis box | One camera per pane (`alpha`, `beta`, `distance`, perspective or orthographic size) over a 100-unit box with back-face grid, axis lines, nice value ticks, category bands, labels and names; validated ranges; persisted bit for bit | ECharts GL 2.1.0 `grid3D` and `viewControl` |
+| Depth ordering and shading | Back-face culling, Lambert shading under a world-fixed light, painter's algorithm over whole pieces with series then input order as the tie-break, near-plane and plot clipping; documented limit for intersecting pieces | ECharts GL lighting defaults |
+| Mesh primitive | `Prim::ColorMesh` with per-triangle colors; `color_mesh_runs` gives every executor the same ordered same-color runs (Canvas2D and native paths, GPUI meshes, WebGPU triangle batches), with a GPUI/Canvas2D parity test | — |
+| Families | Shaded 3D bars with category or value footprints, screen-sized scatter discs, input-order 3D lines, surfaces with holes, a color map of up to 9 stops and wireframe | ECharts GL `bar3D`, `scatter3D`, `line3D`, `surface` |
+| Level of detail and bounds | 4,096 points per dataset, 128 by 128 surface samples drawn as at most 64 by 64 cells, 131,072 triangles per pane, cache admitted against the layout store budget | — |
+| Interaction and accessibility | Engine-owned orbit drag, wheel and pinch zoom, arrow/`+`/`-`/Home keys, Escape and capture-loss restore; front-most picking across the pane, tooltips, accessibility items and focus anchors | ECharts GL `viewControl` rotate and zoom sensitivity |
+
+The demo catalog gains 3D bar, scatter, line and surface examples (85 examples, 29 complete-only).
+The ECharts reference matrix gains `bar3D`, `scatter3D` (perspective and orthographic),
+`line3D` and `surface` pairs; `g14_3d.spec.mjs` runs on `chromium-complete` through Canvas2D
+and WebGPU and checks projected points against ECharts GL within 1.5 px.
+
+Rotation release measurements (local Windows, `rotation_frame_and_hit_timings_at_the_scene_bound`,
+both scenes at the 131,072-triangle bound):
+
+| Scene | First frame | Warm frame | Rotation frame median / max | Hit | Layout data |
+| --- | --- | --- | --- | --- | --- |
+| 128×128 surface, 4,096 bars, 4,096 scatter points | 7.02 ms | 1.23 ms | 1.18 / 1.62 ms | 115.77 µs | 5.59 MB |
+| Nine 4,096-point scatter series | 8.47 ms | 1.28 ms | 1.21 / 1.83 ms | 132.50 µs | 8.52 MB |
+
+Every rotation frame rebuilds the scene; the worst one stays under 2 ms, well inside a 16.7 ms
+display frame.
+
+Gate evidence (clean worktree of the staged tree, so concurrent unrelated work could not affect
+it): `cargo fmt --all -- --check`; workspace clippy on native and `wasm32-unknown-unknown` for the
+standard and complete builds with `-D warnings`; `cargo test --workspace` (2,205 tests standard,
+2,342 complete); the strict release `perf_gate` (all pass); package `npm ci`, `lint`, `build`,
+`typecheck`, `check:api`, `check:release-gates`, `test:build-variant`, `test:react-ssr`,
+`check:namespace`, `test:pack` and `node benchmarks/benchmark.mjs size`; GPUI clippy and tests on
+both builds; the web demo build; and the full portable Playwright run (1,323 passed, 61 skipped, 0 failed,
+including the six `g14_3d` cases). The complete build grows by
+24,086 brotli bytes (1,484,259 to 1,508,345) and 84,141 raw bytes (6,011,054 to 6,095,195); the
+standard build grows by 2,085 brotli bytes (1,342,034 to 1,344,119) for the unconditional 3D input
+types, kinds and `ColorMesh` primitive. Five ceilings rise to the measured sizes plus headroom:
+complete brotli 1,510,000, complete raw 6,097,000, standard brotli 1,346,000, tarball 4,371,000 and
+unpacked 13,130,000. The other five ceilings are unchanged.
+
+Known limits and deferrals: intersecting pieces resolve whole rather than per pixel, no
+value transitions or auto-rotate, no 3D map or globe, surfaces take sampled grids rather than
+equations, and no calibrated visual review. The GPUI gallery links the standard engine, so it skips
+the 3D examples as it does the other complete-only families.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1496,6 +1550,8 @@ versioned algorithm source: d3-contour, d3-hexbin, d3-hierarchy, d3-chord, d3-fo
 Reference code is read for behaviour; it is not copied, with two recorded exceptions: G13 ports
 the d3-geo 3.1.1 projection pipeline and earcut 3.2.4 (both ISC), keeping their notices in the
 ported files and in `NOTICE`, because matching d3-geo within rounding is the R13 exit criterion.
+G14 copies no ECharts GL or claygl code: `echarts-gl` 2.1.0 (MIT, with claygl 1.3.0 under
+BSD-2-Clause) is only a demo devDependency that renders the reference page.
 
 **Two builds.** The compressed WASM was 1,257,487 bytes against the 1,317,000-byte ceiling on
 2026-10-31, so the new families cannot all fit one build. By maintainer decision the package ships
@@ -1642,22 +1698,23 @@ rules.
 
 ### R14 — 3D charts (group E, complete build)
 
-**Batch:** G14. **Depends on:** R9 two builds. **Status:** planned.
+**Batch:** G14. **Depends on:** R9 two builds. **Status:** complete.
 
-- [ ] Engine-owned camera (orbit, perspective and orthographic) and a 3D axis box with ticks, labels
+- [x] Engine-owned camera (orbit, perspective and orthographic) and a 3D axis box with ticks, labels
       and grid.
-- [ ] Engine projection with deterministic depth ordering (painter's algorithm with a stable
+- [x] Engine projection with deterministic depth ordering (painter's algorithm with a stable
       tie-break) and engine-computed shading. A per-triangle-colored mesh primitive lets every
       executor draw the same result without a backend-specific depth buffer. Documented limits
       cover intersecting surfaces.
-- [ ] 3D bar, scatter, line and surface (grid values or sampled functions with a color map).
-- [ ] Orbit drag, zoom, keyboard rotation, depth-ordered picking, tooltips and announcements.
-- [ ] Bounded triangle counts with level of detail, and measured rotation frame budgets.
-- [ ] G14 full gate green on both builds; batch committed and pushed.
+- [x] 3D bar, scatter, line and surface (grid values or sampled functions with a color map).
+- [x] Orbit drag, zoom, keyboard rotation, depth-ordered picking, tooltips and announcements.
+- [x] Bounded triangle counts with level of detail, and measured rotation frame budgets.
+- [x] G14 full gate green on both builds; batch committed and pushed.
 
 **Exit:** equal camera and data give identical frames on every executor. Rotation stays within its
 measured frame budget at the bounded triangle count, and every 3D family meets the standing exit
 rules.
+
 ## Parity coverage matrix
 
 Each row must acquire exact versioned reference examples, Aeris API mappings, named automated
@@ -1685,7 +1742,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
-| Two builds (standard and complete) | Partial (G9 delivered; G11, G12 and G13 shipped complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Two builds (standard and complete) | Partial (G9 delivered; G11, G12, G13 and G14 shipped complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
 | Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
 | Financial chart styles | Delivered (G10) | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
 | Statistical distributions | Delivered (G11, complete build) | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
@@ -1693,7 +1750,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Gauge, chord and network | Delivered (G12, complete build) | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
 | Hierarchy extensions, Venn and word cloud | Delivered (G12, complete build) | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
 | Geographic maps | Delivered (G13, complete build) | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |
-| 3D charts | Open | Engine camera and depth ordering, 3D bar/scatter/line/surface, orbit interaction and bounded meshes on every executor | R14 |
+| 3D charts | Delivered (G14, complete build) | Engine camera and depth ordering, 3D bar/scatter/line/surface, orbit interaction and bounded meshes on every executor | R14 |
 
 ## Scope and parity rules
 

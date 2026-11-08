@@ -19,10 +19,10 @@ use aeris_charts_engine::{
 };
 #[cfg(feature = "complete")]
 use aeris_charts_engine::{
-    GaugeInput, GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel,
+    Camera3d, GaugeInput, GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel,
     GeneralStatsOptions, GeneralViolinOverlay, GeneralViolinSide, GeoInput, GeoLinksInput,
     GeoPointsInput, GraphEdge, GraphNode, HierarchyOrientation, MapView, NetworkLayout, NetworkPin,
-    NetworkView, VennSet, WordCloudScaling, WordCloudWord,
+    NetworkView, Points3dInput, SurfaceInput, VennSet, WordCloudScaling, WordCloudWord,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -81,6 +81,11 @@ enum LayoutInput {
     GeoPoints(GeoPointsInput),
     #[cfg(feature = "complete")]
     GeoLinks(GeoLinksInput),
+    #[cfg(feature = "complete")]
+    #[serde(rename = "points_3d")]
+    Points3d(Points3dInput),
+    #[cfg(feature = "complete")]
+    Surface(SurfaceInput),
     /// Complete-build data kinds. The standard build skips their contents; the engine then
     /// rejects the placeholder with the typed complete-build error.
     #[cfg(not(feature = "complete"))]
@@ -91,7 +96,9 @@ enum LayoutInput {
         alias = "words",
         alias = "geo",
         alias = "geo_points",
-        alias = "geo_links"
+        alias = "geo_links",
+        alias = "points_3d",
+        alias = "surface"
     )]
     CompleteOnly(IgnoredAny),
 }
@@ -117,6 +124,10 @@ impl From<LayoutInput> for GeneralLayoutInput {
             LayoutInput::GeoPoints(points) => Self::GeoPoints(points),
             #[cfg(feature = "complete")]
             LayoutInput::GeoLinks(links) => Self::GeoLinks(links),
+            #[cfg(feature = "complete")]
+            LayoutInput::Points3d(points) => Self::Points3d(points),
+            #[cfg(feature = "complete")]
+            LayoutInput::Surface(surface) => Self::Surface(surface),
             #[cfg(not(feature = "complete"))]
             LayoutInput::CompleteOnly(_) => Self::Words(Vec::new()),
         }
@@ -162,6 +173,9 @@ struct LayoutSeriesInput {
     map_view: MapView,
     #[cfg(feature = "complete")]
     #[serde(default)]
+    camera_3d: Camera3d,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
     word_cloud_min_size: Option<f64>,
     #[cfg(feature = "complete")]
     #[serde(default)]
@@ -198,6 +212,9 @@ struct LayoutSeriesInput {
     #[cfg(not(feature = "complete"))]
     #[serde(default)]
     map_view: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    camera_3d: Option<IgnoredAny>,
     #[cfg(not(feature = "complete"))]
     #[serde(default)]
     word_cloud_min_size: Option<IgnoredAny>,
@@ -245,6 +262,10 @@ fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
         "choropleth" => Some(GeneralLayoutSeriesKind::Choropleth),
         "bubble_map" => Some(GeneralLayoutSeriesKind::BubbleMap),
         "flow_map" => Some(GeneralLayoutSeriesKind::FlowMap),
+        "bar_3d" => Some(GeneralLayoutSeriesKind::Bar3d),
+        "scatter_3d" => Some(GeneralLayoutSeriesKind::Scatter3d),
+        "line_3d" => Some(GeneralLayoutSeriesKind::Line3d),
+        "surface_3d" => Some(GeneralLayoutSeriesKind::Surface3d),
         _ => None,
     }
 }
@@ -264,6 +285,8 @@ pub(super) fn layout_element(name: &str) -> Option<GeneralLayoutElement> {
         "word" => Some(GeneralLayoutElement::Word),
         "feature" => Some(GeneralLayoutElement::Feature),
         "bubble" => Some(GeneralLayoutElement::Bubble),
+        "point" => Some(GeneralLayoutElement::Point),
+        "sample" => Some(GeneralLayoutElement::Sample),
         _ => None,
     }
 }
@@ -1875,7 +1898,7 @@ impl ChartInner {
         #[cfg(not(feature = "complete"))]
         if kind.requires_complete_build() {
             return result_error(&complete_build_required(
-                "gauge, relationship, hierarchy, and map layout families",
+                "gauge, relationship, hierarchy, map, and 3D layout families",
             ));
         }
         let options = match parse_json::<LayoutSeriesInput>(options_json) {
@@ -1892,6 +1915,7 @@ impl ChartInner {
             options.positions,
             options.network_view,
             options.map_view,
+            options.camera_3d,
             options.word_cloud_min_size,
             options.word_cloud_max_size,
             options.word_cloud_scaling,
@@ -1901,7 +1925,7 @@ impl ChartInner {
         .any(Option::is_some)
         {
             return result_error(&complete_build_required(
-                "hierarchy, network, map, and word cloud options",
+                "hierarchy, network, map, 3D camera, and word cloud options",
             ));
         }
         let input = match parse_layout_input(data_json) {
@@ -1928,6 +1952,7 @@ impl ChartInner {
             series_options.positions = options.positions;
             series_options.network_view = options.network_view;
             series_options.map_view = options.map_view;
+            series_options.camera_3d = options.camera_3d;
             if let Some(min) = options.word_cloud_min_size {
                 series_options.word_cloud_min_size = min;
             }
@@ -1994,6 +2019,15 @@ impl ChartInner {
                             | GeneralLayoutSeriesKind::FlowMap
                     ) {
                         value["map_view"] = json!(options.map_view);
+                    }
+                    if matches!(
+                        options.kind,
+                        GeneralLayoutSeriesKind::Bar3d
+                            | GeneralLayoutSeriesKind::Scatter3d
+                            | GeneralLayoutSeriesKind::Line3d
+                            | GeneralLayoutSeriesKind::Surface3d
+                    ) {
+                        value["camera_3d"] = json!(options.camera_3d);
                     }
                     if options.kind == GeneralLayoutSeriesKind::WordCloud {
                         value["word_cloud_min_size"] = json!(options.word_cloud_min_size);
@@ -2141,6 +2175,10 @@ impl ChartInner {
                         GeneralLayoutSeriesKind::Choropleth => "choropleth",
                         GeneralLayoutSeriesKind::BubbleMap => "bubble_map",
                         GeneralLayoutSeriesKind::FlowMap => "flow_map",
+                        GeneralLayoutSeriesKind::Bar3d => "bar_3d",
+                        GeneralLayoutSeriesKind::Scatter3d => "scatter_3d",
+                        GeneralLayoutSeriesKind::Line3d => "line_3d",
+                        GeneralLayoutSeriesKind::Surface3d => "surface_3d",
                     },
                 }))
             })
@@ -5101,6 +5139,47 @@ mod tests {
         assert!(error.contains("complete build"));
     }
 
+    #[cfg(feature = "complete")]
+    #[test]
+    fn complete_build_parses_3d_layout_data_and_cameras() {
+        let input: LayoutInput = serde_json::from_str(
+            r#"{"type":"points_3d","points":[{"x":0,"y":1,"z":2,"label":"A"}],
+                "x_axis":{"name":"Year","categories":["2024"]},"size":8}"#,
+        )
+        .unwrap();
+        let GeneralLayoutInput::Points3d(points) = input.into() else {
+            panic!("points_3d parses to 3D points");
+        };
+        assert_eq!(points.points[0].label.as_deref(), Some("A"));
+        assert_eq!(points.x_axis.categories, ["2024"]);
+        assert_eq!(points.size, Some(8.0));
+        let input: LayoutInput = serde_json::from_str(
+            r##"{"type":"surface","x":[0,1],"y":[0,1],"z":[0,1,null,3],"colors":["#000","#fff"],"wireframe":false}"##,
+        )
+        .unwrap();
+        let GeneralLayoutInput::Surface(surface) = input.into() else {
+            panic!("surface parses to a surface");
+        };
+        assert_eq!(surface.z, [Some(0.0), Some(1.0), None, Some(3.0)]);
+        assert!(!surface.wireframe);
+        let options: LayoutSeriesInput = serde_json::from_str(
+            r#"{"pane":0,"camera_3d":{"alpha":30,"projection":"orthographic"}}"#,
+        )
+        .unwrap();
+        assert_eq!(options.camera_3d.alpha, 30.0);
+        assert_eq!(options.camera_3d.beta, Camera3d::default().beta);
+        for (name, kind) in [
+            ("bar_3d", GeneralLayoutSeriesKind::Bar3d),
+            ("scatter_3d", GeneralLayoutSeriesKind::Scatter3d),
+            ("line_3d", GeneralLayoutSeriesKind::Line3d),
+            ("surface_3d", GeneralLayoutSeriesKind::Surface3d),
+        ] {
+            assert_eq!(layout_kind(name), Some(kind));
+        }
+        assert_eq!(layout_element("point"), Some(GeneralLayoutElement::Point));
+        assert_eq!(layout_element("sample"), Some(GeneralLayoutElement::Sample));
+    }
+
     #[cfg(not(feature = "complete"))]
     #[test]
     fn standard_build_skips_complete_layout_data_and_flags_complete_layout_options() {
@@ -5112,6 +5191,8 @@ mod tests {
             r#"{"type":"geo","geojson":{"type":"Point","coordinates":[1,2]}}"#,
             r#"{"type":"geo_points","points":[{"id":"a","at":[1,2],"value":3}]}"#,
             r#"{"type":"geo_links","links":[{"source":[1,2],"target":"FR"}],"arrows":true}"#,
+            r#"{"type":"points_3d","points":[{"x":0,"y":1,"z":2}]}"#,
+            r#"{"type":"surface","x":[0,1],"y":[0,1],"z":[0,1,2,3]}"#,
         ] {
             let input: LayoutInput = serde_json::from_str(data).unwrap();
             assert!(matches!(input, LayoutInput::CompleteOnly(_)));
@@ -5124,6 +5205,9 @@ mod tests {
         let viewed: LayoutSeriesInput =
             serde_json::from_str(r#"{"pane":0,"map_view":{"x":0,"y":0,"zoom":2}}"#).unwrap();
         assert!(viewed.map_view.is_some());
+        let orbited: LayoutSeriesInput =
+            serde_json::from_str(r#"{"pane":0,"camera_3d":{"alpha":30}}"#).unwrap();
+        assert!(orbited.camera_3d.is_some());
         let patch: LayoutPresentationPatch =
             serde_json::from_str(r#"{"hierarchy_orientation":"vertical"}"#).unwrap();
         assert!(patch.hierarchy_orientation.is_some());

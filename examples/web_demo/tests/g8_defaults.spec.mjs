@@ -3632,10 +3632,10 @@ const COMPLETE_ONLY_KINDS = [
   "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot", "ecdf", "qq_plot",
   "hexbin", "contour", "parallel_coordinates", "scatter_matrix", "gauge", "chord",
   "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud", "choropleth",
-  "bubble_map", "flow_map",
+  "bubble_map", "flow_map", "bar_3d", "scatter_3d", "line_3d", "surface_3d",
 ];
 const is_complete_project = (test_info) => test_info.project.name === "chromium-complete";
-const catalog_count = (test_info) => (is_complete_project(test_info) ? 81 : 56);
+const catalog_count = (test_info) => (is_complete_project(test_info) ? 85 : 56);
 
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`all catalog families export and dispose through ${backend}`, async ({ page, browserName }, test_info) => {

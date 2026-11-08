@@ -1277,6 +1277,7 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
             Prim::Image { rect, .. } => rect[0] += dxf,
             Prim::Polyline { .. }
             | Prim::MeshFill { .. }
+            | Prim::ColorMesh { .. }
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
             | Prim::BandGradientFill { .. }
@@ -1317,6 +1318,7 @@ fn append_drawing_part(
         match &mut prim {
             Prim::Polyline { first_point, .. }
             | Prim::MeshFill { first_point, .. }
+            | Prim::ColorMesh { first_point, .. }
             | Prim::AreaFill { first_point, .. } => {
                 *first_point = first_point.wrapping_add(adjust);
             }
@@ -1348,6 +1350,7 @@ fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &
         match &mut prim {
             Prim::Polyline { first_point, .. }
             | Prim::MeshFill { first_point, .. }
+            | Prim::ColorMesh { first_point, .. }
             | Prim::AreaFill { first_point, .. } => {
                 *first_point += point_base;
             }

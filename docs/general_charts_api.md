@@ -180,6 +180,59 @@ items name the feature, bubble or flow (`source to target`, localized) with its 
 keyboard focus ring sits on each feature's interior anchor. Value updates apply immediately
 without a transition.
 
+### 3D layout families (complete build)
+
+Four 3D kinds ship only in the complete build. The standard build rejects the kinds, their
+`points_3d` and `surface` inputs and the `camera_3d` option with `complete_build_required`
+before any engine state changes. Each kind uses an axis-free layout pane and
+`add_layout_series(kind, options, data)`; ECharts GL 2.1.0 `grid3D` is the reference:
+
+| Kind | Data | Layout and reference |
+| --- | --- | --- |
+| `bar_3d` | `{ type: "points_3d", points: [{ x, y, z, label?, color? }], x_axis?, y_axis?, z_axis?, size? }` | Shaded boxes from zero to each `z`; `size` is the footprint in box units (default 70% of a category band, or 60% of the even point spacing); ECharts GL `bar3D` |
+| `scatter_3d` | Same `points_3d` input | Screen-sized discs `size` CSS px across (default 10); ECharts GL `scatter3D` |
+| `line_3d` | Same `points_3d` input | A polyline through the points in input order, `size` CSS px wide (default 2); ECharts GL `line3D` |
+| `surface_3d` | `{ type: "surface", x, y, z, x_axis?, y_axis?, z_axis?, colors?, wireframe? }` | A shaded grid colored by height through up to 9 `colors` (empty shades the series color), outlined unless `wireframe: false`; ECharts GL `surface` |
+
+3D data:
+
+- A `points_3d` dataset holds at most 4,096 points with finite coordinates of magnitude at
+  most 1e15. `x_axis` and `y_axis` may list `categories`; values on a category axis are
+  category indices placed at band centers. `size` is above 0 through 100.
+- A surface has 2 to 128 strictly increasing `x` and `y` positions and one height per sample,
+  row by row (`z[row * x.length + column]`); `null` leaves a hole, and cells touching a hole are
+  not drawn. A surface paints at most 64 by 64 cells, striding evenly through longer grids;
+  every sample stays hittable at the nearest drawn corner.
+- Value axes keep zero in their extent and take five nice ticks, as ECharts value axes do.
+
+Every 3D series of a pane shares one 100-unit axis box (data `x` across, `y` from near to far,
+`z` up) and one camera. The pane's first 3D series owns the axis names and categories and holds
+`camera_3d`: `{ alpha?, beta?, distance?, projection?, orthographic_size? }`, ECharts GL
+`viewControl` shaped, defaulting to 20, 40, 200, `"perspective"` and 150. `alpha` is -90 to 90,
+`beta` above -180 through 180, `distance` 40 to 400 and `orthographic_size` 20 to 400; out-of-range
+values reject the series with `invalid_options`. A later 3D series in the pane joins that camera
+and ignores its own `camera_3d`. ECharts GL adds one unit to `orthographicSize`,
+so its 149 is Aeris's 150.
+
+Dragging inside the plot orbits the camera (a drag across the plot height turns the box two
+radians, as ECharts GL does), the wheel or a pinch moves it closer, and with the pointer over the
+pane the arrow keys turn it by 5 degrees (15 with Shift), `+` and `-` zoom one wheel notch, and
+Home restores the default angles and distance. Escape or a cancelled drag restores the camera
+from before the drag, and an unmoved press is an ordinary layout click. `options()` reports the
+camera of 3D series, V2 state persists it bit for bit, and `apply_options` does not accept it.
+
+The engine projects, back-face culls and shades (ambient plus one directional light) the whole
+scene, then sorts whole pieces (one bar box, one symbol, one half line segment, one surface cell
+with its wireframe) far to near by view depth, with series order then input order breaking
+ties. It paints the result as one ordered, opaque mesh of per-triangle colors, so every backend
+draws the same picture without a depth buffer. Pieces that intersect, such as two crossing
+surfaces or a bar piercing a surface, show the nearer piece whole on top. A pane paints at most
+131,072 triangles; the piece that would cross the bound and every piece after it are dropped.
+Hits name the front-most item under the pointer across every 3D series of the pane:
+`element: "point"` with the point index, or `"sample"` for the corner of the hit cell nearest
+the pointer (row `y index * x count + x index`). Tooltips and
+accessibility items name the point label (default its `x` and `y`) or the sample position, with
+the height as the value.
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
 engine transaction; brush controls support controlled and uncontrolled ranges. See

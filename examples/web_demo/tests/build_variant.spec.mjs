@@ -124,7 +124,16 @@ test("the engine reports the loaded build and both builds create shared families
     } catch (error) {
       flow_map = error.code;
     }
-    // Hierarchy, network, map and word cloud options are complete-only like statistics options: the
+    let bar_3d = null;
+    try {
+      layout_chart.add_layout_series("bar_3d", { pane: 0 }, {
+        type: "points_3d", points: [{ x: 0, y: 0, z: 1 }],
+      });
+      bar_3d = "created";
+    } catch (error) {
+      bar_3d = error.code;
+    }
+    // Hierarchy, network, map, 3D camera and word cloud options are complete-only like statistics options: the
     // standard build rejects them before the engine sees them, and the complete build rejects
     // them on a family they do not configure.
     const hierarchy = { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: 1 }] };
@@ -141,6 +150,13 @@ test("the engine reports the loaded build and both builds create shared families
       map_options = "created";
     } catch (error) {
       map_options = error.code;
+    }
+    let camera_options = null;
+    try {
+      layout_chart.add_layout_series("treemap", { pane: 0, camera_3d: { alpha: 30 } }, hierarchy);
+      camera_options = "created";
+    } catch (error) {
+      camera_options = error.code;
     }
     const gauge_count = layout_chart.layout_series().length;
     const treemap = layout_chart.add_layout_series("treemap", { pane: 0 }, hierarchy);
@@ -162,8 +178,8 @@ test("the engine reports the loaded build and both builds create shared families
       .filter((path) => path.endsWith(".wasm"));
     return {
       before, variant, camel, wasm, violin, stats_options, gauge, tree, network, venn, word_cloud, choropleth,
-      bubble_map, flow_map, gauge_count,
-      layout_options, map_options, layout_patch,
+      bubble_map, flow_map, bar_3d, gauge_count,
+      layout_options, map_options, camera_options, layout_patch,
     };
   });
   expect(result).toEqual({
@@ -181,9 +197,11 @@ test("the engine reports the loaded build and both builds create shared families
     choropleth: expected === "complete" ? "created" : "complete_build_required",
     bubble_map: expected === "complete" ? "created" : "complete_build_required",
     flow_map: expected === "complete" ? "created" : "complete_build_required",
-    gauge_count: expected === "complete" ? 8 : 0,
+    bar_3d: expected === "complete" ? "created" : "complete_build_required",
+    gauge_count: expected === "complete" ? 9 : 0,
     layout_options: expected === "complete" ? "invalid_options" : "complete_build_required",
     map_options: expected === "complete" ? "invalid_options" : "complete_build_required",
+    camera_options: expected === "complete" ? "invalid_options" : "complete_build_required",
     layout_patch: expected === "complete" ? "invalid_options" : "complete_build_required",
   });
 });

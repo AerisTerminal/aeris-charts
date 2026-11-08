@@ -166,11 +166,14 @@ struct LayoutSpec {
     color: Option<String>,
     data_labels: Option<bool>,
     visible: Option<bool>,
-    /// Hierarchy and network tuning; complete-only examples are skipped before these are read.
+    /// Hierarchy, network and 3D camera tuning; complete-only examples are skipped before these
+    /// are read.
     #[serde(rename = "hierarchy_orientation")]
     _hierarchy_orientation: Option<Value>,
     #[serde(rename = "network_layout")]
     _network_layout: Option<Value>,
+    #[serde(rename = "camera_3d")]
+    _camera_3d: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -205,10 +208,14 @@ enum LayoutData {
     Words {
         words: Vec<WordCloudWord>,
     },
-    /// Map data decodes only in the complete build, and every map example is complete-only.
+    /// Map and 3D data decode only in the complete build, and every map and 3D example is
+    /// complete-only.
     Geo(serde::de::IgnoredAny),
     GeoPoints(serde::de::IgnoredAny),
     GeoLinks(serde::de::IgnoredAny),
+    #[serde(rename = "points_3d")]
+    Points3d(serde::de::IgnoredAny),
+    Surface(serde::de::IgnoredAny),
 }
 
 fn default_true() -> bool {
@@ -847,8 +854,12 @@ fn build_engine(example: &Example) -> ChartEngine {
             },
             LayoutData::Sets { sets } => GeneralLayoutInput::Sets(sets.clone()),
             LayoutData::Words { words } => GeneralLayoutInput::Words(words.clone()),
-            LayoutData::Geo(_) | LayoutData::GeoPoints(_) | LayoutData::GeoLinks(_) => {
-                unreachable!("complete-only map examples are skipped")
+            LayoutData::Geo(_)
+            | LayoutData::GeoPoints(_)
+            | LayoutData::GeoLinks(_)
+            | LayoutData::Points3d(_)
+            | LayoutData::Surface(_) => {
+                unreachable!("complete-only map and 3D examples are skipped")
             }
         };
         let dataset = engine

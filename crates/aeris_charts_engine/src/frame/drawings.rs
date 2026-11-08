@@ -1048,6 +1048,18 @@ impl ChartEngine {
                         .iter()
                         .any(|&[a, b, c]| filled(&[point(a), point(b), point(c)]))
             }
+            Prim::ColorMesh {
+                first_point,
+                point_count,
+                colors,
+            } => run(*first_point, *point_count)
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(colors.iter())
+                .any(|(&[a, b, c], color)| {
+                    color.a() != 0 && filled(&[point(a), point(b), point(c)])
+                }),
             Prim::Background { .. } => false,
             Prim::Text {
                 x,

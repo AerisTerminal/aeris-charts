@@ -439,8 +439,25 @@ export type layout_series_kind =
    * Complete build only; takes `geo_links` data. Links draw as great-circle arcs through the
    * pane's choropleth base map when it has one and pan and zoom with it.
    */
-  | "flow_map";
-export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell" | "band" | "progress" | "pointer" | "region" | "word" | "feature" | "bubble";
+  | "flow_map"
+  /**
+   * Complete build only; takes `points_3d` data. Boxes rise from zero to each point's `z` in the
+   * pane's shared 3D axis box. Every 3D series of a pane depth-sorts together under one camera:
+   * dragging orbits it, the wheel or a pinch moves it closer, and arrows, `+`/`-` and Home
+   * turn, zoom and reset it.
+   */
+  | "bar_3d"
+  /** Complete build only; takes `points_3d` data and draws a screen-sized symbol per point. */
+  | "scatter_3d"
+  /** Complete build only; takes `points_3d` data and joins the points in input order. */
+  | "line_3d"
+  /** Complete build only; takes `surface` data: a shaded, height-colored grid. */
+  | "surface_3d";
+/**
+ * `point` is a 3D bar, symbol or line vertex (row = point index); `sample` is a 3D surface grid
+ * sample (row = `y index * x count + x index`).
+ */
+export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell" | "band" | "progress" | "pointer" | "region" | "word" | "feature" | "bubble" | "point" | "sample";
 /**
  * d3-geo 3 projection, fitted to the plot inset by `padding` (default 8 CSS px).
  * `rotate` is `[lambda, phi, gamma]` degrees; `center` moves a longitude/latitude to the
@@ -635,7 +652,64 @@ export type layout_input =
       arrows?: boolean;
       /** Used only when the pane has no choropleth base map. */
       projection?: geo_projection;
+    }
+  | {
+      type: "points_3d";
+      /**
+       * At most 4,096 points with finite coordinates of magnitude at most 1e15. `label` names a
+       * point in tooltips and accessibility (default: its `x` and `y`); `color` overrides the
+       * series color.
+       */
+      points: readonly { x: number; y: number; z: number; label?: string | null; color?: string | null }[];
+      /** Axis names; `x` and `y` may list categories, and values on them are category indices. */
+      x_axis?: axis_3d;
+      y_axis?: axis_3d;
+      z_axis?: { name?: string };
+      /**
+       * Bar footprint in box units (the box is 100 per side), symbol diameter or line width in
+       * CSS px; 0 exclusive through 100. Defaults to 70% of a category band or 60% of the even
+       * point spacing for bars, 10 px symbols and 2 px lines.
+       */
+      size?: number | null;
+    }
+  | {
+      type: "surface";
+      /** Strictly increasing grid positions, 2 through 128 per side. */
+      x: readonly number[];
+      y: readonly number[];
+      /** Heights row by row (`z[row * x.length + column]`); `null` leaves a hole. */
+      z: readonly (number | null)[];
+      x_axis?: { name?: string };
+      y_axis?: { name?: string };
+      z_axis?: { name?: string };
+      /**
+       * Up to 9 CSS colors spread from the lowest to the highest height; one paints every height
+       * and empty shades the series color.
+       */
+      colors?: readonly string[];
+      /** Outline every drawn cell; default `true`. */
+      wireframe?: boolean;
     };
+
+/** One axis of a 3D box: its title and, for `x` and `y`, optional category names. */
+export interface axis_3d {
+  name?: string;
+  categories?: readonly string[];
+}
+
+/**
+ * Orbit camera of a 3D pane, ECharts GL `viewControl` shaped: `alpha` (-90 to 90) raises the
+ * eye, `beta` (above -180 through 180) turns it around the vertical axis, `distance` (40 to
+ * 400) is the perspective eye distance and `orthographic_size` (20 to 400) the orthographic
+ * view height, both in box units. Defaults: 20, 40, 200, `"perspective"`, 150.
+ */
+export interface camera_3d {
+  alpha?: number;
+  beta?: number;
+  distance?: number;
+  projection?: "perspective" | "orthographic";
+  orthographic_size?: number;
+}
 
 export interface layout_series_options {
   pane: number;
@@ -687,6 +761,12 @@ export interface layout_series_options {
    * pointer; `options()` reports it for map series. Map series only.
    */
   map_view?: { x: number; y: number; zoom: number };
+  /**
+   * Camera shared by every 3D series of a pane; the pane's first 3D series sets it and a later
+   * one joins it. Dragging, the wheel, a pinch and the orbit keys update it; `options()` reports
+   * it for 3D series. 3D series only.
+   */
+  camera_3d?: camera_3d;
   /** Smallest word cloud font size in CSS pixels, 4 to 256; default 10. Word cloud series only. */
   word_cloud_min_size?: number;
   /** Largest word cloud font size in CSS pixels, 4 to 256 and no smaller than the minimum; default 48. Word cloud series only. */
@@ -752,6 +832,7 @@ export interface layout_series_api {
         | "pinned"
         | "network_view"
         | "map_view"
+        | "camera_3d"
         | "positions"
         | "word_cloud_min_size"
         | "word_cloud_max_size"

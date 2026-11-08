@@ -466,6 +466,14 @@ enum PressMode {
         before: crate::MapView,
         panning: bool,
     },
+    /// A press inside a 3D plot: past the drag threshold it orbits the camera of the pane that
+    /// `owner` belongs to from `before`; without movement it is a click.
+    #[cfg(feature = "complete")]
+    Orbit3d {
+        owner: crate::GeneralLayoutSeriesId,
+        before: crate::Camera3d,
+        orbiting: bool,
+    },
 }
 
 impl PressMode {
@@ -489,9 +497,10 @@ impl PressMode {
             | Self::GeneralLegend { .. }
             | Self::Inert => InputTarget::Pane,
             #[cfg(feature = "complete")]
-            Self::NetworkNode { .. } | Self::NetworkPan { .. } | Self::MapPan { .. } => {
-                InputTarget::Pane
-            }
+            Self::NetworkNode { .. }
+            | Self::NetworkPan { .. }
+            | Self::MapPan { .. }
+            | Self::Orbit3d { .. } => InputTarget::Pane,
         }
     }
 }
@@ -1385,6 +1394,23 @@ impl ChartEngine {
                     self.map_pan(owner, before, x - press.start.0, y - press.start.1);
                 }
             }
+            #[cfg(feature = "complete")]
+            Some(PressMode::Orbit3d {
+                owner,
+                before,
+                orbiting,
+            }) if primary_pressed => {
+                if let Some(press) = self.input.press.filter(|press| press.moved) {
+                    if !orbiting {
+                        self.set_press_mode(PressMode::Orbit3d {
+                            owner,
+                            before,
+                            orbiting: true,
+                        });
+                    }
+                    self.orbit_rotate(owner, before, x - press.start.0, y - press.start.1);
+                }
+            }
             None => {
                 if self.active_drawing_tool().is_some() {
                     self.drawing_tool_pointer_move(x, y, modifiers, false);
@@ -1552,7 +1578,8 @@ impl ChartEngine {
                 #[cfg(feature = "complete")]
                 PressMode::NetworkNode { .. }
                 | PressMode::NetworkPan { .. }
-                | PressMode::MapPan { .. } => {}
+                | PressMode::MapPan { .. }
+                | PressMode::Orbit3d { .. } => {}
             }
             self.input.touch_reticle_base = None;
             self.input.last_click = None;
@@ -1729,7 +1756,7 @@ impl ChartEngine {
                 }
             }
             #[cfg(feature = "complete")]
-            PressMode::NetworkPan { .. } | PressMode::MapPan { .. } => {
+            PressMode::NetworkPan { .. } | PressMode::MapPan { .. } | PressMode::Orbit3d { .. } => {
                 if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
                     self.push_input_event(ChartInputEvent::Click { x, y });
@@ -1881,6 +1908,7 @@ impl ChartEngine {
             let factor = (wheel_zoom_scale(sample.delta_y) * 0.2).exp2();
             self.network_zoom_at(sample.x, sample.y, factor)
                 || self.map_zoom_at(sample.x, sample.y, factor)
+                || self.orbit_zoom_at(sample.x, sample.y, factor)
         } {
             self.stop_input_motion();
             self.input.pointer = Some((sample.x, sample.y));
@@ -1947,7 +1975,8 @@ impl ChartEngine {
         self.stop_input_motion();
         #[cfg(feature = "complete")]
         let network = self.network_zoom_at(x, y, 1.0 + scale_delta)
-            || self.map_zoom_at(x, y, 1.0 + scale_delta);
+            || self.map_zoom_at(x, y, 1.0 + scale_delta)
+            || self.orbit_zoom_at(x, y, 1.0 + scale_delta);
         #[cfg(not(feature = "complete"))]
         let network = false;
         if !network {
@@ -2030,10 +2059,28 @@ impl ChartEngine {
             key,
             ChartKey::ArrowLeft | ChartKey::ArrowRight | ChartKey::ArrowUp | ChartKey::ArrowDown
         );
+        // Over a 3D plot, or with no pointer and a 3D pane on the chart, arrows orbit its camera,
+        // zoom keys dolly it and Home restores the default view.
+        #[cfg(feature = "complete")]
+        let orbit = if arrow
+            || key == ChartKey::Home
+            || (options.wheel_zoom && matches!(key, ChartKey::ZoomIn | ChartKey::ZoomOut))
+        {
+            self.orbit_key_target(self.input.pointer)
+        } else {
+            None
+        };
         let mut panned = false;
         let handled = match key {
             _ if arrow && !modifiers.control && self.keyboard_nudge_drawing().is_some() => {
                 self.keyboard_nudge_selected_drawing(key, modifiers.shift)
+            }
+            #[cfg(feature = "complete")]
+            _ if orbit.is_some() => {
+                if let Some(owner) = orbit {
+                    self.orbit_key(owner, key, modifiers.shift || modifiers.control);
+                }
+                true
             }
             ChartKey::ArrowUp | ChartKey::ArrowDown | ChartKey::Tab => false,
             ChartKey::ArrowLeft | ChartKey::ArrowRight => {
@@ -2671,6 +2718,14 @@ impl ChartEngine {
                 } => {
                     self.set_map_view(owner, before);
                 }
+                #[cfg(feature = "complete")]
+                PressMode::Orbit3d {
+                    owner,
+                    before,
+                    orbiting: true,
+                } => {
+                    self.set_camera_3d(owner, before);
+                }
                 _ => {}
             }
         }
@@ -2851,6 +2906,17 @@ impl ChartEngine {
                     panning: false,
                 };
             }
+        }
+        #[cfg(feature = "complete")]
+        if self.input.options.pan_for(input.device)
+            && let Some(owner) = self.orbit_press_target(x, y)
+            && let Some(before) = self.camera_3d(owner)
+        {
+            return PressMode::Orbit3d {
+                owner,
+                before,
+                orbiting: false,
+            };
         }
         #[cfg(feature = "complete")]
         if self.input.options.pan_for(input.device)
@@ -3388,12 +3454,16 @@ impl ChartEngine {
                 #[cfg(feature = "complete")]
                 PressMode::NetworkNode { .. }
                 | PressMode::NetworkPan { panning: true, .. }
-                | PressMode::MapPan { panning: true, .. } => {
+                | PressMode::MapPan { panning: true, .. }
+                | PressMode::Orbit3d { orbiting: true, .. } => {
                     return ChartCursor::Grabbing;
                 }
                 #[cfg(feature = "complete")]
                 PressMode::NetworkPan { panning: false, .. }
-                | PressMode::MapPan { panning: false, .. } => {}
+                | PressMode::MapPan { panning: false, .. }
+                | PressMode::Orbit3d {
+                    orbiting: false, ..
+                } => {}
             }
         }
         match self.region_at(x, y) {

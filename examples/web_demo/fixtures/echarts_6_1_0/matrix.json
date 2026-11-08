@@ -280,6 +280,62 @@
       "aerisApi": "add_layout_series(\"flow_map\", { map_view }, { type: \"geo_links\", links: [{ id, source, target, source_label, target_label, value, color }], width: [min, max], arrows, projection })",
       "supportedCombinations": "Same base-map and anchor rules as bubble maps; non-negative values; arrowheads only at targets inside the visible map",
       "differences": "ECharts bends lines by a planar curveness on its linear geo coordinate system, while Aeris draws true great-circle arcs through the d3-geo projection. Animated trail effects, keyboard zoom and calibrated visual review remain open."
+    },
+    {
+      "id": "bar_3d",
+      "capability": "3D bars: boxes from zero to each point's height in the shared 100-unit grid3D axis box with category or value x/y axes, nice-tick z axis, ticks, labels, grid and axis names; engine-owned orbit camera (perspective and orthographic), back-face culling, painter's depth order with a stable tie-break and lambert shading into one per-triangle-colored mesh; front-most picking, tooltips, keyboard focus, announcements and persisted camera",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/chart3d (complete build); draw_list Prim::ColorMesh on every executor; chart_input.rs orbit drag, wheel, pinch and keys; WASM/TypeScript points_3d layout input and camera_3d option",
+      "dependency": "G14",
+      "referenceFixture": "/echarts_reference.html?case=chart3d",
+      "referenceApi": "ECharts GL 2.1.0 (MIT) on ECharts 6.1.0: grid3D with its default viewControl (alpha 20, beta 40, distance 200) and a bar3D series with lambert shading. The camera follows ECharts GL OrbitControl and claygl's 50 degree perspective.",
+      "referenceEvidence": ["grid3D box", "viewControl orbit", "bar3D lambert shading"],
+      "aerisFixture": "tests/g14_3d.spec.mjs paint, hits, accessibility, tooltip, orbit drag/wheel/keys and keyboard focus on Canvas2D and WebGPU, plus atomic validation and camera persistence; general_3d_tests.rs frame bounds and determinism, hit/anchor/tooltip/accessibility agreement, front-most picking across series, controller orbit and cancel, bit-exact camera round trip and scene bounds; GPUI parity color_mesh_runs_are_the_same_ordered_fills_on_canvas_and_gpui",
+      "aerisApi": "add_layout_series(\"bar_3d\", { camera_3d }, { type: \"points_3d\", points: [{ x, y, z, label, color }], x_axis: { name, categories }, y_axis: { name, categories }, z_axis: { name }, size })",
+      "supportedCombinations": "At most 4,096 points per series; every 3D series of a pane shares one box and one camera; category values are indices; the pane scene holds at most 131,072 triangles",
+      "differences": "ECharts GL renders through WebGL with a depth buffer; Aeris sorts whole faces in the engine, so intersecting boxes from different series can order differently than per-pixel depth. Bar animation, realistic shading, post effects and calibrated visual review remain open."
+    },
+    {
+      "id": "scatter_3d",
+      "capability": "3D scatter: screen-sized circular symbols at 3D points in the shared axis box, depth-sorted with every other 3D series of the pane, exact symbol picking, tooltips, keyboard focus and persisted camera",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/chart3d (complete build); WASM/TypeScript points_3d layout input and camera_3d option",
+      "dependency": "G14",
+      "referenceFixture": "/echarts_reference.html?case=chart3d",
+      "referenceApi": "ECharts GL 2.1.0 scatter3D with symbolSize on grid3D, perspective and orthographic viewControl",
+      "referenceEvidence": ["scatter3D symbolSize", "perspective projection", "orthographic projection"],
+      "aerisFixture": "tests/g14_3d.spec.mjs fits Aeris symbol centers to the ECharts GL grid3D camera projection of the same points (perspective and orthographic) within 1.5 px; general_3d_tests.rs picking and LOD bounds",
+      "aerisApi": "add_layout_series(\"scatter_3d\", { camera_3d }, { type: \"points_3d\", points, x_axis, y_axis, z_axis, size })",
+      "supportedCombinations": "Same point, box and camera rules as 3D bars; symbols are flat screen-facing discs",
+      "differences": "ECharts GL draws point sprites; Aeris draws 16-segment discs that depth-sort by their center. ECharts GL adds one unit to grid3D orthographicSize, so 149 there is 150 in Aeris. Symbol shapes other than circles remain open."
+    },
+    {
+      "id": "line_3d",
+      "capability": "3D line: a polyline through 3D points in input order, screen-width segments clipped at the near plane and depth-sorted per segment, segment picking, tooltips, keyboard focus and persisted camera",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/chart3d (complete build); WASM/TypeScript points_3d layout input",
+      "dependency": "G14",
+      "referenceFixture": "/echarts_reference.html?case=chart3d",
+      "referenceApi": "ECharts GL 2.1.0 line3D with lineStyle.width on grid3D",
+      "referenceEvidence": ["line3D", "lineStyle width"],
+      "aerisFixture": "tests/g14_3d.spec.mjs line paint, hits and accessibility on Canvas2D and WebGPU; general_3d_tests.rs frame bounds and picking",
+      "aerisApi": "add_layout_series(\"line_3d\", { camera_3d }, { type: \"points_3d\", points, size })",
+      "supportedCombinations": "Same point, box and camera rules as 3D bars; joins are unmitered",
+      "differences": "ECharts GL draws antialiased GL lines with joins; Aeris draws one quad per segment. Dashed 3D lines and calibrated visual review remain open."
+    },
+    {
+      "id": "surface_3d",
+      "capability": "3D surface: a height grid (up to 128 by 128 samples, or sampled from a function) with holes, a color map spread over the height extent, lambert shading, an optional wireframe, level of detail (at most 64 by 64 drawn cells), sample picking, tooltips, keyboard focus and persisted camera",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/chart3d (complete build); WASM/TypeScript surface layout input",
+      "dependency": "G14",
+      "referenceFixture": "/echarts_reference.html?case=chart3d",
+      "referenceApi": "ECharts GL 2.1.0 surface with an equation over x/y ranges, wireframe.show and a visualMap color range",
+      "referenceEvidence": ["surface equation", "wireframe", "visualMap inRange color"],
+      "aerisFixture": "tests/g14_3d.spec.mjs surface paint, sample hits and accessibility on Canvas2D and WebGPU and atomic validation; general_3d_tests.rs equation sampling, LOD stride and scene bounds",
+      "aerisApi": "add_layout_series(\"surface_3d\", { camera_3d }, { type: \"surface\", x, y, z, x_axis, y_axis, z_axis, colors, wireframe })",
+      "supportedCombinations": "2 to 128 strictly increasing positions per side; null heights leave holes; up to 9 color stops",
+      "differences": "ECharts GL interpolates colors per vertex with a depth buffer; Aeris paints one shaded color per triangle sorted by depth, so a self-intersecting surface can order differently. Parametric surfaces and calibrated visual review remain open."
     }
   ]
 }

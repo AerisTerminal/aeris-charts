@@ -33,6 +33,8 @@ pub(super) use marks::{MarkCache, MarkInput, bubble_label, flow_id, mark_cache_r
 pub use view::MapView;
 #[cfg(feature = "complete")]
 pub(super) use view::validate_view;
+#[cfg(feature = "complete")]
+pub(super) use view::{push_clipped_polyline, push_clipped_triangle};
 
 use crate::GeneralPointSymbol;
 

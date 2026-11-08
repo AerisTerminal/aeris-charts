@@ -434,6 +434,25 @@ pub fn execute(
                 }
                 target.fill();
             }
+            Prim::ColorMesh {
+                first_point,
+                point_count,
+                colors,
+            } => {
+                for (run, color) in
+                    crate::draw_list::color_mesh_runs(points, *first_point, *point_count, colors)
+                {
+                    target.set_fill_solid(color);
+                    target.begin_path();
+                    for triangle in run.as_chunks::<3>().0 {
+                        target.move_to(triangle[0][0], triangle[0][1]);
+                        target.line_to(triangle[1][0], triangle[1][1]);
+                        target.line_to(triangle[2][0], triangle[2][1]);
+                        target.close_path();
+                    }
+                    target.fill();
+                }
+            }
             Prim::RoundRect {
                 x,
                 y,
@@ -767,6 +786,25 @@ mod tests {
         assert_eq!(ops.iter().filter(|op| op.as_str() == "begin").count(), 1);
         assert_eq!(ops.iter().filter(|op| op.as_str() == "fill").count(), 1);
         assert_eq!(ops.iter().filter(|op| op.as_str() == "close").count(), 2);
+    }
+
+    #[test]
+    fn color_mesh_fills_each_color_run_once_in_order() {
+        let points: Vec<[f32; 2]> = (0..9)
+            .map(|index| [(index % 3) as f32 * 10.0, (index / 3) as f32])
+            .collect();
+        let (red, blue) = (Color::rgb(255, 0, 0), Color::rgb(0, 0, 255));
+        let ops = run(
+            &[Prim::ColorMesh {
+                first_point: 0,
+                point_count: 9,
+                colors: std::sync::Arc::from([red, red, blue]),
+            }],
+            &points,
+        );
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "begin").count(), 2);
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "fill").count(), 2);
+        assert_eq!(ops.iter().filter(|op| op.as_str() == "close").count(), 3);
     }
 
     #[test]

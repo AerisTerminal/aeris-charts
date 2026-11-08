@@ -10,7 +10,9 @@
 //! The shared point pool holds **device-space** points (the builders already baked the DPR in), so
 //! tessellation runs with identity pixel ratios — byte-identical to the old direct-to-tri path.
 
-use aeris_charts_render::draw_list::{LineStyle, LineType, Prim, positive_finite_extent};
+use aeris_charts_render::draw_list::{
+    LineStyle, LineType, Prim, color_mesh_runs, positive_finite_extent,
+};
 use aeris_charts_render::line::{
     AreaMesh, LineParams, LinePoint, LineVertex, band_segment_triangles, build_area_fill,
     build_disc, circle_segments, dash_split, expand_band, expand_line, normalized_round_rect_radii,
@@ -457,6 +459,16 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             let color = rgba(*color);
             out.extend(mesh.iter().map(|pos| TriVertex { pos: *pos, color }));
         }
+        Prim::ColorMesh {
+            first_point,
+            point_count,
+            colors,
+        } => {
+            for (run, color) in color_mesh_runs(points, *first_point, *point_count, colors) {
+                let color = rgba(color);
+                out.extend(run.iter().map(|pos| TriVertex { pos: *pos, color }));
+            }
+        }
         Prim::RoundRect {
             x,
             y,
@@ -518,7 +530,8 @@ pub fn geom_prims_to_tris(
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
             | Prim::BandGradientFill { .. }
-            | Prim::MeshFill { .. } => {
+            | Prim::MeshFill { .. }
+            | Prim::ColorMesh { .. } => {
                 geom_prim_to_tris(prim, points, fill);
             }
             _ => geom_prim_to_tris(prim, points, stroke),
@@ -555,6 +568,30 @@ mod tests {
         assert!(tris.iter().all(|vertex| vertex.color == rgba(color)));
     }
     use aeris_charts_render::draw_list::Gradient;
+
+    #[test]
+    fn color_mesh_gives_every_triangle_its_own_color_in_order() {
+        let points = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [20.0, 0.0],
+            [30.0, 0.0],
+            [20.0, 10.0],
+        ];
+        let (red, blue) = (Color::rgb(255, 0, 0), Color::rgba(0, 0, 255, 128));
+        let prim = Prim::ColorMesh {
+            first_point: 0,
+            point_count: 6,
+            colors: std::sync::Arc::from([red, blue]),
+        };
+        let mut tris = Vec::new();
+        geom_prim_to_tris(&prim, &points, &mut tris);
+        assert_eq!(tris.len(), 6);
+        assert!(tris[..3].iter().all(|vertex| vertex.color == rgba(red)));
+        assert!(tris[3..].iter().all(|vertex| vertex.color == rgba(blue)));
+        assert_eq!(tris[3].pos, points[3]);
+    }
 
     #[test]
     fn band_gradient_colors_follow_exact_vertical_extent() {
