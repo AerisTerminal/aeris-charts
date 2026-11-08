@@ -7,11 +7,12 @@ root ESM entry point, optional `./react` adapter, `./wasm` asset, and `./design.
 supported npm export paths. The complete build adds `./complete`, `./complete/react`, and
 `./complete/wasm` with the same declarations; it contains every standard family unchanged plus
 families gated behind the engine's `complete` feature: the twelve statistics series kinds and the
-`gauge`, `chord`, `tree`, `dendrogram`, `circle_packing`, `icicle`, `network`, `venn` and
-`word_cloud` layout kinds. `build_variant()` reports the loaded build, and creating a
-complete-only family or passing its data shape or its hierarchy, network or word cloud layout
-options through the standard build throws `complete_build_required`. Layout `apply_options` patches exclude the interaction-owned collapse,
-pin, view and position state and the creation-only network and word cloud options.
+`gauge`, `chord`, `tree`, `dendrogram`, `circle_packing`, `icicle`, `network`, `venn`,
+`word_cloud`, `choropleth`, `bubble_map` and `flow_map` layout kinds. `build_variant()` reports
+the loaded build, and creating a complete-only family or passing its data shape or its
+hierarchy, network, map or word cloud layout options through the standard build throws
+`complete_build_required`. Layout `apply_options` patches exclude the interaction-owned collapse,
+pin, network and map view and position state and the creation-only network and word cloud options.
 React is an optional peer dependency and is not loaded by root consumers.
 The supported root surface is:
 

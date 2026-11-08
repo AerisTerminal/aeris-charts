@@ -1181,6 +1181,78 @@
       ]
     },
     {
+      "id": "choropleth", "title": "Choropleth", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "choropleth", "title": "Revenue growth %", "color": "#5070dd", "data": { "type": "geo",
+          "projection": { "type": "equal_earth" },
+          "values": { "west": 2.5, "central": 6.0, "east": 9.5, "north": 4.0, "south": -1.5 },
+          "geojson": { "type": "FeatureCollection", "features": [
+            { "type": "Feature", "id": "west", "properties": { "name": "West" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 40], [0, 40], [0, 55], [-10, 55], [-10, 40]]] } },
+            { "type": "Feature", "id": "central", "properties": { "name": "Central" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[0, 40], [10, 40], [10, 55], [0, 55], [0, 40]], [[3, 45], [3, 49], [7, 49], [7, 45], [3, 45]]] } },
+            { "type": "Feature", "id": "east", "properties": { "name": "East" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[10, 40], [22, 40], [22, 55], [10, 55], [10, 40]]] } },
+            { "type": "Feature", "id": "north", "properties": { "name": "North" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 55], [22, 55], [22, 66], [-10, 66], [-10, 55]]] } },
+            { "type": "Feature", "id": "south", "properties": { "name": "South" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 32], [22, 32], [22, 40], [-10, 40], [-10, 32]]] } },
+            { "type": "Feature", "id": "isles", "properties": { "name": "Isles" }, "geometry": { "type": "MultiPolygon",
+              "coordinates": [[[[24, 58], [27, 58], [27, 61], [24, 61], [24, 58]]], [[[25, 48], [28, 48], [28, 51], [25, 51], [25, 48]]]] } }
+          ] } } }
+      ]
+    },
+    {
+      "id": "bubble_map", "title": "Bubble map", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "choropleth", "title": "Regions", "color": "#91a7e0", "data": { "type": "geo",
+          "projection": { "type": "equal_earth" },
+          "geojson": { "type": "FeatureCollection", "features": [
+            { "type": "Feature", "id": "west", "properties": { "name": "West" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 40], [0, 40], [0, 55], [-10, 55], [-10, 40]]] } },
+            { "type": "Feature", "id": "central", "properties": { "name": "Central" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[0, 40], [10, 40], [10, 55], [0, 55], [0, 40]]] } },
+            { "type": "Feature", "id": "east", "properties": { "name": "East" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[10, 40], [22, 40], [22, 55], [10, 55], [10, 40]]] } },
+            { "type": "Feature", "id": "north", "properties": { "name": "North" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 55], [22, 55], [22, 66], [-10, 66], [-10, 55]]] } }
+          ] } } },
+        { "kind": "bubble_map", "title": "Desk headcount", "color": "#ee6666", "data": { "type": "geo_points",
+          "points": [
+            { "id": "west", "at": "west", "value": 40 }, { "id": "central", "at": "central", "value": 120 },
+            { "id": "east", "at": "east", "value": 75 }, { "id": "north", "at": "north", "value": 20 },
+            { "id": "port", "label": "Port", "at": [5, 43], "value": 55, "color": "#3ba272" }
+          ] } }
+      ]
+    },
+    {
+      "id": "flow_map", "title": "Flow map", "category": "layout", "grid": false, "complete_only": true,
+      "horizontal_domain": { "type": "layout" },
+      "layout_series": [
+        { "kind": "choropleth", "title": "Regions", "color": "#91a7e0", "data": { "type": "geo",
+          "projection": { "type": "equal_earth" },
+          "geojson": { "type": "FeatureCollection", "features": [
+            { "type": "Feature", "id": "west", "properties": { "name": "West" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 40], [0, 40], [0, 55], [-10, 55], [-10, 40]]] } },
+            { "type": "Feature", "id": "central", "properties": { "name": "Central" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[0, 40], [10, 40], [10, 55], [0, 55], [0, 40]]] } },
+            { "type": "Feature", "id": "east", "properties": { "name": "East" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[10, 40], [22, 40], [22, 55], [10, 55], [10, 40]]] } },
+            { "type": "Feature", "id": "north", "properties": { "name": "North" }, "geometry": { "type": "Polygon",
+              "coordinates": [[[-10, 55], [22, 55], [22, 66], [-10, 66], [-10, 55]]] } }
+          ] } } },
+        { "kind": "flow_map", "title": "Order flow", "color": "#ee6666", "data": { "type": "geo_links", "arrows": true,
+          "links": [
+            { "id": "w-e", "source": "west", "target": "east", "value": 80 },
+            { "id": "n-c", "source": "north", "target": "central", "value": 35 },
+            { "id": "e-n", "source": "east", "target": "north", "value": 15 },
+            { "id": "port", "source": [5, 43], "target": "west", "source_label": "Port", "value": 50 }
+          ] } }
+      ]
+    },
+    {
     "id": "violin_regional",
     "title": "Violin: response time by region",
     "category": "statistics",

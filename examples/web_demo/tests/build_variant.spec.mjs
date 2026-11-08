@@ -96,7 +96,35 @@ test("the engine reports the loaded build and both builds create shared families
     } catch (error) {
       word_cloud = error.code;
     }
-    // Hierarchy, network and word cloud options are complete-only like statistics options: the
+    let choropleth = null;
+    try {
+      layout_chart.add_layout_series("choropleth", { pane: 0 }, {
+        type: "geo", values: { a: 1 },
+        geojson: { type: "Feature", id: "a", geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] } },
+      });
+      choropleth = "created";
+    } catch (error) {
+      choropleth = error.code;
+    }
+    let bubble_map = null;
+    try {
+      layout_chart.add_layout_series("bubble_map", { pane: 0 }, {
+        type: "geo_points", points: [{ id: "p", at: [0.5, 0.5], value: 1 }],
+      });
+      bubble_map = "created";
+    } catch (error) {
+      bubble_map = error.code;
+    }
+    let flow_map = null;
+    try {
+      layout_chart.add_layout_series("flow_map", { pane: 0 }, {
+        type: "geo_links", links: [{ source: [0.2, 0.2], target: [0.8, 0.8] }],
+      });
+      flow_map = "created";
+    } catch (error) {
+      flow_map = error.code;
+    }
+    // Hierarchy, network, map and word cloud options are complete-only like statistics options: the
     // standard build rejects them before the engine sees them, and the complete build rejects
     // them on a family they do not configure.
     const hierarchy = { type: "hierarchy", nodes: [{ id: "root", parent: null, label: "Root", value: 1 }] };
@@ -106,6 +134,13 @@ test("the engine reports the loaded build and both builds create shared families
       layout_options = "created";
     } catch (error) {
       layout_options = error.code;
+    }
+    let map_options = null;
+    try {
+      layout_chart.add_layout_series("treemap", { pane: 0, map_view: { x: 0, y: 0, zoom: 2 } }, hierarchy);
+      map_options = "created";
+    } catch (error) {
+      map_options = error.code;
     }
     const gauge_count = layout_chart.layout_series().length;
     const treemap = layout_chart.add_layout_series("treemap", { pane: 0 }, hierarchy);
@@ -126,8 +161,9 @@ test("the engine reports the loaded build and both builds create shared families
       .map((entry) => new URL(entry.name).pathname)
       .filter((path) => path.endsWith(".wasm"));
     return {
-      before, variant, camel, wasm, violin, stats_options, gauge, tree, network, venn, word_cloud, gauge_count,
-      layout_options, layout_patch,
+      before, variant, camel, wasm, violin, stats_options, gauge, tree, network, venn, word_cloud, choropleth,
+      bubble_map, flow_map, gauge_count,
+      layout_options, map_options, layout_patch,
     };
   });
   expect(result).toEqual({
@@ -142,8 +178,12 @@ test("the engine reports the loaded build and both builds create shared families
     network: expected === "complete" ? "created" : "complete_build_required",
     venn: expected === "complete" ? "created" : "complete_build_required",
     word_cloud: expected === "complete" ? "created" : "complete_build_required",
-    gauge_count: expected === "complete" ? 5 : 0,
+    choropleth: expected === "complete" ? "created" : "complete_build_required",
+    bubble_map: expected === "complete" ? "created" : "complete_build_required",
+    flow_map: expected === "complete" ? "created" : "complete_build_required",
+    gauge_count: expected === "complete" ? 8 : 0,
     layout_options: expected === "complete" ? "invalid_options" : "complete_build_required",
+    map_options: expected === "complete" ? "invalid_options" : "complete_build_required",
     layout_patch: expected === "complete" ? "invalid_options" : "complete_build_required",
   });
 });

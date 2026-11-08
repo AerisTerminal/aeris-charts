@@ -98,13 +98,13 @@ function require_options_in_build(options: { readonly stats?: unknown } | undefi
 
 const COMPLETE_LAYOUT_OPTIONS = [
   "hierarchy_orientation", "collapsed", "network_layout", "network_link_distance", "pinned",
-  "positions", "network_view", "word_cloud_min_size", "word_cloud_max_size", "word_cloud_scaling",
+  "positions", "network_view", "map_view", "word_cloud_min_size", "word_cloud_max_size", "word_cloud_scaling",
   "word_cloud_rotate",
 ] as const;
 
 /**
- * Throw `complete_build_required` when layout series options carry hierarchy, network or word
- * cloud options and the standard build is loaded; only complete-build families read them.
+ * Throw `complete_build_required` when layout series options carry hierarchy, network, map or
+ * word cloud options and the standard build is loaded; only complete-build families read them.
  */
 function require_layout_options_in_build(options: Partial<layout_series_options> | undefined): void {
   if (build_variant() === "complete" || options === undefined) return;

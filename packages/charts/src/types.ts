@@ -427,8 +427,38 @@ export type layout_series_kind =
    */
   | "venn"
   /** Complete build only; takes `words` data. */
-  | "word_cloud";
-export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell" | "band" | "progress" | "pointer" | "region" | "word";
+  | "word_cloud"
+  /** Complete build only; takes `geo` data and fills each polygon feature by its value. */
+  | "choropleth"
+  /**
+   * Complete build only; takes `geo_points` data. Bubbles project through the pane's
+   * choropleth base map when it has one and pan and zoom with it.
+   */
+  | "bubble_map"
+  /**
+   * Complete build only; takes `geo_links` data. Links draw as great-circle arcs through the
+   * pane's choropleth base map when it has one and pan and zoom with it.
+   */
+  | "flow_map";
+export type layout_element = "stage" | "node" | "link" | "task" | "day" | "cell" | "band" | "progress" | "pointer" | "region" | "word" | "feature" | "bubble";
+/**
+ * d3-geo 3 projection, fitted to the plot inset by `padding` (default 8 CSS px).
+ * `rotate` is `[lambda, phi, gamma]` degrees; `center` moves a longitude/latitude to the
+ * middle at the fitted scale; `parallels` (default `[0, 60]`) are the conic standard
+ * parallels; `identity` takes planar coordinates with y up. Defaults to `equal_earth`.
+ */
+export interface geo_projection {
+  type?: "mercator" | "equal_earth" | "natural_earth1" | "orthographic" | "conic_equal_area" | "identity";
+  rotate?: readonly [number, number, number];
+  center?: readonly [number, number] | null;
+  parallels?: readonly [number, number];
+  padding?: number;
+}
+/**
+ * Where a map mark sits: a `[longitude, latitude]` position in degrees (planar `[x, y]` under
+ * the identity projection), or the id of a base-map feature whose centroid places it.
+ */
+export type geo_anchor = readonly [number, number] | string;
 export type layout_input =
   | { type: "funnel"; stages: readonly { id: string; label: string; value: number }[] }
   | {
@@ -513,6 +543,98 @@ export type layout_input =
       type: "words";
       /** Up to 500 words; `weight` scales the font size and `color` overrides the series color. */
       words: readonly { text: string; weight: number; color?: string | null }[];
+    }
+  | ({
+      type: "geo";
+      /**
+       * Feature values by feature id, as `{ id: value }` or `[{ id, value }]`; features
+       * without a value take `missing_color`. At most 4096 features and values.
+       */
+      values?: Readonly<Record<string, number>> | readonly { id: string; value: number }[];
+      /**
+       * Feature id property; omit to use each feature's `id` (then `#<index>`). Ids must be
+       * unique, so name a unique property when the source repeats ids.
+       */
+      id_property?: string | null;
+      /** Feature label property; defaults to `name`, then the id. */
+      label_property?: string | null;
+      projection?: geo_projection;
+      /**
+       * Value colors: continuous `sequential` (the default; low defaults to the series color at
+       * 20% opacity, high to the series color), `diverging` through `mid_color` at
+       * `midpoint`, or 2-9 `quantize` classes of equal width (`equal_interval`) or equal count
+       * (`quantile`).
+       */
+      scale?:
+        | { type: "sequential"; low_color?: string | null; high_color?: string | null }
+        | {
+            type: "diverging";
+            low_color?: string | null;
+            mid_color?: string | null;
+            high_color?: string | null;
+            midpoint?: number;
+          }
+        | {
+            type: "quantize";
+            classes?: number;
+            method?: "equal_interval" | "quantile";
+            low_color?: string | null;
+            high_color?: string | null;
+          };
+      /** Fill of features without a value; defaults to a neutral gray. */
+      missing_color?: string | null;
+    } & (
+      | {
+          /**
+           * RFC 7946 FeatureCollection, Feature, or Polygon, MultiPolygon, LineString,
+           * MultiLineString, Point or MultiPoint geometry; at most 262,144 positions.
+           */
+          geojson: Readonly<Record<string, unknown>>;
+          topojson?: never;
+        }
+      | {
+          /** TopoJSON topology; `object` names the decoded object and may be omitted when there is one. */
+          topojson: Readonly<Record<string, unknown>>;
+          object?: string | null;
+          geojson?: never;
+        }
+    ))
+  | {
+      type: "geo_points";
+      /**
+       * Bubbles; `value` (non-negative) scales the radius by its square root, and a bubble
+       * without one takes the smallest radius. `label` defaults to the anchoring feature's
+       * label, then the id; `color` overrides the series color.
+       */
+      points: readonly { id: string; at: geo_anchor; label?: string | null; value?: number | null; color?: string | null }[];
+      symbol?: "circle" | "square" | "diamond" | "triangle";
+      /** Smallest and largest radius in CSS px; default `[3, 24]`. */
+      radius?: readonly [number, number];
+      /** Used only when the pane has no choropleth base map. */
+      projection?: geo_projection;
+    }
+  | {
+      type: "geo_links";
+      /**
+       * Great-circle links; `value` (non-negative) scales the width linearly, and a link
+       * without one takes the smallest width. `id` defaults to `#<index>`; endpoint labels
+       * default to the anchoring feature's label, then the coordinates.
+       */
+      links: readonly {
+        id?: string | null;
+        source: geo_anchor;
+        target: geo_anchor;
+        source_label?: string | null;
+        target_label?: string | null;
+        value?: number | null;
+        color?: string | null;
+      }[];
+      /** Smallest and largest width in CSS px; default `[1, 6]`. */
+      width?: readonly [number, number];
+      /** Draw an arrowhead at each visible target. */
+      arrows?: boolean;
+      /** Used only when the pane has no choropleth base map. */
+      projection?: geo_projection;
     };
 
 export interface layout_series_options {
@@ -558,6 +680,13 @@ export interface layout_series_options {
    * for network series. Network series only.
    */
   positions?: readonly { id: string; x: number; y: number }[];
+  /**
+   * Map pan and zoom shared by every map series of a pane: `x` and `y` offset the map center
+   * as fractions of the map width and height (at most `0.5 - 0.5 / zoom` either way) and
+   * `zoom` is 1 to 32. Dragging pans a zoomed map, and the wheel or a pinch zooms around the
+   * pointer; `options()` reports it for map series. Map series only.
+   */
+  map_view?: { x: number; y: number; zoom: number };
   /** Smallest word cloud font size in CSS pixels, 4 to 256; default 10. Word cloud series only. */
   word_cloud_min_size?: number;
   /** Largest word cloud font size in CSS pixels, 4 to 256 and no smaller than the minimum; default 48. Word cloud series only. */
@@ -622,6 +751,7 @@ export interface layout_series_api {
         | "network_link_distance"
         | "pinned"
         | "network_view"
+        | "map_view"
         | "positions"
         | "word_cloud_min_size"
         | "word_cloud_max_size"

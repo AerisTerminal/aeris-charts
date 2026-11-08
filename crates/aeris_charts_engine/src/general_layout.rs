@@ -19,6 +19,7 @@ mod chord;
 mod gantt;
 #[cfg(feature = "complete")]
 mod gauge;
+mod geo;
 #[cfg(feature = "complete")]
 mod graph;
 #[cfg(feature = "complete")]
@@ -39,6 +40,12 @@ mod word_cloud;
 
 pub use calendar::{CalendarDay, CalendarInput};
 pub use gantt::GanttTask;
+#[cfg(feature = "complete")]
+pub use geo::MapView;
+pub use geo::{
+    ChoroplethScale, GeoAnchor, GeoFeature, GeoInput, GeoLink, GeoLinksInput, GeoPoint,
+    GeoPointsInput, GeoProjection, GeoProjectionKind, GeoShape, GeoValue, QuantizeMethod,
+};
 pub use mosaic::MosaicCell;
 
 const MAX_LAYOUT_DATASETS: usize = 64;
@@ -116,6 +123,10 @@ pub enum GeneralLayoutElement {
     Region,
     /// A word cloud word; its row is the word's input index.
     Word,
+    /// A map feature; its row is the feature's input index.
+    Feature,
+    /// A bubble map bubble; its row is the point's input index.
+    Bubble,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -176,6 +187,12 @@ pub enum GeneralLayoutSeriesKind {
     Venn,
     /// A weight-sized word placement over a words dataset (complete build).
     WordCloud,
+    /// Projected map features filled by value over a geo dataset (complete build).
+    Choropleth,
+    /// Value-sized symbols at map positions over a geo points dataset (complete build).
+    BubbleMap,
+    /// Great-circle arcs between map positions over a geo links dataset (complete build).
+    FlowMap,
 }
 
 impl GeneralLayoutSeriesKind {
@@ -193,6 +210,9 @@ impl GeneralLayoutSeriesKind {
                 | Self::Network
                 | Self::Venn
                 | Self::WordCloud
+                | Self::Choropleth
+                | Self::BubbleMap
+                | Self::FlowMap
         )
     }
 
@@ -417,6 +437,11 @@ pub struct GeneralLayoutSeriesOptions {
     #[cfg(feature = "complete")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub word_cloud_rotate: bool,
+    /// Pan and zoom of a map pane, held by every choropleth, bubble and flow map series of
+    /// the pane; other families accept only the default.
+    #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "MapView::is_default")]
+    pub map_view: MapView,
 }
 
 pub(crate) fn layout_visible_default() -> bool {
@@ -459,6 +484,8 @@ impl GeneralLayoutSeriesOptions {
             word_cloud_scaling: WordCloudScaling::Sqrt,
             #[cfg(feature = "complete")]
             word_cloud_rotate: false,
+            #[cfg(feature = "complete")]
+            map_view: MapView::default(),
         }
     }
 
@@ -640,7 +667,7 @@ pub enum GeneralLayoutInput {
     },
     Calendar(CalendarInput),
     Mosaic(Vec<MosaicCell>),
-    // The standard build keeps the four complete-build variants below so it can reject their
+    // The standard build keeps the seven complete-build variants below so it can reject their
     // data with the typed complete-build error, but skips their serde field code: persisted
     // data deserializes as an empty placeholder that validation then rejects.
     /// A gauge dial (complete build).
@@ -670,6 +697,24 @@ pub enum GeneralLayoutInput {
         serde(skip_serializing, deserialize_with = "skip_layout_fields")
     )]
     Words(Vec<WordCloudWord>),
+    /// Map features with values by feature id (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    Geo(GeoInput),
+    /// Bubble map points (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    GeoPoints(GeoPointsInput),
+    /// Flow map links (complete build).
+    #[cfg_attr(
+        not(feature = "complete"),
+        serde(skip_serializing, deserialize_with = "skip_layout_fields")
+    )]
+    GeoLinks(GeoLinksInput),
 }
 
 #[cfg(not(feature = "complete"))]
@@ -760,8 +805,28 @@ impl GeneralLayoutInput {
             Self::Sets(sets) => sets.iter().map(|region| region.size).collect(),
             #[cfg(feature = "complete")]
             Self::Words(words) => words.iter().map(|word| word.weight).collect(),
+            #[cfg(feature = "complete")]
+            Self::Geo(input) => geo::semantic_values(input),
+            #[cfg(feature = "complete")]
+            Self::GeoPoints(input) => input
+                .points
+                .iter()
+                .map(|point| point.value.unwrap_or(f64::NAN))
+                .collect(),
+            #[cfg(feature = "complete")]
+            Self::GeoLinks(input) => input
+                .links
+                .iter()
+                .map(|link| link.value.unwrap_or(f64::NAN))
+                .collect(),
             #[cfg(not(feature = "complete"))]
-            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => Vec::new(),
+            Self::Gauge(_)
+            | Self::Graph { .. }
+            | Self::Sets(_)
+            | Self::Words(_)
+            | Self::Geo(_)
+            | Self::GeoPoints(_)
+            | Self::GeoLinks(_) => Vec::new(),
         }
     }
 
@@ -781,8 +846,20 @@ impl GeneralLayoutInput {
             Self::Sets(sets) => sets.len(),
             #[cfg(feature = "complete")]
             Self::Words(words) => words.len(),
+            #[cfg(feature = "complete")]
+            Self::Geo(input) => input.features.len(),
+            #[cfg(feature = "complete")]
+            Self::GeoPoints(input) => input.points.len(),
+            #[cfg(feature = "complete")]
+            Self::GeoLinks(input) => input.links.len(),
             #[cfg(not(feature = "complete"))]
-            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => 0,
+            Self::Gauge(_)
+            | Self::Graph { .. }
+            | Self::Sets(_)
+            | Self::Words(_)
+            | Self::Geo(_)
+            | Self::GeoPoints(_)
+            | Self::GeoLinks(_) => 0,
         }
     }
     fn validate(&self) -> Result<(), ChartError> {
@@ -811,10 +888,22 @@ impl GeneralLayoutInput {
             Self::Sets(sets) => venn::validate(sets)?,
             #[cfg(feature = "complete")]
             Self::Words(words) => word_cloud::validate(words)?,
+            #[cfg(feature = "complete")]
+            Self::Geo(input) => geo::validate(input)?,
+            #[cfg(feature = "complete")]
+            Self::GeoPoints(input) => geo::validate_points(input)?,
+            #[cfg(feature = "complete")]
+            Self::GeoLinks(input) => geo::validate_links(input)?,
             #[cfg(not(feature = "complete"))]
-            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => {
+            Self::Gauge(_)
+            | Self::Graph { .. }
+            | Self::Sets(_)
+            | Self::Words(_)
+            | Self::Geo(_)
+            | Self::GeoPoints(_)
+            | Self::GeoLinks(_) => {
                 return Err(crate::complete_build_required(
-                    "gauge, graph, venn and word cloud layout datasets",
+                    "gauge, graph, venn, word cloud and map layout datasets",
                 ));
             }
         }
@@ -917,8 +1006,20 @@ impl GeneralLayoutInput {
                         })
                         .sum::<usize>()
             }
+            #[cfg(feature = "complete")]
+            Self::Geo(input) => geo::heap_bytes(input),
+            #[cfg(feature = "complete")]
+            Self::GeoPoints(input) => geo::points_heap_bytes(input),
+            #[cfg(feature = "complete")]
+            Self::GeoLinks(input) => geo::links_heap_bytes(input),
             #[cfg(not(feature = "complete"))]
-            Self::Gauge(_) | Self::Graph { .. } | Self::Sets(_) | Self::Words(_) => 0,
+            Self::Gauge(_)
+            | Self::Graph { .. }
+            | Self::Sets(_)
+            | Self::Words(_)
+            | Self::Geo(_)
+            | Self::GeoPoints(_)
+            | Self::GeoLinks(_) => 0,
         }
     }
 }
@@ -1130,6 +1231,10 @@ struct LayoutSeriesEntry {
     venn: RefCell<Option<venn::VennCache>>,
     #[cfg(feature = "complete")]
     word_cloud: RefCell<Option<word_cloud::WordCloudCache>>,
+    #[cfg(feature = "complete")]
+    geo: RefCell<Option<geo::GeoCache>>,
+    #[cfg(feature = "complete")]
+    marks: RefCell<Option<geo::MarkCache>>,
     /// Simulated positions of a network series. Not a cache: positions evolve over time and
     /// survive data replacement, so only a series rebuild replaces them.
     #[cfg(feature = "complete")]
@@ -1716,6 +1821,8 @@ impl LayoutSeriesEntry {
             *self.icicle.borrow_mut() = None;
             *self.venn.borrow_mut() = None;
             *self.word_cloud.borrow_mut() = None;
+            *self.geo.borrow_mut() = None;
+            *self.marks.borrow_mut() = None;
         }
     }
 
@@ -1755,6 +1862,16 @@ impl LayoutSeriesEntry {
                     .borrow()
                     .as_ref()
                     .map_or(0, word_cloud::WordCloudCache::heap_bytes)
+                + self
+                    .geo
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, geo::GeoCache::heap_bytes)
+                + self
+                    .marks
+                    .borrow()
+                    .as_ref()
+                    .map_or(0, geo::MarkCache::heap_bytes)
         }
         #[cfg(not(feature = "complete"))]
         {
@@ -2339,6 +2456,18 @@ impl GeneralLayoutStore {
             (GeneralLayoutInput::Sets(sets), GeneralLayoutElement::Region) => hit.row < sets.len(),
             #[cfg(feature = "complete")]
             (GeneralLayoutInput::Words(words), GeneralLayoutElement::Word) => hit.row < words.len(),
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Geo(input), GeneralLayoutElement::Feature) => {
+                hit.row < input.features.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoPoints(input), GeneralLayoutElement::Bubble) => {
+                hit.row < input.points.len()
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoLinks(input), GeneralLayoutElement::Link) => {
+                hit.row < input.links.len()
+            }
             _ => false,
         }
     }
@@ -2768,6 +2897,10 @@ impl GeneralLayoutStore {
             #[cfg(feature = "complete")]
             word_cloud: RefCell::new(None),
             #[cfg(feature = "complete")]
+            geo: RefCell::new(None),
+            #[cfg(feature = "complete")]
+            marks: RefCell::new(None),
+            #[cfg(feature = "complete")]
             network,
             scroll_row: 0,
         });
@@ -2879,6 +3012,9 @@ impl GeneralLayoutSeriesKind {
                 )
                 | (Self::Venn, GeneralLayoutInput::Sets(_))
                 | (Self::WordCloud, GeneralLayoutInput::Words(_))
+                | (Self::Choropleth, GeneralLayoutInput::Geo(_))
+                | (Self::BubbleMap, GeneralLayoutInput::GeoPoints(_))
+                | (Self::FlowMap, GeneralLayoutInput::GeoLinks(_))
         )
     }
 
@@ -2942,6 +3078,18 @@ fn cache_reservation(kind: GeneralLayoutSeriesKind, input: &GeneralLayoutInput) 
         #[cfg(feature = "complete")]
         (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(_)) => {
             word_cloud::cache_reservation()
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::Choropleth, GeneralLayoutInput::Geo(input)) => {
+            geo::cache_reservation(input)
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::BubbleMap, GeneralLayoutInput::GeoPoints(input)) => {
+            geo::mark_cache_reservation(geo::MarkInput::Points(input))
+        }
+        #[cfg(feature = "complete")]
+        (GeneralLayoutSeriesKind::FlowMap, GeneralLayoutInput::GeoLinks(input)) => {
+            geo::mark_cache_reservation(geo::MarkInput::Links(input))
         }
         _ => 0,
     }
@@ -3379,6 +3527,44 @@ impl ChartEngine {
                     (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(words)) => {
                         self.build_word_cloud_frame(series, words, plot, (hpr, vpr), out);
                     }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::Choropleth, GeneralLayoutInput::Geo(input)) => {
+                        self.build_choropleth_frame(
+                            series,
+                            (input, &entry.semantic_values),
+                            plot,
+                            &store.map_transform(pane_id, plot),
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::BubbleMap, GeneralLayoutInput::GeoPoints(input)) => {
+                        self.build_mark_frame(
+                            series,
+                            store,
+                            geo::MarkInput::Points(input),
+                            plot,
+                            &store.map_transform(pane_id, plot),
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
+                    #[cfg(feature = "complete")]
+                    (GeneralLayoutSeriesKind::FlowMap, GeneralLayoutInput::GeoLinks(input)) => {
+                        self.build_mark_frame(
+                            series,
+                            store,
+                            geo::MarkInput::Links(input),
+                            plot,
+                            &store.map_transform(pane_id, plot),
+                            (hpr, vpr),
+                            out,
+                            points,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -3551,6 +3737,37 @@ impl ChartEngine {
                 GeneralLayoutSeriesKind::WordCloud,
                 GeneralLayoutElement::Word,
             ) => series.with_word_cloud(self, words, plot, |cache| cache.anchor(hit.row)),
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::Geo(input),
+                GeneralLayoutSeriesKind::Choropleth,
+                GeneralLayoutElement::Feature,
+            ) => {
+                let view = store.map_transform(pane_id, plot);
+                series.with_geo(input, plot, |cache| cache.anchor_view(&view, hit.row))
+            }
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::GeoPoints(input),
+                GeneralLayoutSeriesKind::BubbleMap,
+                GeneralLayoutElement::Bubble,
+            ) => {
+                let view = store.map_transform(pane_id, plot);
+                series.with_marks(store, geo::MarkInput::Points(input), plot, |cache| {
+                    cache.anchor(&view, hit.element, hit.row)
+                })
+            }
+            #[cfg(feature = "complete")]
+            (
+                GeneralLayoutInput::GeoLinks(input),
+                GeneralLayoutSeriesKind::FlowMap,
+                GeneralLayoutElement::Link,
+            ) => {
+                let view = store.map_transform(pane_id, plot);
+                series.with_marks(store, geo::MarkInput::Links(input), plot, |cache| {
+                    cache.anchor(&view, hit.element, hit.row)
+                })
+            }
             _ => None,
         }
     }
@@ -3711,6 +3928,25 @@ impl ChartEngine {
                 #[cfg(feature = "complete")]
                 (GeneralLayoutSeriesKind::WordCloud, GeneralLayoutInput::Words(words)) => {
                     series.with_word_cloud(self, words, plot, |cache| cache.hit(x, y))
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::Choropleth, GeneralLayoutInput::Geo(input)) => {
+                    let view = store.map_transform(pane_id, plot);
+                    series.with_geo(input, plot, |cache| cache.hit_view(&view, x, y))
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::BubbleMap, GeneralLayoutInput::GeoPoints(input)) => {
+                    let view = store.map_transform(pane_id, plot);
+                    series.with_marks(store, geo::MarkInput::Points(input), plot, |cache| {
+                        cache.hit(&view, input.symbol, false, x, y)
+                    })
+                }
+                #[cfg(feature = "complete")]
+                (GeneralLayoutSeriesKind::FlowMap, GeneralLayoutInput::GeoLinks(input)) => {
+                    let view = store.map_transform(pane_id, plot);
+                    series.with_marks(store, geo::MarkInput::Links(input), plot, |cache| {
+                        cache.hit(&view, crate::GeneralPointSymbol::Circle, input.arrows, x, y)
+                    })
                 }
                 _ => None,
             };
@@ -3944,7 +4180,10 @@ impl ChartEngine {
             #[cfg(feature = "complete")]
             (GeneralLayoutInput::Sets(_), GeneralLayoutElement::Region)
             | (GeneralLayoutInput::Words(_), GeneralLayoutElement::Word)
-            | (GeneralLayoutInput::Graph { .. }, GeneralLayoutElement::Node) => hit.row,
+            | (GeneralLayoutInput::Graph { .. }, GeneralLayoutElement::Node)
+            | (GeneralLayoutInput::Geo(_), GeneralLayoutElement::Feature)
+            | (GeneralLayoutInput::GeoPoints(_), GeneralLayoutElement::Bubble)
+            | (GeneralLayoutInput::GeoLinks(_), GeneralLayoutElement::Link) => hit.row,
             #[cfg(feature = "complete")]
             (
                 GeneralLayoutInput::Gauge(_),
@@ -4008,6 +4247,27 @@ impl ChartEngine {
             (GeneralLayoutInput::Words(words), GeneralLayoutElement::Word) => {
                 let word = words.get(hit.row)?;
                 Some((word.text.clone(), word.text.clone()))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Geo(input), GeneralLayoutElement::Feature) => {
+                let feature = input.features.get(hit.row)?;
+                Some((feature.id.clone(), feature.label.clone()))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoPoints(input), GeneralLayoutElement::Bubble) => {
+                let base = store.map_base(series.pane_id).map(|(_, base)| base);
+                Some((
+                    input.points.get(hit.row)?.id.clone(),
+                    geo::bubble_label(input, base, hit.row)?,
+                ))
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoLinks(input), GeneralLayoutElement::Link) => {
+                let base = store.map_base(series.pane_id).map(|(_, base)| base);
+                Some((
+                    geo::flow_id(input, hit.row)?,
+                    self.flow_label(input, base, hit.row)?,
+                ))
             }
             _ => None,
         }
@@ -4110,6 +4370,26 @@ impl ChartEngine {
                     .unwrap_or(series.color);
                 (word.text.clone(), color, None)
             }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::Geo(input), GeneralLayoutElement::Feature) => {
+                self.choropleth_item_tooltip(series, input, &entry.semantic_values, hit.row)?
+            }
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoPoints(input), GeneralLayoutElement::Bubble) => self
+                .mark_item_tooltip(
+                    series,
+                    geo::MarkInput::Points(input),
+                    store.map_base(series.pane_id).map(|(_, base)| base),
+                    hit.row,
+                )?,
+            #[cfg(feature = "complete")]
+            (GeneralLayoutInput::GeoLinks(input), GeneralLayoutElement::Link) => self
+                .mark_item_tooltip(
+                    series,
+                    geo::MarkInput::Links(input),
+                    store.map_base(series.pane_id).map(|(_, base)| base),
+                    hit.row,
+                )?,
             _ => return None,
         };
         Some(LayoutItemTooltip {
@@ -4339,11 +4619,92 @@ impl ChartEngine {
                         .collect(),
                 )
             }
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::Geo(input) => (
+                input.features.len(),
+                input
+                    .features
+                    .iter()
+                    .enumerate()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|(row, feature)| GeneralLayoutAccessibilityItem {
+                        element: GeneralLayoutElement::Feature,
+                        row,
+                        id: feature.id.clone(),
+                        label: feature.label.clone(),
+                        value: entry
+                            .semantic_values
+                            .get(row)
+                            .copied()
+                            .filter(|value| !value.is_nan()),
+                        selected: selected
+                            == Some(GeneralLayoutHit {
+                                series: series_id,
+                                element: GeneralLayoutElement::Feature,
+                                row,
+                            }),
+                        expanded: None,
+                        placed: None,
+                    })
+                    .collect(),
+            ),
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::GeoPoints(points) => {
+                let base = store.map_base(series.pane_id).map(|(_, base)| base);
+                (
+                    points.points.len(),
+                    (offset..points.points.len().min(offset.saturating_add(limit)))
+                        .map(|row| GeneralLayoutAccessibilityItem {
+                            element: GeneralLayoutElement::Bubble,
+                            row,
+                            id: points.points[row].id.clone(),
+                            label: geo::bubble_label(points, base, row).unwrap_or_default(),
+                            value: points.points[row].value,
+                            selected: selected
+                                == Some(GeneralLayoutHit {
+                                    series: series_id,
+                                    element: GeneralLayoutElement::Bubble,
+                                    row,
+                                }),
+                            expanded: None,
+                            placed: None,
+                        })
+                        .collect(),
+                )
+            }
+            #[cfg(feature = "complete")]
+            GeneralLayoutInput::GeoLinks(links) => {
+                let base = store.map_base(series.pane_id).map(|(_, base)| base);
+                (
+                    links.links.len(),
+                    (offset..links.links.len().min(offset.saturating_add(limit)))
+                        .map(|row| GeneralLayoutAccessibilityItem {
+                            element: GeneralLayoutElement::Link,
+                            row,
+                            id: geo::flow_id(links, row).unwrap_or_default(),
+                            label: self.flow_label(links, base, row).unwrap_or_default(),
+                            value: links.links[row].value,
+                            selected: selected
+                                == Some(GeneralLayoutHit {
+                                    series: series_id,
+                                    element: GeneralLayoutElement::Link,
+                                    row,
+                                }),
+                            expanded: None,
+                            placed: None,
+                        })
+                        .collect(),
+                )
+            }
             #[cfg(not(feature = "complete"))]
             GeneralLayoutInput::Gauge(_)
             | GeneralLayoutInput::Graph { .. }
             | GeneralLayoutInput::Sets(_)
-            | GeneralLayoutInput::Words(_) => (0, Vec::new()),
+            | GeneralLayoutInput::Words(_)
+            | GeneralLayoutInput::Geo(_)
+            | GeneralLayoutInput::GeoPoints(_)
+            | GeneralLayoutInput::GeoLinks(_) => (0, Vec::new()),
         };
         Some(GeneralLayoutAccessibilitySnapshot {
             series: series_id,
@@ -4360,7 +4721,7 @@ impl ChartEngine {
     ) -> Result<GeneralLayoutSeriesId, ChartError> {
         if options.kind.requires_complete_build() && !Self::build_includes_complete_families() {
             return Err(crate::complete_build_required(
-                "gauge, relationship, and hierarchy layout families",
+                "gauge, relationship, hierarchy, and map layout families",
             ));
         }
         let pane_id = self
@@ -4668,7 +5029,13 @@ fn validate_relationship_options(
             "word cloud options apply only to word cloud series",
         ));
     }
-    Ok(())
+    if !options.kind.is_map() && !options.map_view.is_default() {
+        return Err(ChartError::new(
+            ErrorCode::InvalidOptions,
+            "map views apply only to choropleth, bubble map and flow map series",
+        ));
+    }
+    geo::validate_view(options.map_view)
 }
 
 /// Collapsed IDs are bounded by the dataset: each must be unique and name a node with children

@@ -458,6 +458,14 @@ enum PressMode {
         before: crate::NetworkView,
         panning: bool,
     },
+    /// A press inside a map: past the drag threshold it pans the view of the map pane that
+    /// `owner` belongs to from `before`; without movement it is a click.
+    #[cfg(feature = "complete")]
+    MapPan {
+        owner: crate::GeneralLayoutSeriesId,
+        before: crate::MapView,
+        panning: bool,
+    },
 }
 
 impl PressMode {
@@ -481,7 +489,9 @@ impl PressMode {
             | Self::GeneralLegend { .. }
             | Self::Inert => InputTarget::Pane,
             #[cfg(feature = "complete")]
-            Self::NetworkNode { .. } | Self::NetworkPan { .. } => InputTarget::Pane,
+            Self::NetworkNode { .. } | Self::NetworkPan { .. } | Self::MapPan { .. } => {
+                InputTarget::Pane
+            }
         }
     }
 }
@@ -1358,6 +1368,23 @@ impl ChartEngine {
                     self.network_pan(series, before, x - press.start.0, y - press.start.1);
                 }
             }
+            #[cfg(feature = "complete")]
+            Some(PressMode::MapPan {
+                owner,
+                before,
+                panning,
+            }) if primary_pressed => {
+                if let Some(press) = self.input.press.filter(|press| press.moved) {
+                    if !panning {
+                        self.set_press_mode(PressMode::MapPan {
+                            owner,
+                            before,
+                            panning: true,
+                        });
+                    }
+                    self.map_pan(owner, before, x - press.start.0, y - press.start.1);
+                }
+            }
             None => {
                 if self.active_drawing_tool().is_some() {
                     self.drawing_tool_pointer_move(x, y, modifiers, false);
@@ -1523,7 +1550,9 @@ impl ChartEngine {
                 // Network gestures begin only past the drag threshold, so an unmoved second
                 // press has nothing to undo.
                 #[cfg(feature = "complete")]
-                PressMode::NetworkNode { .. } | PressMode::NetworkPan { .. } => {}
+                PressMode::NetworkNode { .. }
+                | PressMode::NetworkPan { .. }
+                | PressMode::MapPan { .. } => {}
             }
             self.input.touch_reticle_base = None;
             self.input.last_click = None;
@@ -1700,7 +1729,7 @@ impl ChartEngine {
                 }
             }
             #[cfg(feature = "complete")]
-            PressMode::NetworkPan { .. } => {
+            PressMode::NetworkPan { .. } | PressMode::MapPan { .. } => {
                 if !moved {
                     self.input_primary_click(x, y, press.text_press_selected);
                     self.push_input_event(ChartInputEvent::Click { x, y });
@@ -1845,17 +1874,14 @@ impl ChartEngine {
             self.refresh_input_cursor();
             return true;
         }
-        // A network view under the pointer zooms around it, as d3-zoom does: 2^(Δ/5) per
-        // normalized notch, so one notch (Δ = 1) is about ±15%.
+        // A network or map view under the pointer zooms around it, as d3-zoom does: 2^(Δ/5)
+        // per normalized notch, so one notch (Δ = 1) is about ±15%.
         #[cfg(feature = "complete")]
-        if sample.delta_y != 0.0
-            && options.wheel_zoom
-            && self.network_zoom_at(
-                sample.x,
-                sample.y,
-                (wheel_zoom_scale(sample.delta_y) * 0.2).exp2(),
-            )
-        {
+        if sample.delta_y != 0.0 && options.wheel_zoom && {
+            let factor = (wheel_zoom_scale(sample.delta_y) * 0.2).exp2();
+            self.network_zoom_at(sample.x, sample.y, factor)
+                || self.map_zoom_at(sample.x, sample.y, factor)
+        } {
             self.stop_input_motion();
             self.input.pointer = Some((sample.x, sample.y));
             self.input.modifiers = sample.modifiers;
@@ -1920,7 +1946,8 @@ impl ChartEngine {
         }
         self.stop_input_motion();
         #[cfg(feature = "complete")]
-        let network = self.network_zoom_at(x, y, 1.0 + scale_delta);
+        let network = self.network_zoom_at(x, y, 1.0 + scale_delta)
+            || self.map_zoom_at(x, y, 1.0 + scale_delta);
         #[cfg(not(feature = "complete"))]
         let network = false;
         if !network {
@@ -2636,6 +2663,14 @@ impl ChartEngine {
                 } => {
                     self.set_network_view(series, before);
                 }
+                #[cfg(feature = "complete")]
+                PressMode::MapPan {
+                    owner,
+                    before,
+                    panning: true,
+                } => {
+                    self.set_map_view(owner, before);
+                }
                 _ => {}
             }
         }
@@ -2816,6 +2851,17 @@ impl ChartEngine {
                     panning: false,
                 };
             }
+        }
+        #[cfg(feature = "complete")]
+        if self.input.options.pan_for(input.device)
+            && let Some(owner) = self.map_press_target(x, y)
+            && let Some(before) = self.map_view(owner)
+        {
+            return PressMode::MapPan {
+                owner,
+                before,
+                panning: false,
+            };
         }
         self.pane_pan_press(input)
     }
@@ -3340,11 +3386,14 @@ impl ChartEngine {
                 }
                 PressMode::Pane { panning: false, .. } | PressMode::Inert => {}
                 #[cfg(feature = "complete")]
-                PressMode::NetworkNode { .. } | PressMode::NetworkPan { panning: true, .. } => {
+                PressMode::NetworkNode { .. }
+                | PressMode::NetworkPan { panning: true, .. }
+                | PressMode::MapPan { panning: true, .. } => {
                     return ChartCursor::Grabbing;
                 }
                 #[cfg(feature = "complete")]
-                PressMode::NetworkPan { panning: false, .. } => {}
+                PressMode::NetworkPan { panning: false, .. }
+                | PressMode::MapPan { panning: false, .. } => {}
             }
         }
         match self.region_at(x, y) {

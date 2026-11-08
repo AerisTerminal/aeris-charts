@@ -3631,10 +3631,11 @@ async function audit_catalog_exports(page, backend, onlyId = null, loseWebGpu = 
 const COMPLETE_ONLY_KINDS = [
   "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot", "ecdf", "qq_plot",
   "hexbin", "contour", "parallel_coordinates", "scatter_matrix", "gauge", "chord",
-  "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud",
+  "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud", "choropleth",
+  "bubble_map", "flow_map",
 ];
 const is_complete_project = (test_info) => test_info.project.name === "chromium-complete";
-const catalog_count = (test_info) => (is_complete_project(test_info) ? 78 : 56);
+const catalog_count = (test_info) => (is_complete_project(test_info) ? 81 : 56);
 
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`all catalog families export and dispose through ${backend}`, async ({ page, browserName }, test_info) => {

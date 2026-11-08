@@ -25,7 +25,7 @@ with its commit, and update the status table in the same commit. A phase or matr
 
 ## Status at a glance
 
-Updated 2026-11-07. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
+Updated 2026-11-08. Plan baseline dated 2026-09-23. The 2026-09-25 pause ended after the trading
 expansion completed on 2026-10-06; general-chart batches have resumed in dependency order.
 
 | Batch | Phase | Scope | Status | Done so far | Next |
@@ -42,7 +42,7 @@ expansion completed on 2026-10-06; general-chart batches have resumed in depende
 | G10 | R10 | Financial chart styles | **Complete** | Time-preserving Heikin-Ashi with bounded live-tip cache; checkpointed derived-sequence foundation; Renko, Kagi, Point & Figure and Line Break with declared crosshair/drawing/persistence policies | 19 synthetic-bar engine tests, Heikin-Ashi cache tests, and the g10_financial_styles Playwright spec on both backends |
 | G11 | R11 | Statistics (complete build) | **Complete** | Shared stats engine (KDE/ECDF/quantiles/2D binning); violin, density/ridgeline, strip/beeswarm/dot, ECDF/Q-Q, hexbin, contour, parallel coordinates, scatter matrix — complete build only | G12 |
 | G12 | R12 | Relationships and hierarchy (complete build) | **Complete** | Complete-build gate for layout kinds; shared graph store; gauge, chord, tree/dendrogram with engine-owned collapse, circle packing, icicle, d3-force network with engine-owned drag/pin/pan/zoom and persisted settled positions, Venn and word cloud — complete build only | G13 |
-| G13 | R13 | Geographic maps (complete build) | **Planned** | — | Geometry store, projections, triangulation, choropleth, bubble/flow maps, map interaction |
+| G13 | R13 | Geographic maps (complete build) | **Complete** | Streaming GeoJSON/TopoJSON geometry store; six d3-geo projections with fitting, antimeridian and hemisphere clipping and adaptive resampling; earcut triangulation into the shared mesh; choropleth with sequential, diverging and quantized scales and legend; bubble and great-circle flow maps on the base projection; engine-owned pan/zoom, grid-indexed hits, tooltips, keyboard focus and persisted view — complete build only | G14 |
 | G14 | R14 | 3D charts (complete build) | **Planned** | — | Camera, depth ordering, shaded mesh primitive, 3D bar/scatter/line/surface, orbit interaction |
 
 Notes:
@@ -56,8 +56,8 @@ Notes:
 
 Seven of eight baseline batches are complete. G8's automated work is complete; its phase
 closure waits on the manual evidence listed under R8. Catalog expansion batches G9–G11 are
-complete (`22303df`, `33e2dbc`, `36cea9c`), and G12 is complete. G13–G14 have not started: no
-map or 3D code exists yet, and G13 is the next batch. Work committed between G11 and G12
+complete (`22303df`, `33e2dbc`, `36cea9c`), and G12 and G13 are complete. G14 has not started: no
+3D code exists yet, and it is the next batch. Work committed between G11 and G12
 (ten-language chart text, linked sync, replay, drawing visibility and touch input) is shared or
 financial-chart work. Batch completion does not imply full parity-matrix verification.
 
@@ -1084,6 +1084,60 @@ legend toggling; network keyboard zoom, edge arrows, `apply_options` for network
 a category legend. In the browser, two render loops run while a simulation is active (general
 animation and input frames). Reduced motion settles synchronously instead of in bounded slices.
 No calibrated visual review has been done.
+
+### G13 — Geographic maps (2026-11-08)
+
+**Complete-build gate.** Three map layout kinds ship only in the complete build: `choropleth`
+over `{ type: "geo" }`, `bubble_map` over `{ type: "geo_points" }` and `flow_map` over
+`{ type: "geo_links" }`. The kinds and the `Geo`, `GeoPoints` and `GeoLinks` inputs are
+unconditional enum variants; `general_layout/geo/` holds the input types in both builds, and its
+`decode`, `projection`, `earcut`, `choropleth`, `marks` and `view` modules and the `map_view`
+series option compile only with `complete`. The standard build rejects the kinds, inputs and
+option with `complete_build_required` in the engine, the WASM boundary and the package.
+
+| Capability | Delivered | Reference |
+| --- | --- | --- |
+| Geometry store | Streaming GeoJSON (FeatureCollection, Feature, every geometry type) and TopoJSON decode into flat buffers; id and label properties; caps of 4,096 features, 262,144 positions, 65,536 rings and 2^20 arc references enforced while filling; canonical FeatureCollection persistence, bit-exact on round trip | RFC 7946; topojson-client 3.1.0 `feature()` |
+| Projections | Mercator, Equal Earth, Natural Earth 1, orthographic, conic equal-area and identity; rotate, center, parallels and padding; `fitExtent`, antimeridian cutting, hemisphere clipping, adaptive resampling | Ported from d3-geo 3.1.1 (ISC); forward values checked against d3 for ten configurations |
+| Triangulation and caching | earcut with holes and a step budget into the shared `MeshFill`; one cache per series and plot rectangle; views map cached pre-view geometry through one transform and clip it, never reprojecting or retriangulating | Ported from earcut 3.2.4 (ISC) |
+| Choropleth | Sequential, diverging and quantized (equal-interval or quantile) scales, missing-value color, continuous or stepped legend, even-odd hits through a ≤64×64 grid | ECharts 6.1.0 `map` + `visualMap`; d3 `scaleQuantize`/`scaleQuantile` |
+| Bubble and flow maps | Square-root bubble radii, great-circle flows with linear widths and arrowheads, anchors by position or base-map feature centroid, own projection without a base map | ECharts 6.1.0 geo `scatter` and `lines`; d3-geo `geoCentroid`, `geoInterpolate` |
+| Interaction and accessibility | Engine-owned drag pan, wheel and pinch zoom (1–32) with Escape and capture-loss restore; persisted `map_view` shared by the pane; tooltips, accessibility items, keyboard focus anchors and localized flow names | ECharts geo `roam` |
+
+The demo catalog gains choropleth, bubble map and flow map examples (81 examples, 25
+complete-only). The ECharts reference matrix gains choropleth, geo scatter and geo lines pairs,
+`g13_maps.spec.mjs` runs on `chromium-complete` through Canvas2D and WebGPU, and `world-atlas`
+2.0.2 (ISC) is a test-only demo devDependency. `NOTICE` now reproduces the d3-geo and earcut
+notices for the compiled modules.
+
+World-scale release measurements (local Windows, Natural Earth countries from `world-atlas`):
+
+| Fixture | Decode | Cache build | First frame | Warm frame | Pan / zoom frame | Hit | Cache |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1:110m (177 features, 10,301 positions) | 1.08 ms TopoJSON, 1.20 ms GeoJSON | 3.58 ms, 9,742 triangles | 8.71 ms | 0.48 ms | 0.46 / 0.49 ms | 0.24 µs feature, 13.65 µs all marks | 0.30 of 1.40 MB reserved |
+| 1:50m (241 features, 97,910 positions) | 4.22 ms TopoJSON, 7.53 ms GeoJSON | 29.98 ms, 94,712 triangles | 57.97 ms | 2.51 ms | 1.49 / 1.67 ms | 2.51 µs feature, 14.18 µs all marks | 2.73 of 7.67 MB reserved |
+
+Projected areas agree with d3-geo `geoPath.area` within 1e-6 relative for every 1:110m and 1:50m
+country except the self-intersecting 1:110m Sudan ring (894.45 versus 871.41 px²), which earcut
+fills differently from d3's signed shoelace sum. The first frame at 1:50m includes the one-time
+cache build; later frames, pans and zooms stay under 3 ms.
+
+Gate evidence: `cargo fmt --all -- --check`; workspace clippy on native and `wasm32-unknown-unknown`
+for the standard and complete builds with `-D warnings`; `cargo test --workspace` (2,198 tests
+standard, 2,322 complete); the strict release `perf_gate` (all pass); package `npm ci`, `lint`,
+`build`, `size`, `typecheck`, `check:api`, `check:release-gates`, the build-variant, React SSR and
+namespace checks, and `test:pack`; GPUI clippy and tests (237 per build) with every pixel-parity
+case passing; the web demo build; and the full portable Playwright run (1,318 passed, 61 skipped,
+0 failed, including the seven `g13_maps` cases). The complete build grows by 59,505 brotli bytes
+(1,424,754 to 1,484,259) and 231,882 raw bytes (5,779,172 to 6,011,054); the standard build grows
+by 587 brotli bytes (1,342,034 to 1,342,621) and stays under its ceiling. Four ceilings rise to
+the measured sizes plus headroom: complete brotli 1,486,000, complete raw 6,013,000, tarball
+4,337,000 and unpacked 13,037,000. The other six ceilings are unchanged.
+
+Known limits and deferrals: keyboard zoom (as for networks), a missing-value legend swatch,
+ripple and trail effects, value transitions, and calibrated visual review. The GPUI gallery links
+the standard engine, so it skips the map examples as it does the other complete-only families.
+
 ## Known gaps
 
 Remaining source-confirmed gaps from the 2026-09-23 review and the 2026-10-18 post-G7 changes. R3–R7 closed the earlier Cartesian,
@@ -1439,7 +1493,9 @@ G9 adds both as pinned `examples/web_demo` dev dependencies and confirms each li
 installed package before use. Where neither library has a native family, the reference is a named,
 versioned algorithm source: d3-contour, d3-hexbin, d3-hierarchy, d3-chord, d3-force and d3-geo
 (ISC), and venn.js (MIT). For financial chart styles it is the published brick and box rules.
-Reference code is read for behaviour; it is not copied.
+Reference code is read for behaviour; it is not copied, with two recorded exceptions: G13 ports
+the d3-geo 3.1.1 projection pipeline and earcut 3.2.4 (both ISC), keeping their notices in the
+ported files and in `NOTICE`, because matching d3-geo within rounding is the R13 exit criterion.
 
 **Two builds.** The compressed WASM was 1,257,487 bytes against the 1,317,000-byte ceiling on
 2026-10-31, so the new families cannot all fit one build. By maintainer decision the package ships
@@ -1566,19 +1622,19 @@ bounded convergence. Every family meets the standing exit rules on the complete 
 
 ### R13 — Geographic maps (group E, complete build)
 
-**Batch:** G13. **Depends on:** R9 two builds. **Status:** planned.
+**Batch:** G13. **Depends on:** R9 two builds. **Status:** complete.
 
-- [ ] Engine-owned geometry store for host-supplied GeoJSON and TopoJSON, with validation, identity
+- [x] Engine-owned geometry store for host-supplied GeoJSON and TopoJSON, with validation, identity
       and bounded retained size.
-- [ ] Projections: Mercator, Equal Earth, Natural Earth, orthographic, conic equal-area and identity
+- [x] Projections: Mercator, Equal Earth, Natural Earth, orthographic, conic equal-area and identity
       (pre-projected). Include fit-to-extent, antimeridian clipping and adaptive resampling.
-- [ ] Polygon triangulation into the shared mesh primitive, with cached geometry per view and
-      bounded rebuilds during pan/zoom.
-- [ ] Choropleth with sequential, diverging and quantized color scales and a legend.
-- [ ] Bubble/symbol maps and flow/lines maps with great-circle arcs.
-- [ ] Map pan/zoom through the engine input controller, point-in-polygon hits with a spatial index,
+- [x] Polygon triangulation into the shared mesh primitive, with cached geometry per view and
+      bounded rebuilds during pan/zoom (a view change never reprojects or retriangulates).
+- [x] Choropleth with sequential, diverging and quantized color scales and a legend.
+- [x] Bubble/symbol maps and flow/lines maps with great-circle arcs.
+- [x] Map pan/zoom through the engine input controller, point-in-polygon hits with a spatial index,
       tooltips, region keyboard navigation and announcements, and persisted view.
-- [ ] G13 full gate green on both builds; batch committed and pushed.
+- [x] G13 full gate green on both builds; batch committed and pushed.
 
 **Exit:** projections match d3-geo within documented tolerances on fixed fixtures. World-scale
 fixtures stay within frame, memory and size budgets, and every map family meets the standing exit
@@ -1629,14 +1685,14 @@ platform capabilities beyond the competitor's browser rendering model.
 | Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
 | Persistence, export and recovery | Partial (all 46 catalog examples export, restore and survive live WebGPU loss with byte-identical images; native mixed frame export; manual review pending) | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
 | Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
-| Two builds (standard and complete) | Partial (G9 delivered; G11 and G12 shipped complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
+| Two builds (standard and complete) | Partial (G9 delivered; G11, G12 and G13 shipped complete-only families) | Same crates and behaviour, separate entries, typed missing-family error, both builds under full gates and size ceilings | R9 |
 | Business and comparison charts | Partial (G9 delivered with ECharts pairs; visual review pending) | Waterfall, bullet, lollipop/dumbbell, slope/bump, Gantt/timeline, calendar heatmap and marimekko on the standard build | R9 |
 | Financial chart styles | Delivered (G10) | Heikin-Ashi, Renko, Kagi, Point & Figure and Line Break with bounded live updates and declared drawing/indicator policies | R10 |
 | Statistical distributions | Delivered (G11, complete build) | Violin, density, ridgeline, strip/beeswarm, dot plot, ECDF and Q-Q from shared engine statistics | R11 |
 | 2D density and multivariate | Delivered (G11, complete build) | Hexbin, contour/2D density, parallel coordinates and scatter-plot matrix | R11 |
 | Gauge, chord and network | Delivered (G12, complete build) | Gauge, chord and deterministic bounded network layouts with drag and pan/zoom | R12 |
 | Hierarchy extensions, Venn and word cloud | Delivered (G12, complete build) | Tree/dendrogram, circle packing, icicle, Venn/Euler and word cloud | R12 |
-| Geographic maps | Open | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |
+| Geographic maps | Delivered (G13, complete build) | Host-supplied GeoJSON/TopoJSON, projections, choropleth, bubble and flow maps, pan/zoom, hits and accessibility | R13 |
 | 3D charts | Open | Engine camera and depth ordering, 3D bar/scatter/line/surface, orbit interaction and bounded meshes on every executor | R14 |
 
 ## Scope and parity rules

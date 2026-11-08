@@ -295,7 +295,7 @@ test("the general dashboard mounts every complete-only card on the complete buil
   await page.goto("/?theme=dark&demo=general");
   await page.waitForFunction(() => window.__generalDashboard?.ready === true);
   const cards = page.locator('#general_workspace .general-chart-card[data-complete-only="true"]');
-  await expect(cards).toHaveCount(22);
+  await expect(cards).toHaveCount(25);
   for (const card of await cards.all()) {
     await card.scrollIntoViewIfNeeded();
     await expect(card).toHaveAttribute("data-mounted", "true");

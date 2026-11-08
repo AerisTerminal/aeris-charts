@@ -35,6 +35,9 @@ export const complete_only_families: ReadonlySet<string> = new Set<string>([
   "network",
   "venn",
   "word_cloud",
+  "choropleth",
+  "bubble_map",
+  "flow_map",
 ]);
 
 let loaded_variant: chart_build_variant | null = null;

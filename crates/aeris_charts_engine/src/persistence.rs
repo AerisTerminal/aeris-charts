@@ -227,6 +227,9 @@ struct LayoutSeriesV2 {
     #[serde(default, skip_serializing_if = "crate::NetworkView::is_default")]
     network_view: crate::NetworkView,
     #[cfg(feature = "complete")]
+    #[serde(default, skip_serializing_if = "crate::MapView::is_default")]
+    map_view: crate::MapView,
+    #[cfg(feature = "complete")]
     #[serde(
         default = "crate::general_layout::word_cloud_min_size_default",
         skip_serializing_if = "crate::general_layout::is_default_word_cloud_min_size"
@@ -1815,6 +1818,8 @@ impl ChartEngine {
                     #[cfg(feature = "complete")]
                     network_view: options.network_view,
                     #[cfg(feature = "complete")]
+                    map_view: options.map_view,
+                    #[cfg(feature = "complete")]
                     word_cloud_min_size: options.word_cloud_min_size,
                     #[cfg(feature = "complete")]
                     word_cloud_max_size: options.word_cloud_max_size,
@@ -3095,6 +3100,8 @@ impl ChartEngine {
                 positions: series.positions,
                 #[cfg(feature = "complete")]
                 network_view: series.network_view,
+                #[cfg(feature = "complete")]
+                map_view: series.map_view,
                 #[cfg(feature = "complete")]
                 word_cloud_min_size: series.word_cloud_min_size,
                 #[cfg(feature = "complete")]

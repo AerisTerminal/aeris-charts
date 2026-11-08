@@ -262,6 +262,10 @@ fn standard_build_restores_layout_series_with_default_complete_family_options() 
         ("word_cloud_max_size", serde_json::json!(48.0)),
         ("word_cloud_scaling", serde_json::json!("sqrt")),
         ("word_cloud_rotate", serde_json::json!(false)),
+        (
+            "map_view",
+            serde_json::json!({ "x": 0.0, "y": 0.0, "zoom": 1.0 }),
+        ),
     ] {
         assert!(series.insert(key.into(), value).is_none());
     }

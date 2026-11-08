@@ -53,6 +53,8 @@ pub use volume_profile::{
 #[cfg(test)]
 mod general_business_tests;
 #[cfg(test)]
+mod general_geo_tests;
+#[cfg(test)]
 mod general_relationship_tests;
 #[cfg(test)]
 mod general_stats_tests;
@@ -202,16 +204,18 @@ pub use general_data::{
 };
 #[doc(hidden)]
 pub use general_layout::{
-    CalendarDay, CalendarInput, FlowLink, FlowNode, FunnelStage, GanttTask, GaugeBand, GaugeInput,
-    GeneralLayoutAccessibilityItem, GeneralLayoutAccessibilitySnapshot, GeneralLayoutDatasetId,
-    GeneralLayoutElement, GeneralLayoutHit, GeneralLayoutInput, GeneralLayoutSeriesId,
-    GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GraphEdge, GraphNode, HierarchyNode,
-    MosaicCell, VennSet, WordCloudWord,
+    CalendarDay, CalendarInput, ChoroplethScale, FlowLink, FlowNode, FunnelStage, GanttTask,
+    GaugeBand, GaugeInput, GeneralLayoutAccessibilityItem, GeneralLayoutAccessibilitySnapshot,
+    GeneralLayoutDatasetId, GeneralLayoutElement, GeneralLayoutHit, GeneralLayoutInput,
+    GeneralLayoutSeriesId, GeneralLayoutSeriesKind, GeneralLayoutSeriesOptions, GeoAnchor,
+    GeoFeature, GeoInput, GeoLink, GeoLinksInput, GeoPoint, GeoPointsInput, GeoProjection,
+    GeoProjectionKind, GeoShape, GeoValue, GraphEdge, GraphNode, HierarchyNode, MosaicCell,
+    QuantizeMethod, VennSet, WordCloudWord,
 };
 #[cfg(feature = "complete")]
 #[doc(hidden)]
 pub use general_layout::{
-    HierarchyOrientation, NetworkLayout, NetworkPin, NetworkView, WordCloudScaling,
+    HierarchyOrientation, MapView, NetworkLayout, NetworkPin, NetworkView, WordCloudScaling,
 };
 #[doc(hidden)]
 pub use general_series::{

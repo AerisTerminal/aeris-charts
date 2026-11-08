@@ -238,6 +238,48 @@
       "aerisApi": "add_layout_series(\"word_cloud\", { word_cloud_min_size, word_cloud_max_size, word_cloud_scaling: \"linear\" | \"sqrt\", word_cloud_rotate }, { type: \"words\", words: [{ text, weight, color }] })",
       "supportedCombinations": "Up to 500 words with finite nonnegative weights and non-empty text; font sizes 4-256 with min no larger than max; placement re-runs when host text measurements change",
       "differences": "Placement is fully deterministic (no per-run random orientation or start) and words that fit nowhere are omitted and reported rather than painted over others. Animated placement transitions and calibrated visual review remain open."
+    },
+    {
+      "id": "choropleth",
+      "capability": "Choropleth map: GeoJSON or TopoJSON features decoded once, projected by a d3-geo 3 projection (mercator, equal_earth, natural_earth1, orthographic, conic_equal_area, identity) fitted to the plot with antimeridian cutting and hemisphere clipping, triangulated with holes, filled by sequential, diverging or quantized (equal-interval or quantile) value colors, missing values in a neutral color, feature hits, tooltips, legend, keyboard focus and persistence",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/geo (complete build); WASM/TypeScript geo layout input",
+      "dependency": "G13",
+      "referenceFixture": "/echarts_reference.html?case=choropleth",
+      "referenceApi": "echarts.registerMap with GeoJSON plus a map series and continuous visualMap (inRange color). Projection math is ported from d3-geo 3.1.1 (ISC, Copyright 2010-2024 Mike Bostock) and triangulation from earcut 3.2.4 (ISC, Copyright Mapbox); TopoJSON decoding follows topojson-client 3.1.0 (ISC). Natural Earth country fixtures come from world-atlas 2.0.2 (ISC), a test-only devDependency that is never bundled.",
+      "referenceEvidence": ["registerMap GeoJSON", "continuous visualMap", "missing-value area color"],
+      "aerisFixture": "tests/g13_maps.spec.mjs choropleth paint, feature hits, tooltip, legend, keyboard focus and persistence on Canvas2D and WebGPU; geo projection.rs forward values against d3-geo for ten configurations, fitExtent, antimeridian and clip tests; earcut.rs triangulation; choropleth.rs area, hole, island, winding, palette and reservation tests; decode.rs TopoJSON/GeoJSON equivalence and limits; general_geo_tests.rs frame/hit/tooltip/accessibility agreement, atomic validation and persistence round trip",
+      "aerisApi": "add_layout_series(\"choropleth\", options, { type: \"geo\", geojson | topojson + object, id_property, label_property, values, projection: { type, rotate, center, parallels, padding }, scale: { type: \"sequential\" | \"diverging\" | \"quantize\", ... }, missing_color })",
+      "supportedCombinations": "Polygon, MultiPolygon, LineString, MultiLineString, Point and MultiPoint features with unique ids; at most 4,096 features and values, 262,144 positions, 65,536 rings, coordinates up to 1e9; quantize classes 2-9",
+      "differences": "ECharts draws longitude/latitude linearly with a 0.75 aspect scale and matches data by feature name, while Aeris projects with the named d3-geo projection, fits it to the plot and matches values by feature id. Aeris fills a self-intersecting ring by its earcut triangulation, which covers a different area than d3's signed shoelace sum (1:110m Sudan: 894.45 versus 871.41 square pixels; every other 1:110m and 1:50m country agrees within 1e-6 relative). A missing-value legend swatch and calibrated visual review remain open."
+    },
+    {
+      "id": "bubble_map",
+      "capability": "Bubble map: circle, square, diamond or triangle symbols anchored at longitude/latitude positions or base-map feature centroids (d3 geoCentroid), square-root value-scaled radii drawn largest first, projected through the pane's choropleth base map (hidden far-side and out-of-plot marks clipped) or the series' own fitted projection, exact symbol hits, tooltips, data labels, keyboard focus, persistence, and shared map pan and zoom",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/geo/marks.rs (complete build); chart_input.rs map pan and zoom; WASM/TypeScript geo_points layout input and map_view option",
+      "dependency": "G13",
+      "referenceFixture": "/echarts_reference.html?case=geo_marks",
+      "referenceApi": "ECharts 6.1.0 geo component with a scatter series on coordinateSystem geo and value-driven symbolSize; geo roam for pan and zoom. Centroids follow d3-geo 3.1.1 geoCentroid (ISC).",
+      "referenceEvidence": ["geo coordinate system", "value-sized symbols", "roam pan and zoom"],
+      "aerisFixture": "tests/g13_maps.spec.mjs bubble paint, hits, mouse-drag pan and wheel zoom on Canvas2D and WebGPU; geo marks.rs size, symbol-hit and clipping tests; general_geo_tests.rs base-map alignment, far-side clipping, hit/anchor agreement, tooltip and accessibility, controller pan/zoom/cancel, view persistence and atomic validation",
+      "aerisApi": "add_layout_series(\"bubble_map\", { map_view }, { type: \"geo_points\", points: [{ id, at: [lon, lat] | feature_id, label, value, color }], symbol, radius: [min, max], projection })",
+      "supportedCombinations": "The pane's first choropleth series is the base map, visible or not; a feature anchor whose id the base map lacks, or a pane without a base map, leaves that mark undrawn and unhittable; non-negative values; zoom 1-32 with the pan kept inside the map",
+      "differences": "ECharts places scatter symbols on its linear geo coordinate system and resolves names, while Aeris projects with the base map's d3-geo projection and anchors to feature ids. Ripple effects (effectScatter), keyboard zoom and calibrated visual review remain open."
+    },
+    {
+      "id": "flow_map",
+      "capability": "Flow map: great-circle links between longitude/latitude positions or base-map feature centroids, resampled once at deepest-zoom precision (at most 256 subdivisions per link), cut at the antimeridian and clipped at the hemisphere through the base map's projection, linear value-scaled widths, optional arrowheads at visible targets, segment and arrow hits, tooltips, keyboard focus, persistence, and shared map pan and zoom",
+      "status": "Partial",
+      "owner": "aeris_charts_engine general_layout/geo/marks.rs (complete build); chart_input.rs map pan and zoom; WASM/TypeScript geo_links layout input and map_view option",
+      "dependency": "G13",
+      "referenceFixture": "/echarts_reference.html?case=geo_marks",
+      "referenceApi": "ECharts 6.1.0 geo component with a lines series on coordinateSystem geo, per-line widths and an arrow end symbol. Great-circle interpolation follows d3-geo 3.1.1 geoInterpolate (ISC).",
+      "referenceEvidence": ["geo coordinate system", "lines series", "arrow end symbol"],
+      "aerisFixture": "tests/g13_maps.spec.mjs flow paint, hits, mouse-drag pan and wheel zoom on Canvas2D and WebGPU; geo marks.rs great-circle midpoint against d3 geoInterpolate, antimeridian split, far-side clipping and reservation tests; general_geo_tests.rs widths, arrow, hit/anchor agreement, tooltip and accessibility, marks rebuilt on base-map change",
+      "aerisApi": "add_layout_series(\"flow_map\", { map_view }, { type: \"geo_links\", links: [{ id, source, target, source_label, target_label, value, color }], width: [min, max], arrows, projection })",
+      "supportedCombinations": "Same base-map and anchor rules as bubble maps; non-negative values; arrowheads only at targets inside the visible map",
+      "differences": "ECharts bends lines by a planar curveness on its linear geo coordinate system, while Aeris draws true great-circle arcs through the d3-geo projection. Animated trail effects, keyboard zoom and calibrated visual review remain open."
     }
   ]
 }

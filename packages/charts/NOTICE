@@ -66,3 +66,23 @@ Third-party material
 
 Third-party components keep their own licenses, stated in the corresponding source files (for
 example, the MIT-licensed Phosphor Icons subset in crates/aeris_charts_engine/src/drawings/icons.rs).
+
+The compiled WebAssembly modules include code ported from the following ISC-licensed projects.
+Their notices are retained in the named source files and reproduced here for binary copies:
+
+- d3-geo 3.1.1 (crates/aeris_charts_engine/src/general_layout/geo/projection.rs),
+  Copyright 2010-2024 Mike Bostock.
+- earcut 3.2.4 (crates/aeris_charts_engine/src/general_layout/geo/earcut.rs),
+  Copyright (c) 2026, Mapbox.
+
+  Permission to use, copy, modify, and/or distribute this software for any purpose
+  with or without fee is hereby granted, provided that the above copyright notice
+  and this permission notice appear in all copies.
+
+  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+  REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+  FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+  INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+  OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+  TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+  THIS SOFTWARE.

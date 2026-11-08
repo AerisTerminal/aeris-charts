@@ -120,6 +120,66 @@ Hits return `element: "node"`, `"link"`, `"band"`, `"progress"`, `"pointer"`, `"
 `examples/web_demo/fixtures/echarts_6_1_0/matrix.json` records the reference rows and open
 differences for every G12 kind.
 
+### Map layout families (complete build)
+
+Three map kinds ship only in the complete build. The standard build rejects the kinds, their
+`geo`, `geo_points` and `geo_links` inputs and the `map_view` option with
+`complete_build_required` before any engine state changes. Aeris bundles no world geometry:
+hosts supply GeoJSON or TopoJSON. Each kind uses an axis-free layout pane and
+`add_layout_series(kind, options, data)`:
+
+| Kind | Data | Layout and reference |
+| --- | --- | --- |
+| `choropleth` | `{ type: "geo", geojson \| topojson, object?, values?, id_property?, label_property?, projection?, scale?, missing_color? }` | Features projected by a d3-geo 3 projection fitted to the plot, triangulated with holes, and filled by value; ECharts 6.1.0 `map` series with a continuous `visualMap` is the reference |
+| `bubble_map` | `{ type: "geo_points", points: [{ id, at, label?, value?, color? }], symbol?, radius?, projection? }` | Symbols whose radius scales with the square root of `value` (default 3 to 24 CSS px), larger bubbles painted first |
+| `flow_map` | `{ type: "geo_links", links: [{ id?, source, target, source_label?, target_label?, value?, color? }], width?, arrows?, projection? }` | Great-circle arcs (d3-geo `geoInterpolate`) whose width scales linearly with `value` (default 1 to 6 CSS px), with optional target arrowheads |
+
+Map data:
+
+- `geojson` is an RFC 7946 FeatureCollection, Feature or bare geometry (Polygon, MultiPolygon,
+  LineString, MultiLineString, Point or MultiPoint). `topojson` is a topology decoded like
+  topojson-client 3 `feature()`; `object` names the object and may be omitted when there is only
+  one. A dataset holds at most 4,096 features, 262,144 positions and 65,536 rings, and a bubble
+  or flow dataset at most 4,096 marks.
+- A feature's identity is the `id_property` value, else its GeoJSON `id`, else `#<index>`; ids
+  must be unique. Its label is the `label_property` (default `name`), else the id.
+- `values` is `{ id: value }` or `[{ id, value }]`. A value naming an unknown feature, a
+  duplicate, or a non-finite value rejects the whole dataset. Features without a value use
+  `missing_color` (a neutral gray by default).
+- `projection` is `{ type?, rotate?, center?, parallels?, padding? }`. `type` is `"mercator"`,
+  `"equal_earth"` (the default), `"natural_earth1"`, `"orthographic"` (the visible hemisphere),
+  `"conic_equal_area"` (Albers with `parallels`, default `[0, 60]`) or `"identity"` (planar
+  coordinates with y up). The geometry always fits the plot inset by `padding` (default 8 CSS
+  px, d3 `fitExtent`); `center` then moves a longitude/latitude to the middle at the fitted
+  scale. Spherical projections cut at the antimeridian, and resampling is adaptive.
+- `scale` is `{ type: "sequential", low_color?, high_color? }` (the default: the series color at
+  20% opacity to the series color), `{ type: "diverging", low_color?, mid_color?, high_color?,
+  midpoint? }` (blue, light gray and red by default), or `{ type: "quantize", classes?, method?,
+  low_color?, high_color? }` with 2 to 9 classes of equal width (`"equal_interval"`, d3
+  `scaleQuantize`) or equal count (`"quantile"`, d3 `scaleQuantile`). A value on a class
+  threshold belongs to the upper class. The frame draws a continuous or stepped color legend
+  under the map.
+- A mark anchor `at`, `source` or `target` is a `[longitude, latitude]` position (planar `[x, y]`
+  under `identity`) or the id of a feature of the pane's base map, which places it at that
+  feature's d3 `geoCentroid`. The base map is the pane's first choropleth series. Bubbles and
+  flows project through its fitted projection; a pane without a base map fits the marks' own
+  `projection` to their positions. A feature anchor that names no base-map feature hides the
+  mark, as does a position on the far side of an orthographic globe.
+
+Every map series of a pane shares one `map_view` (`{ x, y, zoom }`). `zoom` is 1 to 32, and
+`x` and `y` offset the map center as fractions of the map width and height, at most
+`0.5 - 0.5 / zoom` either way, so a pan never leaves the fitted map. Dragging inside the map
+pans it, the wheel or a pinch zooms around the pointer ahead of the time-scale policy, and an
+unmoved press is an ordinary layout click. `options()` reports the view of map series, V2 state
+persists it, and `apply_options` does not accept it. A view change maps the cached projected
+geometry through one transform and clips it to the map; it never reprojects or retriangulates.
+
+Hits return `element: "feature"` (polygons answer even-odd, so a hole has no hit and an island
+answers its feature), `"bubble"` or `"link"` with the input row. Tooltips and accessibility
+items name the feature, bubble or flow (`source to target`, localized) with its value, and the
+keyboard focus ring sits on each feature's interior anchor. Value updates apply immediately
+without a transition.
+
 React `GeneralPane` supports keyed arrays and direct axis, series, reference, label, legend,
 tooltip, and brush declarations. `MappedGeneralSeries` maps typed application rows before the
 engine transaction; brush controls support controlled and uncontrolled ranges. See

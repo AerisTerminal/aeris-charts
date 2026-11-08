@@ -1,6 +1,7 @@
 // Pinned Apache ECharts 6.1.0 comparison fixture for chart families that Recharts 3.10.1 does
 // not provide. Each comparison row lives in its own module under `rows/` and is registered in
-// `rows.js`. A row exports `{ id, title, charts: [{ id, title, option, width?, height? }] }`.
+// `rows.js`. A row exports `{ id, title, maps?, charts: [{ id, title, option, width?, height? }] }`;
+// `maps` holds the GeoJSON its `map` series register through `echarts.registerMap`.
 // `?case=<row id>` selects a row; `w`/`h` override every panel size. The page sets
 // `window.__echarts_reference_ready` once every chart has finished its first render, and exposes
 // each instance by chart id in `window.__echarts_instances` for `convertToPixel` geometry probes.
@@ -28,6 +29,7 @@ root.appendChild(nav);
 const pending = [];
 window.__echarts_instances = {};
 if (selected !== undefined) {
+  for (const [name, geojson] of Object.entries(selected.maps ?? {})) echarts.registerMap(name, geojson);
   const section = document.createElement("section");
   section.dataset.case = selected.id;
   const heading = document.createElement("h2");

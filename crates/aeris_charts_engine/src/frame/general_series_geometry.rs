@@ -177,7 +177,7 @@ fn push_general_active_dot(
     }
 }
 
-fn push_general_point_symbol(
+pub(crate) fn push_general_point_symbol(
     out: &mut Vec<Prim>,
     symbol: GeneralPointSymbol,
     x: f64,

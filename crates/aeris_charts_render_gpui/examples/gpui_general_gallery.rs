@@ -205,6 +205,10 @@ enum LayoutData {
     Words {
         words: Vec<WordCloudWord>,
     },
+    /// Map data decodes only in the complete build, and every map example is complete-only.
+    Geo(serde::de::IgnoredAny),
+    GeoPoints(serde::de::IgnoredAny),
+    GeoLinks(serde::de::IgnoredAny),
 }
 
 fn default_true() -> bool {
@@ -843,6 +847,9 @@ fn build_engine(example: &Example) -> ChartEngine {
             },
             LayoutData::Sets { sets } => GeneralLayoutInput::Sets(sets.clone()),
             LayoutData::Words { words } => GeneralLayoutInput::Words(words.clone()),
+            LayoutData::Geo(_) | LayoutData::GeoPoints(_) | LayoutData::GeoLinks(_) => {
+                unreachable!("complete-only map examples are skipped")
+            }
         };
         let dataset = engine
             .create_general_layout_dataset(input)

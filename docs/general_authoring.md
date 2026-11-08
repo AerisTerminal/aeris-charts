@@ -392,6 +392,49 @@ const network = chart.add_layout_series("network", { pane: 0, title: "Services" 
 });
 ```
 
+### Migrating ECharts map, geo scatter and geo lines charts (complete build)
+
+Map families also need `@aeristerminal/aeris-charts/complete`. Aeris bundles no map geometry, so
+pass the same GeoJSON you would give `echarts.registerMap`, or a TopoJSON topology:
+
+| ECharts authoring concept | Aeris equivalent |
+| --- | --- |
+| `echarts.registerMap(name, geoJson)` plus a `map` series | `add_layout_series("choropleth", options, { type: "geo", geojson, values })` |
+| `data: [{ name, value }]` matched by feature name | `values: { id: value }` matched by feature id; set `id_property: "name"` to match by name |
+| `visualMap` continuous `inRange.color` | `scale: { type: "sequential", low_color, high_color }` or `"diverging"` with `midpoint` |
+| `visualMap` piecewise `splitNumber` | `scale: { type: "quantize", classes, method: "equal_interval" \| "quantile" }` |
+| `geo` `projection` / `aspectScale` | `projection: { type: "equal_earth" \| "mercator" \| "natural_earth1" \| "orthographic" \| "conic_equal_area" \| "identity" }` |
+| `geo` `roam: true` | Built-in drag pan, wheel and pinch zoom; initial state through `map_view` |
+| `scatter` on `coordinateSystem: "geo"` with `symbolSize` | `add_layout_series("bubble_map", options, { type: "geo_points", points: [{ id, at, value }] })` |
+| `lines` on `coordinateSystem: "geo"` with `symbol: [, "arrow"]` | `add_layout_series("flow_map", options, { type: "geo_links", links: [{ source, target, value }], arrows: true })` |
+
+ECharts draws longitude and latitude linearly with a 0.75 aspect scale and bends lines by a
+planar `curveness`. Aeris projects with the named d3-geo projection fitted to the plot and draws
+flows as true great-circle arcs, so shapes and positions differ by design. A mark anchor may
+name a feature of the pane's first choropleth series, which places it at that feature's
+centroid and keeps it on the map as it pans and zooms.
+
+```ts
+import { create_chart } from "@aeristerminal/aeris-charts/complete";
+
+const chart = await create_chart(container, {
+  initialPane: { horizontal_domain: { type: "layout" } },
+});
+chart.add_layout_series("choropleth", { pane: 0, title: "Revenue growth %" }, {
+  type: "geo",
+  geojson: regions, // a GeoJSON FeatureCollection with feature ids
+  values: { west: 2.5, central: 6.0, east: 9.5 },
+  scale: { type: "quantize", classes: 5 },
+});
+chart.add_layout_series("flow_map", { pane: 0, title: "Order flow" }, {
+  type: "geo_links",
+  arrows: true,
+  links: [
+    { source: "west", target: "east", value: 80 },
+    { source: [5, 43], target: "west", source_label: "Port", value: 50 },
+  ],
+});
+```
 ### Migrating ECharts waterfall, bullet, lollipop, dumbbell, slope and bump charts
 
 ECharts builds these from stacked bars, `custom` series, extra scatter series and host-computed

@@ -20,9 +20,9 @@ use aeris_charts_engine::{
 #[cfg(feature = "complete")]
 use aeris_charts_engine::{
     GaugeInput, GeneralQqDistribution, GeneralStatsBandwidth, GeneralStatsKernel,
-    GeneralStatsOptions, GeneralViolinOverlay, GeneralViolinSide, GraphEdge, GraphNode,
-    HierarchyOrientation, NetworkLayout, NetworkPin, NetworkView, VennSet, WordCloudScaling,
-    WordCloudWord,
+    GeneralStatsOptions, GeneralViolinOverlay, GeneralViolinSide, GeoInput, GeoLinksInput,
+    GeoPointsInput, GraphEdge, GraphNode, HierarchyOrientation, MapView, NetworkLayout, NetworkPin,
+    NetworkView, VennSet, WordCloudScaling, WordCloudWord,
 };
 use js_sys::{Float64Array, Uint8Array, Uint32Array};
 use serde::Deserialize;
@@ -77,10 +77,22 @@ enum LayoutInput {
     Words {
         words: Vec<WordCloudWord>,
     },
+    #[cfg(feature = "complete")]
+    GeoPoints(GeoPointsInput),
+    #[cfg(feature = "complete")]
+    GeoLinks(GeoLinksInput),
     /// Complete-build data kinds. The standard build skips their contents; the engine then
     /// rejects the placeholder with the typed complete-build error.
     #[cfg(not(feature = "complete"))]
-    #[serde(rename = "gauge", alias = "graph", alias = "sets", alias = "words")]
+    #[serde(
+        rename = "gauge",
+        alias = "graph",
+        alias = "sets",
+        alias = "words",
+        alias = "geo",
+        alias = "geo_points",
+        alias = "geo_links"
+    )]
     CompleteOnly(IgnoredAny),
 }
 
@@ -101,6 +113,10 @@ impl From<LayoutInput> for GeneralLayoutInput {
             LayoutInput::Sets { sets } => Self::Sets(sets),
             #[cfg(feature = "complete")]
             LayoutInput::Words { words } => Self::Words(words),
+            #[cfg(feature = "complete")]
+            LayoutInput::GeoPoints(points) => Self::GeoPoints(points),
+            #[cfg(feature = "complete")]
+            LayoutInput::GeoLinks(links) => Self::GeoLinks(links),
             #[cfg(not(feature = "complete"))]
             LayoutInput::CompleteOnly(_) => Self::Words(Vec::new()),
         }
@@ -118,7 +134,7 @@ struct LayoutSeriesInput {
     data_labels: bool,
     #[serde(default = "default_true")]
     visible: bool,
-    // Hierarchy, network and word cloud options configure complete-build families only.
+    // Hierarchy, network, map and word cloud options configure complete-build families only.
     #[cfg(feature = "complete")]
     #[serde(default)]
     hierarchy_orientation: HierarchyOrientation,
@@ -141,6 +157,9 @@ struct LayoutSeriesInput {
     #[cfg(feature = "complete")]
     #[serde(default)]
     network_view: NetworkView,
+    #[cfg(feature = "complete")]
+    #[serde(default)]
+    map_view: MapView,
     #[cfg(feature = "complete")]
     #[serde(default)]
     word_cloud_min_size: Option<f64>,
@@ -176,6 +195,9 @@ struct LayoutSeriesInput {
     #[cfg(not(feature = "complete"))]
     #[serde(default)]
     network_view: Option<IgnoredAny>,
+    #[cfg(not(feature = "complete"))]
+    #[serde(default)]
+    map_view: Option<IgnoredAny>,
     #[cfg(not(feature = "complete"))]
     #[serde(default)]
     word_cloud_min_size: Option<IgnoredAny>,
@@ -220,6 +242,9 @@ fn layout_kind(kind: &str) -> Option<GeneralLayoutSeriesKind> {
         "network" => Some(GeneralLayoutSeriesKind::Network),
         "venn" => Some(GeneralLayoutSeriesKind::Venn),
         "word_cloud" => Some(GeneralLayoutSeriesKind::WordCloud),
+        "choropleth" => Some(GeneralLayoutSeriesKind::Choropleth),
+        "bubble_map" => Some(GeneralLayoutSeriesKind::BubbleMap),
+        "flow_map" => Some(GeneralLayoutSeriesKind::FlowMap),
         _ => None,
     }
 }
@@ -237,6 +262,8 @@ pub(super) fn layout_element(name: &str) -> Option<GeneralLayoutElement> {
         "pointer" => Some(GeneralLayoutElement::Pointer),
         "region" => Some(GeneralLayoutElement::Region),
         "word" => Some(GeneralLayoutElement::Word),
+        "feature" => Some(GeneralLayoutElement::Feature),
+        "bubble" => Some(GeneralLayoutElement::Bubble),
         _ => None,
     }
 }
@@ -1620,6 +1647,24 @@ fn parse_json<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
         .map_err(|error| input_error(format!("invalid general-chart options: {error}")))
 }
 
+fn parse_layout_input(text: &str) -> Result<GeneralLayoutInput, String> {
+    // An internally tagged enum buffers its whole object before decoding the variant, which
+    // more than doubles the decode time of a map topology; map data is recognized by a skim of
+    // its tag and then decodes in one pass.
+    #[cfg(feature = "complete")]
+    {
+        #[derive(Deserialize)]
+        struct Tag {
+            #[serde(rename = "type")]
+            kind: Option<String>,
+        }
+        if serde_json::from_str::<Tag>(text).is_ok_and(|tag| tag.kind.as_deref() == Some("geo")) {
+            return parse_json::<GeoInput>(text).map(GeneralLayoutInput::Geo);
+        }
+    }
+    parse_json::<LayoutInput>(text).map(Into::into)
+}
+
 fn horizontal_domain(input: DomainInput) -> HorizontalDomain {
     match input {
         DomainInput::FinancialTime => HorizontalDomain::FinancialTime,
@@ -1830,7 +1875,7 @@ impl ChartInner {
         #[cfg(not(feature = "complete"))]
         if kind.requires_complete_build() {
             return result_error(&complete_build_required(
-                "gauge, relationship, and hierarchy layout families",
+                "gauge, relationship, hierarchy, and map layout families",
             ));
         }
         let options = match parse_json::<LayoutSeriesInput>(options_json) {
@@ -1846,6 +1891,7 @@ impl ChartInner {
             options.pinned,
             options.positions,
             options.network_view,
+            options.map_view,
             options.word_cloud_min_size,
             options.word_cloud_max_size,
             options.word_cloud_scaling,
@@ -1855,14 +1901,14 @@ impl ChartInner {
         .any(Option::is_some)
         {
             return result_error(&complete_build_required(
-                "hierarchy, network, and word cloud options",
+                "hierarchy, network, map, and word cloud options",
             ));
         }
-        let input = match parse_json::<LayoutInput>(data_json) {
+        let input = match parse_layout_input(data_json) {
             Ok(value) => value,
             Err(error) => return error,
         };
-        let dataset = match self.engine.create_general_layout_dataset(input.into()) {
+        let dataset = match self.engine.create_general_layout_dataset(input) {
             Ok(id) => id,
             Err(error) => return result_error(&error),
         };
@@ -1881,6 +1927,7 @@ impl ChartInner {
             series_options.pinned = options.pinned;
             series_options.positions = options.positions;
             series_options.network_view = options.network_view;
+            series_options.map_view = options.map_view;
             if let Some(min) = options.word_cloud_min_size {
                 series_options.word_cloud_min_size = min;
             }
@@ -1939,6 +1986,14 @@ impl ChartInner {
                         value["pinned"] = json!(options.pinned);
                         value["positions"] = json!(options.positions);
                         value["network_view"] = json!(options.network_view);
+                    }
+                    if matches!(
+                        options.kind,
+                        GeneralLayoutSeriesKind::Choropleth
+                            | GeneralLayoutSeriesKind::BubbleMap
+                            | GeneralLayoutSeriesKind::FlowMap
+                    ) {
+                        value["map_view"] = json!(options.map_view);
                     }
                     if options.kind == GeneralLayoutSeriesKind::WordCloud {
                         value["word_cloud_min_size"] = json!(options.word_cloud_min_size);
@@ -2008,14 +2063,11 @@ impl ChartInner {
             return input_error("layout series handle is stale");
         };
         let dataset = options.dataset;
-        let input = match parse_json::<LayoutInput>(data_json) {
+        let input = match parse_layout_input(data_json) {
             Ok(value) => value,
             Err(error) => return error,
         };
-        match self
-            .engine
-            .replace_general_layout_dataset(dataset, input.into())
-        {
+        match self.engine.replace_general_layout_dataset(dataset, input) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -2086,6 +2138,9 @@ impl ChartInner {
                         GeneralLayoutSeriesKind::Network => "network",
                         GeneralLayoutSeriesKind::Venn => "venn",
                         GeneralLayoutSeriesKind::WordCloud => "word_cloud",
+                        GeneralLayoutSeriesKind::Choropleth => "choropleth",
+                        GeneralLayoutSeriesKind::BubbleMap => "bubble_map",
+                        GeneralLayoutSeriesKind::FlowMap => "flow_map",
                     },
                 }))
             })
@@ -5054,6 +5109,9 @@ mod tests {
             r#"{"type":"graph","nodes":[{"id":"a","label":"A"}],"edges":[]}"#,
             r#"{"type":"sets","sets":[{"sets":["a"],"size":1.0}]}"#,
             r#"{"type":"words","words":[{"text":"a","weight":1.0}]}"#,
+            r#"{"type":"geo","geojson":{"type":"Point","coordinates":[1,2]}}"#,
+            r#"{"type":"geo_points","points":[{"id":"a","at":[1,2],"value":3}]}"#,
+            r#"{"type":"geo_links","links":[{"source":[1,2],"target":"FR"}],"arrows":true}"#,
         ] {
             let input: LayoutInput = serde_json::from_str(data).unwrap();
             assert!(matches!(input, LayoutInput::CompleteOnly(_)));
@@ -5063,6 +5121,9 @@ mod tests {
         let tuned: LayoutSeriesInput =
             serde_json::from_str(r#"{"pane":0,"hierarchy_orientation":"horizontal"}"#).unwrap();
         assert!(tuned.hierarchy_orientation.is_some());
+        let viewed: LayoutSeriesInput =
+            serde_json::from_str(r#"{"pane":0,"map_view":{"x":0,"y":0,"zoom":2}}"#).unwrap();
+        assert!(viewed.map_view.is_some());
         let patch: LayoutPresentationPatch =
             serde_json::from_str(r#"{"hierarchy_orientation":"vertical"}"#).unwrap();
         assert!(patch.hierarchy_orientation.is_some());
