@@ -1674,6 +1674,18 @@ fn pie_normalized_bounds(dataset: &crate::general_data::GeneralDataset) -> Vec<O
     bounds
 }
 
+/// Widen band bounds to the full category step around their center; transition bounds keep
+/// their own center and scale by the same step-to-band ratio.
+fn fill_category_step((from, to): (f64, f64), scale: &BandScale) -> (f64, f64) {
+    let bandwidth = scale.bandwidth();
+    if bandwidth <= 0.0 {
+        return (from, to);
+    }
+    let center = (from + to) * 0.5;
+    let half = (to - from) * 0.5 * scale.step() / bandwidth;
+    (center - half, center + half)
+}
+
 fn radar_rows_by_category(dataset: &crate::general_data::GeneralDataset) -> HashMap<&str, usize> {
     let mut rows = HashMap::new();
     if let (Some(categories), Some(indices)) = (dataset.categories(), dataset.category_indices()) {
@@ -7117,6 +7129,10 @@ impl ChartEngine {
             let (y0, y1) = self
                 .category_row_motion_bounds(y_axis, series.dataset, row, (y0, y1), y_range)
                 .unwrap_or((y0, y1));
+            // A heat map tiles its categories: each cell spans its whole step around the band
+            // center, so axis band padding positions ticks without opening gaps between cells.
+            let (x0, x1) = fill_category_step((x0, x1), &x_scale);
+            let (y0, y1) = fill_category_step((y0, y1), &y_scale);
             let left = x0.min(x1).clamp(0.0, plot.width);
             let right = x0.max(x1).clamp(0.0, plot.width);
             let top = y0.min(y1).clamp(plot.y, plot_bottom);

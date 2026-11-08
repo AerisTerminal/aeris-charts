@@ -12715,8 +12715,22 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
     assert_eq!(geometry[2].intensity, 1.0);
     assert!(geometry[0].left < geometry[2].left);
     assert!(
-        geometry[0].bottom <= geometry[1].top || geometry[1].bottom <= geometry[0].top,
+        geometry[0].bottom <= geometry[1].top + 1e-9
+            || geometry[1].bottom <= geometry[0].top + 1e-9,
         "distinct Y categories must occupy non-overlapping bands"
+    );
+    // Heat map cells tile their category steps: neighbours share an edge instead of leaving the
+    // bar-style band gap between them.
+    assert!(
+        (geometry[0].bottom - geometry[1].top).abs() < 1e-9
+            || (geometry[1].bottom - geometry[0].top).abs() < 1e-9,
+        "vertically adjacent cells touch: {:?} {:?}",
+        (geometry[0].top, geometry[0].bottom),
+        (geometry[1].top, geometry[1].bottom)
+    );
+    assert!(
+        (geometry[0].right - geometry[2].left).abs() < 1e-9,
+        "horizontally adjacent cells touch"
     );
 
     let mut fixed = GeneralSeriesOptions::heatmap_grid(pane, dataset, "heat-x", "heat-y");
@@ -12812,9 +12826,12 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
             first.right + 0.25,
             center_y,
             crate::GeneralHitMode::Exact
-        ),
-        None,
-        "band padding after the cell must not be claimed as painted"
+        )
+        .map(|hit| hit.1),
+        Some(GeneralRowIdentity::Explicit(GeneralRowId::Text(
+            "feb-north".into()
+        ))),
+        "past the cell edge is the tiled neighbour, not an unpainted band gap"
     );
     let missing_center = (
         (geometry[2].left + geometry[2].right) * 0.5,
@@ -12838,33 +12855,27 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
         (south, north)
     };
     assert!(
-        lower.top > upper.bottom,
-        "adjacent category bands must have a gap"
+        (lower.top - upper.bottom).abs() < 1e-9,
+        "adjacent category rows share an edge: upper={upper:?}, lower={lower:?}"
     );
     let expected_id = |row: usize| {
         GeneralRowIdentity::Explicit(GeneralRowId::Text(
             if row == 0 { "jan-north" } else { "jan-south" }.into(),
         ))
     };
-    let near_upper = upper.bottom + (lower.top - upper.bottom) * 0.2;
-    let near_lower = upper.bottom + (lower.top - upper.bottom) * 0.8;
+    let near_upper = upper.bottom - 0.5;
+    let near_lower = lower.top + 0.5;
     for (y, row) in [(near_upper, upper.row), (near_lower, lower.row)] {
-        assert_eq!(
-            cell_hit(&chart, center_x, y, crate::GeneralHitMode::Exact),
-            None,
-            "unpainted space between rows has no exact cell: upper={upper:?}, lower={lower:?}, y={y}"
-        );
-        assert_eq!(
-            cell_hit(
-                &chart,
-                center_x,
-                y,
-                crate::GeneralHitMode::Nearest { max_distance: 20.0 }
-            )
-            .map(|hit| hit.1),
-            Some(expected_id(row)),
-            "nearest must choose the adjacent row's stable ID"
-        );
+        for mode in [
+            crate::GeneralHitMode::Exact,
+            crate::GeneralHitMode::Nearest { max_distance: 20.0 },
+        ] {
+            assert_eq!(
+                cell_hit(&chart, center_x, y, mode).map(|hit| hit.1),
+                Some(expected_id(row)),
+                "either side of the shared edge hits its own row: y={y}"
+            );
+        }
     }
     let other = chart
         .add_general_series(GeneralSeriesOptions::heatmap_grid(
@@ -12928,12 +12939,15 @@ fn category_heatmap_grid_owns_two_category_axes_geometry_hits_and_retention() {
     } else {
         (viewed_south, viewed_first)
     };
-    for (fraction, row) in [(0.2, upper.row), (0.8, lower.row)] {
+    for (y, row) in [
+        (upper.bottom - 0.5, upper.row),
+        (lower.top + 0.5, lower.row),
+    ] {
         assert_eq!(
             cell_hit(
                 &chart,
                 (upper.left + upper.right) * 0.5,
-                upper.bottom + (lower.top - upper.bottom) * fraction,
+                y,
                 crate::GeneralHitMode::Nearest { max_distance: 20.0 }
             ),
             Some((series, expected_id(row))),

@@ -14,12 +14,16 @@ axes with optional independent bounds on either axis, plus category band/point X
 `box_plot` uses category-band X with numeric Y and requires a complete ordered
 `min <= q1 <= median <= q3 <= max` row for visible geometry. All forms require their center/value channels
 for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
-coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Polar families are
+coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Heatmap cells tile their
+whole category step with a 1 CSS px seam that shows the chart background, so axis band padding
+never opens gaps between cells. Polar families are
 implemented. Funnel, treemap, Sankey and sunburst have a public layout-pane API, validated inputs,
 shared-frame geometry and exact hits. Their interaction, persistence, accessibility and transition
 contracts shipped in G7; full competitor and manual parity evidence remains G8 work.
 Defaults follow pinned Recharts 3.10.1. Treemap uses Recharts squarify tiling, one flat series
-fill with a 1 CSS px white stroke, and 14 px cell names where they fit. Treemap leaves may carry a
+fill separated by a 1 CSS px seam that shows the chart background (no white stroke), and 14 px cell
+names where they fit. Calendar heatmap days use the same seam, with wider background seams between
+months. Treemap leaves may carry a
 signed `color_value` (for example a daily percent change) as an opt-in: when any leaf has one,
 cells shade from a neutral gray toward green for gains and red for losses by magnitude relative to
 the largest change. Sankey uses Recharts' layout defaults (5 px margin, 10 px nodes and padding,

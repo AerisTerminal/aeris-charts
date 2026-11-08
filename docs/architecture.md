@@ -167,9 +167,10 @@ Hierarchy and flow defaults follow pinned Recharts 3.10.1 `Treemap`, `Sankey` an
 remainder on each row's last cell, a flush final row, no inset or gap) over the plot rectangle.
 A per-series cache keyed by the plot rectangle keeps frame construction, exact leaf hits and
 focus positions on identical `f64` geometry and is cleared atomically when the hierarchy changes.
-Zero-weight leaves emit no mark. The frame paints one white backdrop and every leaf in the
-series' flat fill, inset so a centered 1 CSS px white stroke separates cells, plus Recharts' 14 px
-left-aligned name where it fits. A leaf's signed `color_value` remains an opt-in that shades it
+Zero-weight leaves emit no mark. The frame paints every leaf in the series' flat fill with no
+backdrop: the shared `frame::seamed_cell_rect` insets each cell so a 1 CSS px seam shows the chart
+background between neighbours, as the heatmap grid and calendar heatmap cells do, plus Recharts'
+14 px left-aligned name where it fits. A leaf's signed `color_value` remains an opt-in that shades it
 between fixed neutral, up and down colors by magnitude.
 Sankey series run Recharts `computeData` with its defaults: a 5 CSS px margin, 10 px nodes and
 padding, longest-path columns with sinks justified to the last column, a shared value-to-pixel
@@ -210,9 +211,10 @@ whole UTC years (at most ten); its accessibility items are every day offset from
 covered January 1, with `NaN` semantic values for days without data, so keyboard navigation moves
 by exactly one day or week across gaps. Its snapshot carries `grid_stride: 7`; the browser
 controller then maps Left/Right to one week and Up/Down to one day instead of switching series.
-Day cells snap to whole pixels, empty days paint the chart surface and have no hit, and month
-outlines, localized month names, host-supplied weekday labels and a continuous color legend are
-ordered-frame marks. `general_layout/mosaic.rs` sizes Marimekko columns by column total and
+Day cells snap to whole pixels with the shared 1 CSS px background seam and no cell frame, empty
+days paint a neutral tile in the grid color and have no hit, and month boundaries are 2 CSS px
+seams in the chart background; they, localized month names, host-supplied weekday labels and a
+continuous color legend are ordered-frame marks. `general_layout/mosaic.rs` sizes Marimekko columns by column total and
 segments by share, in first-appearance order, and paints an in-canvas legend with one entry per
 segment because the series-level legend toggles whole series, not segments. These three families
 have no value transitions; updates apply immediately.
@@ -728,11 +730,13 @@ the X registry and the ordinary numeric value/validity column remains cell inten
 temporal X heatmaps instead add one aligned numeric Y-coordinate column while reusing the ordinary numeric/temporal
 X column. Category registries validate, merge, remap, trim, and compact inside the same atomic update transaction.
 Automatic domains union category registries or numeric/temporal coordinate extents as appropriate. One shared cell
-geometry path maps band grids directly and infers numeric/temporal cell boundaries from neighboring coordinate
+geometry path maps band grids so each cell fills its whole category step around the band center (axis band
+padding places ticks, never gaps) and infers numeric/temporal cell boundaries from neighboring coordinate
 centers, derives deterministic normalized value intensity from visible valid cells or a persisted
 finite increasing `heatmap_value_domain`, then interpolates optional CSS low/high color endpoints
 in the shared frame (retaining the existing default palette), and drives exact/nearest rectangle
-hits and labels, and lowers every cell to the ordered `Rect` primitive. Missing values remain queryable and
+hits and labels, and lowers every cell to the ordered `Rect` primitive with the shared 1 CSS px background
+seam (cells too small to spare it stay solid). Missing values remain queryable and
 accessible but emit no cell. Tooltip/accessibility snapshots expose both X and Y labels, explicit-ID updates and
 retention keep coordinate/value channels aligned, and V2 persistence round-trips every heatmap coordinate shape.
 

@@ -1,5 +1,5 @@
 //! Calendar heatmap layout: one block of week columns and weekday rows per UTC calendar year,
-//! month outlines, locale month and weekday labels, and a continuous color legend that shares
+//! background seams between days and months, locale month and weekday labels, and a continuous color legend that shares
 //! the heatmap color policy.
 //!
 //! Dates follow an explicit UTC policy: a day is `floor(epoch_ms / 86_400_000)` regardless of the
@@ -16,7 +16,7 @@ use super::{
     GeneralLayoutAccessibilityItem, GeneralLayoutElement, GeneralLayoutHit, LayoutSeriesEntry,
     add_text_bytes, invalid_data, layout_irect, layout_value_text, resource_limit, validate_rows,
 };
-use crate::frame::interpolate_color;
+use crate::frame::{interpolate_color, seamed_cell_rect};
 use crate::general_axes::GeneralPlotRect;
 use crate::{ChartEngine, ChartError, GeneralLayoutSeriesId, MAX_GENERAL_TEMPORAL_MILLISECONDS};
 
@@ -480,8 +480,7 @@ impl ChartEngine {
         let text_color = self.primary_text_color();
         let (low, high) = color_scale(series.color, input);
         let extent = value_extent(values);
-        let frame_width = hpr.min(vpr).round().max(1.0) as i32;
-        let line_width = hpr.min(vpr) as f32;
+        let line_width = (2.0 * hpr.min(vpr)) as f32;
         let labels = day_labels(self.language, input);
         let cell = geometry.cell;
         for index in 0..geometry.range.years {
@@ -496,16 +495,7 @@ impl ChartEngine {
                 let Some((x, y)) = geometry.position(day) else {
                     continue;
                 };
-                let Some(rect) = layout_irect(
-                    GeneralPlotRect {
-                        x,
-                        y,
-                        width: cell,
-                        height: cell,
-                    },
-                    hpr,
-                    vpr,
-                ) else {
+                let Some(rect) = seamed_cell_rect((x, y, x + cell, y + cell), hpr, vpr) else {
                     continue;
                 };
                 let value = values
@@ -516,14 +506,10 @@ impl ChartEngine {
                     Some(extent) if !value.is_nan() => {
                         interpolate_color(low, high, intensity(value, extent))
                     }
-                    _ => surface,
+                    // Empty days keep a neutral tile so the year grid stays legible.
+                    _ => border,
                 };
                 out.push(Prim::Rect { rect, color: fill });
-                out.push(Prim::RectFrame {
-                    rect,
-                    border: frame_width,
-                    color: border,
-                });
             }
             for month in 1..=12 {
                 let Some(first) = days_from_civil(year, month, 1) else {
@@ -557,13 +543,14 @@ impl ChartEngine {
                     point(first_column, 7),
                     point(first_column, first_row),
                 ]);
+                // Months part with a wider seam in the chart background, like sector groups.
                 out.push(Prim::Polyline {
                     first_point,
                     point_count: 9,
                     width: line_width,
                     style: LineStyle::Solid,
                     line_type: LineType::Simple,
-                    color: text_color,
+                    color: surface,
                 });
                 let name = &self.month_names.short[(month - 1) as usize];
                 if self.measure_text_run(name, TEXT_SIZE, family, 400, false) <= 4.0 * cell {

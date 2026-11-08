@@ -60,9 +60,9 @@ pub(crate) use drawings::stat_label_height;
 #[cfg(test)]
 pub(crate) use footprint_geometry::{DETAIL_ROW_PADDING, ROW_HEIGHT_CAP, footprint_summary_height};
 pub(crate) use footprint_geometry::{HISTOGRAM_ALPHA, SINGLE_IMBALANCE_ALPHA};
-pub(crate) use general_series_geometry::interpolate_color;
 #[cfg(feature = "complete")]
 pub(crate) use general_series_geometry::push_general_point_symbol;
+pub(crate) use general_series_geometry::{interpolate_color, seamed_cell_rect};
 
 #[cfg(test)]
 use conflation::{visible_histogram_rows, visible_ohlc};

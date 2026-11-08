@@ -1616,8 +1616,6 @@ fn treemap_cache(nodes: &[HierarchyNode], plot: GeneralPlotRect) -> TreemapCache
 
 /// Recharts `Treemap` default `aspectRatio`, the golden ratio `0.5 * (1 + sqrt(5))`.
 const TREEMAP_ASPECT_RATIO: f64 = std::f64::consts::GOLDEN_RATIO;
-/// Recharts' default node `stroke="#fff"` at the SVG default 1 px width.
-const TREEMAP_STROKE: Color = Color(0xFFFF_FFFF);
 const TREEMAP_UP: Color = Color(0x0899_81FF);
 const TREEMAP_DOWN: Color = Color(0xF236_45FF);
 const TREEMAP_FLAT: Color = Color(0x4246_4FFF);
@@ -3468,39 +3466,14 @@ impl ChartEngine {
                 && let GeneralLayoutInput::Hierarchy(nodes) = entry.display_input()
             {
                 let color_range = treemap_color_range(nodes);
-                // A centered 1 px SVG stroke on every cell edge: each cell gives up the low half
-                // on its leading edges and the high half on its trailing edges.
-                let stroke_x = hpr.round().max(1.0) as i32;
-                let stroke_y = vpr.round().max(1.0) as i32;
-                let (lead_x, trail_x) = (stroke_x / 2, stroke_x - stroke_x / 2);
-                let (lead_y, trail_y) = (stroke_y / 2, stroke_y - stroke_y / 2);
                 series.with_treemap_cache(nodes, plot, |cache| {
-                    if !cache.shapes.is_empty() {
-                        let x0 = (plot.x * hpr).round() as i32;
-                        let y0 = (plot.y * vpr).round() as i32;
-                        out.push(Prim::Rect {
-                            rect: IRect {
-                                x: x0,
-                                y: y0,
-                                w: ((plot.x + plot.width) * hpr).round() as i32 - x0,
-                                h: ((plot.y + plot.height) * vpr).round() as i32 - y0,
-                            },
-                            color: TREEMAP_STROKE,
-                        });
-                    }
                     for shape in &cache.shapes {
-                        let x0 = (shape.rect.x * hpr).round() as i32 + lead_x;
-                        let y0 = (shape.rect.y * vpr).round() as i32 + lead_y;
-                        let x1 = ((shape.rect.x + shape.rect.width) * hpr).round() as i32 - trail_x;
-                        let y1 =
-                            ((shape.rect.y + shape.rect.height) * vpr).round() as i32 - trail_y;
-                        if x1 > x0 && y1 > y0 {
-                            let rect = IRect {
-                                x: x0,
-                                y: y0,
-                                w: x1 - x0,
-                                h: y1 - y0,
-                            };
+                        let r = shape.rect;
+                        if let Some(rect) = crate::frame::seamed_cell_rect(
+                            (r.x, r.y, r.x + r.width, r.y + r.height),
+                            hpr,
+                            vpr,
+                        ) {
                             let fill =
                                 treemap_cell_color(series.color, nodes, shape.row, color_range);
                             out.push(Prim::Rect { rect, color: fill });
@@ -5527,8 +5500,8 @@ mod tests {
                 .iter()
                 .filter(|prim| matches!(prim, Prim::Rect { .. }))
                 .count(),
-            4,
-            "white stroke backdrop plus three cells"
+            3,
+            "three cells and no backdrop"
         );
         let plot = chart.general_plot_rect(0).unwrap();
         let shapes = treemap_shapes(&hierarchy(&[3.0, 2.0, 1.0]), plot);
@@ -5557,8 +5530,8 @@ mod tests {
                 .iter()
                 .filter(|prim| matches!(prim, Prim::Rect { .. }))
                 .count(),
-            2,
-            "white stroke backdrop plus the one weighted cell"
+            1,
+            "only the one weighted cell, no backdrop"
         );
         assert_eq!(
             chart.general_layout_hit_test(0, plot.x + plot.width / 2.0, plot.y + plot.height / 2.0),
@@ -5771,23 +5744,19 @@ mod tests {
                 .collect::<Vec<(IRect, Color)>>()
         };
         let flat = rects(hierarchy(&[3.0, 2.0, 1.0]));
-        assert_eq!(flat.len(), 4);
-        assert_eq!(
-            flat[0].1, TREEMAP_STROKE,
-            "white stroke backdrop comes first"
-        );
+        assert_eq!(flat.len(), 3, "cells only, no backdrop: {flat:?}");
         let series = Color::parse_css("#4c8bf5").unwrap();
         assert!(
-            flat[1..].iter().all(|(_, color)| *color == series),
-            "Recharts paints every cell with the one flat fill: {flat:?}"
+            flat.iter().all(|(_, color)| *color == series),
+            "every cell uses the one flat fill: {flat:?}"
         );
-        for (index, (a, _)) in flat[1..].iter().enumerate() {
-            for (b, _) in flat[1..].iter().skip(index + 1) {
+        for (index, (a, _)) in flat.iter().enumerate() {
+            for (b, _) in flat.iter().skip(index + 1) {
                 let gap_x = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
                 let gap_y = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
                 assert!(
                     gap_x == 1 || gap_y == 1,
-                    "1 px stroke between {a:?} and {b:?}"
+                    "1 px background seam between {a:?} and {b:?}"
                 );
             }
         }
@@ -5796,7 +5765,7 @@ mod tests {
         for (node, change) in nodes.iter_mut().skip(1).zip([2.0, -1.0, 0.0]) {
             node.color_value = Some(change);
         }
-        let colors: Vec<Color> = rects(nodes)[1..].iter().map(|(_, color)| *color).collect();
+        let colors: Vec<Color> = rects(nodes).iter().map(|(_, color)| *color).collect();
         assert_eq!(colors.len(), 3);
         assert!(
             colors.contains(&TREEMAP_UP),
@@ -7302,6 +7271,97 @@ mod tests {
         assert!((y - scrolled - 28.0).abs() < 1e-9);
     }
 
+    #[test]
+    fn heat_map_cells_keep_a_one_css_pixel_background_seam_and_dense_cells_stay_solid() {
+        let seam = crate::frame::seamed_cell_rect;
+        // 1x: neighbours give up the trailing device pixel, leaving one background pixel.
+        let a = seam((0.0, 0.0, 10.0, 10.0), 1.0, 1.0).unwrap();
+        let b = seam((10.0, 0.0, 20.0, 10.0), 1.0, 1.0).unwrap();
+        assert_eq!((a.x, a.w, b.x, b.w), (0, 9, 10, 9));
+        assert_eq!(b.x - (a.x + a.w), 1);
+        // 2x: the seam stays one CSS pixel, split one device pixel per side.
+        let a = seam((0.0, 0.0, 10.0, 10.0), 2.0, 2.0).unwrap();
+        let b = seam((10.0, 0.0, 20.0, 10.0), 2.0, 2.0).unwrap();
+        assert_eq!((a.x, a.w, b.x), (1, 18, 21));
+        assert_eq!(b.x - (a.x + a.w), 2);
+        // Cells too small to spare a seam stay solid instead of vanishing into the background.
+        assert_eq!(
+            seam((0.0, 0.0, 2.0, 2.0), 1.0, 1.0).map(|r| (r.w, r.h)),
+            Some((2, 2))
+        );
+        assert_eq!(
+            seam((0.0, 0.0, 0.2, 0.2), 1.0, 1.0).map(|r| (r.w, r.h)),
+            Some((1, 1))
+        );
+    }
+
+    #[test]
+    fn calendar_heatmap_has_no_cell_frames_and_parts_months_with_background_seams() {
+        const DAY: f64 = 86_400_000.0;
+        let day = |month, day| {
+            aeris_charts_core::scale::time_tick_marks::days_from_civil(2024, month, day).unwrap()
+                as f64
+                * DAY
+        };
+        let mut chart =
+            ChartEngine::new_with_initial_domain(900.0, 300.0, 1.0, HorizontalDomain::Layout)
+                .unwrap();
+        let dataset = chart
+            .create_general_layout_dataset(GeneralLayoutInput::Calendar(CalendarInput {
+                days: vec![
+                    CalendarDay {
+                        date: day(1, 3),
+                        value: 4.0,
+                    },
+                    CalendarDay {
+                        date: day(2, 9),
+                        value: 9.0,
+                    },
+                ],
+                week_start: 0,
+                day_labels: Vec::new(),
+                low_color: None,
+                high_color: None,
+            }))
+            .unwrap();
+        chart
+            .add_general_layout_series(GeneralLayoutSeriesOptions::new(
+                0,
+                dataset,
+                GeneralLayoutSeriesKind::CalendarHeatmap,
+            ))
+            .unwrap();
+        let frame = laid_out(&mut chart);
+        let surface = chart.chart_surface_color();
+        let main = &frame.panes[0].main;
+        assert!(
+            !main
+                .iter()
+                .any(|prim| matches!(prim, Prim::RectFrame { .. })),
+            "day cells carry no frame"
+        );
+        let outlines: Vec<Color> = main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Polyline { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outlines.len(), 12);
+        assert!(
+            outlines.iter().all(|color| *color == surface),
+            "month boundaries are seams in the chart background: {outlines:?}"
+        );
+        assert!(
+            main.iter()
+                .filter_map(|prim| match prim {
+                    Prim::Rect { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .all(|color| color != surface),
+            "empty days keep a visible tile"
+        );
+    }
     #[test]
     fn calendar_heatmap_is_utc_week_start_and_locale_aware_with_day_and_week_items() {
         const DAY: f64 = 86_400_000.0;

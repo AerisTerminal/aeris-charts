@@ -77,6 +77,35 @@ fn general_fill_gradient(series: &GeneralSeries) -> Option<Gradient> {
     })
 }
 
+/// Device-pixel cell of a tiled heat map (heatmap grid, treemap, calendar). Neighbours keep a
+/// one-CSS-pixel seam that shows the chart background, split between the leading and trailing
+/// edges so adjacent cells give up equal halves. An axis whose cell is too small to spare the
+/// seam drops it there, so dense grids stay solid instead of turning into background.
+pub(crate) fn seamed_cell_rect(
+    (left, top, right, bottom): (f64, f64, f64, f64),
+    hpr: f64,
+    vpr: f64,
+) -> Option<IRect> {
+    let axis = |from: f64, to: f64, ratio: f64| {
+        let start = (from * ratio).round() as i32;
+        let end = (to * ratio).round() as i32;
+        let seam = ratio.round().max(1.0) as i32;
+        if end - start > 3 * seam {
+            (start + seam / 2, end - (seam - seam / 2))
+        } else {
+            (start, end.max(start + 1))
+        }
+    };
+    let (x0, x1) = axis(left, right, hpr);
+    let (y0, y1) = axis(top, bottom, vpr);
+    (x1 > x0 && y1 > y0).then_some(IRect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
 pub(crate) fn interpolate_color(low: Color, high: Color, intensity: f64) -> Color {
     let t = intensity.clamp(0.0, 1.0);
     let channel = |from: u8, to: u8| (from as f64 + (to as f64 - from as f64) * t).round() as u8;
@@ -2609,12 +2638,13 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or_else(|| base_color.unwrap_or(Color::rgba(0, 255, 100, 255)));
                     self.visit_general_heatmap_cells(series, |geometry| {
-                        let left = (geometry.left * hpr).round() as i32;
-                        let right = (geometry.right * hpr).round() as i32;
-                        let top = (geometry.top * vpr).round() as i32;
-                        let bottom = (geometry.bottom * vpr).round() as i32;
-                        let width = (right - left).max(1);
-                        let height = (bottom - top).max(1);
+                        let Some(cell) = seamed_cell_rect(
+                            (geometry.left, geometry.top, geometry.right, geometry.bottom),
+                            hpr,
+                            vpr,
+                        ) else {
+                            return;
+                        };
                         let color = if series.heatmap_low_color().is_none()
                             && series.heatmap_high_color().is_none()
                         {
@@ -2641,12 +2671,7 @@ impl ChartEngine {
                             interpolate_color(low, high, geometry.intensity)
                         };
                         out.push(Prim::Rect {
-                            rect: IRect {
-                                x: left,
-                                y: top,
-                                w: width,
-                                h: height,
-                            },
+                            rect: cell,
                             color: dataset.row_color(geometry.row).unwrap_or(color),
                         });
                         push_label(
@@ -2662,12 +2687,7 @@ impl ChartEngine {
                             self.general_row_interaction(series.id(), geometry.row);
                         if hovered || selected {
                             interaction[slot] = Some(Prim::RectFrame {
-                                rect: IRect {
-                                    x: left,
-                                    y: top,
-                                    w: width,
-                                    h: height,
-                                },
+                                rect: cell,
                                 border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
                                     .round()
                                     .max(1.0) as i32,
