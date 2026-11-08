@@ -23,8 +23,8 @@ const MAX_SIDE_SHARE: f64 = 0.25;
 const MAX_PANE_SHARE: f64 = 0.3;
 /// Opacity of a hidden series' entry, matching the browser legend's dimmed buttons. A hidden
 /// entry is still an operable toggle, so its faded theme text keeps WCAG AA 4.5:1 on both theme
-/// surfaces; 0.56 is the lowest opacity that does so on the light surface.
-const HIDDEN_OPACITY: f64 = 0.56;
+/// surfaces; 0.61 is the lowest opacity that does so for the dark `#c1c1c1` text on black.
+const HIDDEN_OPACITY: f64 = 0.61;
 /// Extra pointer slack around an entry so the gap between marker and text is never a dead zone.
 const HIT_SLACK: f64 = 4.0;
 

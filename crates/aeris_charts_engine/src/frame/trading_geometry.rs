@@ -1505,7 +1505,6 @@ impl ChartEngine {
             weight: 400,
             italic: false,
         });
-        out.push(popover.highlight_prim(rect, radius.round(), border));
     }
 
     /// One execution mark centered on `(x_device, mark.y)`, drawn as open strokes with

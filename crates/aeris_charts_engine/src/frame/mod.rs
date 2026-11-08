@@ -234,14 +234,13 @@ pub(crate) fn series_marker_prim(
     }
 }
 
-/// Floating-layer chrome for tooltips, from the painted theme's popover tokens: an opaque
-/// `--surface-popover` fill inside a `--border-popover` hairline, `--text-default` and
-/// `--text-secondary` text, and a 1 px `--border-popover-highlight` inner edge that paints above
-/// the content (see [`PopoverTokens::highlight_prim`]).
+/// Floating-layer chrome for tooltips and floating cards, matching the platform tooltip in the
+/// painted theme: one box filled with `--surface-secondary` inside a 1 px `--border-secondary`
+/// edge, with `--text-default` and `--text-secondary` text. The border and secondary text are
+/// opaque projections over that fill.
 pub(crate) struct PopoverTokens {
     pub(crate) surface: Color,
     pub(crate) border: Color,
-    pub(crate) highlight: Color,
     pub(crate) foreground: Color,
     pub(crate) muted: Color,
 }
@@ -249,20 +248,16 @@ pub(crate) struct PopoverTokens {
 impl PopoverTokens {
     pub(crate) fn for_theme(theme: crate::ChartTheme) -> Self {
         use aeris_charts_core::style::*;
-        let (surface, border, (hr, hg, hb), alpha, foreground, muted) = match theme {
+        let (surface, border, foreground, muted) = match theme {
             crate::ChartTheme::Light => (
-                LIGHT_POPOVER_SURFACE_RGB,
+                LIGHT_MUTED_RGB,
                 LIGHT_POPOVER_BORDER_RGB,
-                LIGHT_POPOVER_HIGHLIGHT_RGB,
-                LIGHT_POPOVER_HIGHLIGHT_ALPHA,
                 LIGHT_FOREGROUND_RGB,
                 LIGHT_POPOVER_MUTED_FOREGROUND_RGB,
             ),
             crate::ChartTheme::Dark => (
-                DARK_POPOVER_SURFACE_RGB,
+                DARK_MUTED_RGB,
                 DARK_POPOVER_BORDER_RGB,
-                DARK_POPOVER_HIGHLIGHT_RGB,
-                DARK_POPOVER_HIGHLIGHT_ALPHA,
                 DARK_FOREGROUND_RGB,
                 DARK_POPOVER_MUTED_FOREGROUND_RGB,
             ),
@@ -271,29 +266,8 @@ impl PopoverTokens {
         Self {
             surface: rgb(surface),
             border: rgb(border),
-            highlight: Color::rgba(hr, hg, hb, alpha),
             foreground: rgb(foreground),
             muted: rgb(muted),
-        }
-    }
-
-    /// The inner highlight of a popover box drawn at device `(x, y, w, h)` with corner `radius`
-    /// and an outer border `border` device px wide. Push it after the box's content.
-    pub(crate) fn highlight_prim(
-        &self,
-        (x, y, w, h): (f32, f32, f32, f32),
-        radius: f32,
-        border: f32,
-    ) -> Prim {
-        Prim::RoundRect {
-            x: x + border,
-            y: y + border,
-            w: (w - border * 2.0).max(0.0),
-            h: (h - border * 2.0).max(0.0),
-            radii: [(radius - border).max(0.0); 4],
-            fill: Color::rgba(0, 0, 0, 0),
-            border_width: border,
-            border_color: self.highlight,
         }
     }
 }

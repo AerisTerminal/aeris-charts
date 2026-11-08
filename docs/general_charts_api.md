@@ -257,7 +257,7 @@ series color or default line color).
 General hover is drawn by the engine by default. Cartesian panes with an index-axis series hover the nearest
 X datum or category band, like Recharts' axis tooltip: the chart paints a cursor line in the crosshair
 `vertLine` style (a horizontal line for horizontal bars), an active dot on each line and area at that datum,
-and a popover tooltip with the date or category header and one colored row per shared item. Other panes
+and a floating tooltip with the date or category header and one colored row per shared item. Other panes
 describe the item under the pointer. `chart.apply_options({ generalTooltip: { visible: false } })` hides the
 tooltip; `crosshair.vertLine.visible` controls the cursor. Like Recharts, the tooltip sits 10 px from the
 anchor, flips to the other side when it would cross the plot edge, and stays inside the chart surface; it

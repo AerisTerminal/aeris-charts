@@ -156,17 +156,17 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "dark",
     control: "dark",
-    surface: "#171717",
-    header: "rgb(23, 23, 23)",
-    chart: "#171717",
-    axis_text: "#fafafa",
-    axis_border: "#2e2e2e",
-    grid: "#2e2e2e",
-    border_control: "#2e2e2e",
+    surface: "#000000",
+    header: "rgb(0, 0, 0)",
+    chart: "#000000",
+    axis_text: "#c1c1c1",
+    axis_border: "#2c2c2c",
+    grid: "#2c2c2c",
+    border_control: "#2c2c2c",
     crosshair_control: "#fafafa",
-    crosshair_label_control: "#242424",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    crosshair_label_control: "#171717",
+    bullish: "#0b9981",
+    bearish: "#f23645",
   });
 
   await page.click('#tool_rail [data-panel-target="appearance"]');
@@ -183,9 +183,9 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     grid: "#cecece",
     border_control: "#cecece",
     crosshair_control: "#0a0a0a",
-    crosshair_label_control: "#242424",
-    bullish: "#089981",
-    bearish: "#f7525f",
+    crosshair_label_control: "#171717",
+    bullish: "#0b9981",
+    bearish: "#f23645",
   });
 });
 
@@ -194,11 +194,10 @@ test("portable design tokens and disabled controls match the brand contract", as
   await wait_grid(page);
 
   const brand_tokens = [
-    "surface", "surface-secondary", "surface-popover",
-    "border", "border-secondary", "border-subtle", "border-popover", "border-popover-highlight", "border-width",
+    "surface", "surface-secondary", "surface-backdrop",
+    "border", "border-secondary", "border-subtle", "border-width",
     "text-default", "text-secondary", "text-muted", "text-positive", "text-negative", "text-danger",
-    "text-warning", "text-interactive", "text-hover", "text-active", "hover-bg", "active-bg", "disabled-bg", "icon",
-    "icon-active", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
+    "text-warning", "hover-bg", "active-bg", "disabled-bg", "positive", "positive-subtle", "negative", "negative-subtle", "warning", "warning-subtle", "indigo",
     "indigo-subtle", "purple", "purple-subtle", "primary", "primary-hover", "primary-active", "primary-disabled",
     "primary-disabled-foreground", "primary-subtle", "primary-foreground", "danger", "danger-hover", "danger-disabled",
     "danger-disabled-foreground", "danger-ring", "danger-foreground", "warning-hover", "warning-foreground", "button-fill",
@@ -213,7 +212,8 @@ test("portable design tokens and disabled controls match the brand contract", as
   const retired = [
     "primary-ring", "ring", "radius-button", "text-primary", "surface-subtle", "surface-raised", "surface-overlay",
     "surface-inverse", "border-softer", "border-strong", "border-inverse", "shadow-1", "shadow-2", "shadow-3",
-    "shadow-dialog",
+    "shadow-dialog", "surface-popover", "border-popover", "border-popover-highlight", "text-interactive",
+    "text-hover", "text-active", "icon", "icon-active",
   ];
   const tokens = () => page.evaluate((names) => {
     const style = getComputedStyle(document.documentElement);
@@ -223,11 +223,11 @@ test("portable design tokens and disabled controls match the brand contract", as
   const dark = await tokens();
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
-    surface: "#171717", "surface-secondary": "#fafafa0f", "surface-popover": "#262626", border: "#fafafa1a",
-    "border-secondary": "#fafafa26", "hover-bg": "#fafafa13", "active-bg": "#fafafa26",
-    "border-width": "1px", "text-default": "#fafafa", "text-secondary": "#fafafa8c", "text-muted": "#fafafa40",
-    "text-hover": "#fafafa", "icon-active": "#fafafa", "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    surface: "#000000", "surface-secondary": "#171717", "surface-backdrop": "#262626", border: "#2c2c2c",
+    "border-secondary": "#404040", "hover-bg": "#fafafa1f", "active-bg": "#fafafa26",
+    "border-width": "1px", "text-default": "#c1c1c1", "text-secondary": "#fafafa8c", "text-muted": "#fafafa59",
+    "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#0b9981", "text-negative": "#f23645", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#0b9981", bearish: "#f23645",
     "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
@@ -238,13 +238,13 @@ test("portable design tokens and disabled controls match the brand contract", as
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
-    surface: "#ffffff", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a9a",
-    "text-muted": "#0a0a0a40", "text-positive": "#089981", "text-negative": "#f7525f", primary: "#006edd",
-    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#089981", bearish: "#f7525f",
+    surface: "#ffffff", "surface-backdrop": "#e5e5e5", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
+    "text-muted": "#0a0a0a40", "text-positive": "#0b9981", "text-negative": "#f23645", primary: "#006edd",
+    "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#0b9981", bearish: "#f23645",
     "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d",
     "border-width": "1px", "warning-hover": "#e05c00", "warning-foreground": "#ffffff",
-    "border-secondary": "#0a0a0a1a", "hover-bg": "#0a0a0a0d", "active-bg": "#0a0a0a0d",
+    "border-secondary": "#0a0a0a33", "hover-bg": "#0a0a0a14", "active-bg": "#0a0a0a1f",
     "sell-active": "#c9303c", "book-fill-text": "#000000",
   });
   const stale = await page.evaluate((names) => {
@@ -401,13 +401,13 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await type_of(0), "primary cell untouched").toBe("candlestick");
   // The area fill style group appears for the area-typed active chart.
   await expect(page.locator("#area_style")).toBeVisible();
-  await expect(page.locator("#area_top")).toHaveValue("#089981");
+  await expect(page.locator("#area_top")).toHaveValue("#0b9981");
   expect(await page.evaluate(() => {
     const options = window.__grid.cells()[1].chart.__seed_series.options();
     return [options.color, options.area_top_color, options.area_bottom_color];
     // The toolbar sets the series color; the engine derives the fill at the canonical strength, so
     // no opaque explicit fill is written.
-  })).toEqual(["#089981", "", ""]);
+  })).toEqual(["#0b9981", "", ""]);
 
   // The toolbar tracks the active cell: back on the primary, its type is selected again and
   // changes land there instead.
@@ -448,7 +448,7 @@ test("demo theme persists across reloads while runtime fixtures stay determinist
   await page.reload();
   await wait_grid(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#171717");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#000000");
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);

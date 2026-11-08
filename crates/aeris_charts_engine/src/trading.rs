@@ -5110,8 +5110,9 @@ mod tests {
                 _ => None,
             })
             .expect("tooltip box");
-        // A floating layer, not the object's chrome: the box takes the painted theme's popover
-        // tokens, never the position's buy/sell color, and its highlight edge paints over the text.
+        // A floating layer, not the object's chrome: the box is the platform tooltip in the
+        // painted theme (`--surface-secondary` inside a `--border-secondary` edge), never the
+        // position's buy/sell color.
         let position_color = chart.trading_position_color(PositionSide::Long);
         assert_ne!(border_color, position_color);
         assert_ne!(fill, position_color.solid());
@@ -5127,9 +5128,10 @@ mod tests {
                 )
             })
             .expect("tooltip text in the popover foreground");
-        assert!(trading[text_index..].iter().any(|primitive| matches!(
+        // One box under the text: no second edge or inner highlight paints over it.
+        assert!(!trading[text_index..].iter().any(|primitive| matches!(
             primitive,
-            Prim::RoundRect { border_color, .. } if *border_color == popover.highlight
+            Prim::RoundRect { y, h, .. } if *y <= tooltip_y && *y + *h >= tooltip_y
         )));
 
         // Every outlined chip uses the canonical 1 CSS px border width, snapped like a browser

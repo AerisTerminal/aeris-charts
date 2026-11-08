@@ -747,7 +747,6 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
     popover = next;
     element.style.setProperty("--nc-tooltip-surface", next.surface);
     element.style.setProperty("--nc-tooltip-border", next.border);
-    element.style.setProperty("--nc-tooltip-highlight", next.highlight);
     element.style.setProperty("--nc-tooltip-foreground", next.foreground);
     element.style.setProperty("--nc-tooltip-muted", next.muted_foreground);
   };

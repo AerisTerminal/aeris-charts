@@ -1,5 +1,5 @@
-//! General-pane tooltip feedback: the index-axis cursor line under the marks and the tooltip
-//! popover above every chart layer. Both are ordered-frame primitives, so every executor
+//! General-pane tooltip feedback: the index-axis cursor line under the marks and the floating
+//! tooltip box above every chart layer. Both are ordered-frame primitives, so every executor
 //! paints them alike.
 //!
 //! Pointer hover wins over keyboard focus, like Recharts `combineTooltipInteractionState`:
@@ -507,7 +507,7 @@ impl ChartEngine {
         found
     }
 
-    /// The general tooltip: one single-tone popover box (bold heading, muted names,
+    /// The general tooltip: one single-tone tooltip box (bold heading, muted names,
     /// right-aligned values) with one color bar per row. It paints last in the unscissored
     /// axis layer, in chart device pixels, so axis labels and outside legends stay below it.
     pub(crate) fn build_general_tooltip_axis(&self, dpr: f64, out: &mut Vec<Prim>) {
@@ -666,7 +666,6 @@ impl ChartEngine {
             }
             row_top += line + ROW_GAP;
         }
-        out.push(popover.highlight_prim((device.x, device.y, device.w, device.h), radius, border));
     }
 }
 #[cfg(test)]
@@ -842,6 +841,23 @@ mod tests {
                 if radii[0] > 0.0 && radii[3] == 0.0)),
             "a single-tone box: no tinted header band"
         );
+        // The platform tooltip: one secondary-surface box inside one border-secondary edge, and
+        // no inner highlight edge; every other rounded shape is a row's color pill.
+        let popover = chart.popover_tokens();
+        let boxes: Vec<_> = tooltip
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::RoundRect {
+                    radii,
+                    fill,
+                    border_width,
+                    border_color,
+                    ..
+                } if radii[0] > 2.0 => Some((*fill, *border_width, *border_color)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(boxes, vec![(popover.surface, 1.0, popover.border)]);
         let (x, y, w, h) = tooltip_box(&tooltip);
         assert!(
             f64::from(x) > pointer.0 + chart.pane_left,

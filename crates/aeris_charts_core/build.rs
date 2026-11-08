@@ -130,9 +130,7 @@ fn main() {
             ("book_bid", "BOOK_BID"),
             ("book_ask", "BOOK_ASK"),
             ("book_fill_text", "BOOK_FILL_TEXT"),
-            ("popover_surface", "POPOVER_SURFACE"),
             ("popover_border", "POPOVER_BORDER"),
-            ("popover_highlight", "POPOVER_HIGHLIGHT"),
             ("popover_muted_foreground", "POPOVER_MUTED_FOREGROUND"),
         ] {
             emit_color(
@@ -141,12 +139,6 @@ fn main() {
                 required_string(&tokens, &[theme, field]),
             );
         }
-        // The popover highlight keeps its CSS alpha: it paints above the popover's own content,
-        // so an opaque projection onto the fill alone would be wrong wherever content reaches it.
-        let highlight_alpha = required_u8(&tokens, &[theme, "popover_highlight_alpha"]);
-        output.push_str(&format!(
-            "pub const {prefix}_POPOVER_HIGHLIGHT_ALPHA: u8 = 0x{highlight_alpha:02x};\n"
-        ));
         // `--book-*-fill` mixes its hue into the surface; painting the hue at that mix's alpha gives
         // the same color over the surface and keeps candles behind the order book visible.
         let book_alpha = required_u8(&tokens, &[theme, "book_fill_alpha"]);

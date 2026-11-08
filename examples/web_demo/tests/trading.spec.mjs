@@ -256,7 +256,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
   // Primary blue appears only in trading chrome (buy and take-profit orders).
   expect(count_near(image, [0, 110, 221]), "take-profit pixels").toBeGreaterThan(100);
   // The resting limit uses the subtle token in the marker, not the axis label.
-  expect(count_near(image, [0x13, 0x27, 0x3b], 4), "--buy-subtle buy limit").toBeGreaterThan(100);
+  expect(count_near(image, [0x00, 0x14, 0x28], 4), "--buy-subtle buy limit").toBeGreaterThan(100);
   // Read the stop-loss red from the stop line's own row: the rule spans the pane, which red
   // candles crossing that row cannot fake.
   const pane_px = Math.round(probe.chart_width * probe.dpr);
@@ -302,7 +302,7 @@ for (const [backend, theme] of [["canvas2d", "light"], ["webgpu", "dark"]]) {
     const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
     const colors = theme === "light"
       ? [[224, 238, 251], [0, 110, 221], [247, 82, 95], [254, 234, 236]]
-      : [[19, 39, 59], [0, 110, 221], [247, 82, 95], [63, 34, 36]];
+      : [[0, 20, 40], [0, 110, 221], [247, 82, 95], [44, 15, 17]];
     for (const [index, { id, y }] of probe.rows.entries()) {
       expect(y, `${id} must be visible`).toBeGreaterThan(5);
       expect(y).toBeLessThan(image.height / probe.dpr - 5);

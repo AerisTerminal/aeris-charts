@@ -141,7 +141,7 @@ for (const theme of ["light", "dark"]) {
     expect(ring.style).toBe("solid");
     expect(ring.width).toBeGreaterThanOrEqual(2);
 
-    // The tooltip paints its own popover surface: title, muted series labels, and values.
+    // The tooltip paints its own secondary surface: title, muted series labels, and values.
     await page.mouse.move(point.x, point.y);
     const tooltip = page.getByRole("tooltip");
     await expect(tooltip).toBeVisible();

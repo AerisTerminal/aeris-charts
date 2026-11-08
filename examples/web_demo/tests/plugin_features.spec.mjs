@@ -709,9 +709,9 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     { label: "Low", value: target.expected.low },
     { label: "Volume", value: target.expected.volume },
   ]);
-  // Dark `--surface-popover` (#262626) under dark default text.
-  expect(content.background).toBe("rgb(38, 38, 38)");
-  expect(content.color).toBe("rgb(250, 250, 250)");
+  // The platform tooltip: dark `--surface-secondary` (#171717) under dark default text (#c1c1c1).
+  expect(content.background).toBe("rgb(23, 23, 23)");
+  expect(content.color).toBe("rgb(193, 193, 193)");
   expect(content.borderRadius).toBe("8px");
   expect(content.shadow).toBe("none");
   // `top_offset` places the box 20 px below the pane top, snapped to the device-pixel grid so
@@ -725,7 +725,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     const api = await import("/dist/aeris_charts_financial.js");
     window.__chart.apply_options(api.theme_options("light"));
   });
-  await expect.poll(() => page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+  await expect.poll(() => page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(250, 250, 250)");
   expect(await page.locator(".aeris_charts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(10, 10, 10)");
 
   const after = await page.screenshot();
@@ -931,12 +931,12 @@ test("brushable area keeps ordinary Area data/axes while pane drag is reserved f
       height: Math.min(100, geometry.height),
     },
   }));
-  // The custom background is dark, so the tooltip uses the dark popover tokens rather than the
-  // host's layout text and scale-border colors.
-  expect(count_near(tooltip_clip, [38, 38, 38], 1), "popover surface").toBeGreaterThan(100);
-  expect(count_near(tooltip_clip, [250, 250, 250], 12), "popover default text").toBeGreaterThan(5);
-  expect(count_near(tooltip_clip, [154, 154, 154], 12), "popover muted text").toBeGreaterThan(5);
-  expect(count_near(tooltip_clip, [8, 8, 8], 0), "popover border").toBeGreaterThan(10);
+  // The custom background is dark, so the tooltip uses the dark platform tooltip tokens rather
+  // than the host's layout text and scale-border colors.
+  expect(count_near(tooltip_clip, [23, 23, 23], 1), "tooltip surface").toBeGreaterThan(100);
+  expect(count_near(tooltip_clip, [193, 193, 193], 12), "tooltip default text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [148, 148, 148], 12), "tooltip secondary text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [64, 64, 64], 0), "tooltip border").toBeGreaterThan(10);
   expect(count_near(tooltip_clip, [241, 226, 211], 12), "no layout text color").toBe(0);
   expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".aeris_charts-delta-tooltip").length)).toBe(0);
 

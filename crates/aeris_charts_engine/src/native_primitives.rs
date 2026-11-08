@@ -2244,26 +2244,32 @@ mod tests {
             .collect();
         assert_eq!(
             tooltip_boxes.len(),
-            2,
-            "the tooltip is its popover box plus the inner highlight, never a shadow box"
+            1,
+            "the tooltip is one box, with no inner highlight or shadow box"
         );
         let popover = crate::frame::PopoverTokens::for_theme(crate::ChartTheme::Dark);
+        assert_eq!(
+            popover.surface,
+            Color::rgb(
+                aeris_charts_core::style::DARK_MUTED_RGB.0,
+                aeris_charts_core::style::DARK_MUTED_RGB.1,
+                aeris_charts_core::style::DARK_MUTED_RGB.2,
+            ),
+            "the tooltip fill is the secondary surface"
+        );
         assert_eq!(tooltip_boxes[0].0, popover.surface);
-        assert!(tooltip_boxes[0].1 > 0.0);
+        assert_eq!(tooltip_boxes[0].1, 1.0);
         assert_eq!(tooltip_boxes[0].2, popover.border);
         assert!(tooltip_boxes[0].3.iter().all(|radius| *radius == 6.0));
-        assert_eq!(tooltip_boxes[1].0, Color::rgba(0, 0, 0, 0));
-        assert_eq!(tooltip_boxes[1].2, popover.highlight);
-        assert!(tooltip_boxes[1].3.iter().all(|radius| *radius == 5.0));
         assert!(
             matches!(
                 frame.panes[0].main.iter().rev().find(|primitive| matches!(
                     primitive,
                     Prim::RoundRect { .. } | Prim::Text { .. }
                 )),
-                Some(Prim::RoundRect { border_color, .. }) if *border_color == popover.highlight
+                Some(Prim::Text { .. })
             ),
-            "the highlight edge paints above the tooltip text"
+            "the tooltip text paints last, above its box"
         );
         assert!(frame.panes[0].main.iter().any(|primitive| matches!(
             primitive,

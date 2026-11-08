@@ -2,8 +2,8 @@ import { expect } from "@playwright/test";
 import { test, wait_for_chart } from "./page_ready.mjs";
 import { PNG } from "pngjs";
 
-const UP = [8, 153, 129];
-const DOWN = [247, 82, 95];
+const UP = [11, 153, 129];
+const DOWN = [242, 54, 69];
 
 function count_near(png, rgb) {
   let count = 0;

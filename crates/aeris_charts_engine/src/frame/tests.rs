@@ -15473,7 +15473,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
     let primary = aeris_charts_core::style::DEFAULT_PRIMARY_RGB;
     let blue = Color::rgb(primary.0, primary.1, primary.2);
-    let red = Color::rgb(0xf7, 0x52, 0x5f);
+    let red = Color::rgb(0xf2, 0x36, 0x45);
     assert!(
         !hlines(&mut chart)
             .iter()
@@ -17541,6 +17541,36 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
             .iter()
             .any(|prim| matches!(prim, Prim::Text { color, .. } if *color == axis_text))
     );
+}
+
+#[test]
+fn dark_theme_axis_tick_text_uses_the_primary_text_token() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 4);
+    chart.set_theme(crate::ChartTheme::Dark);
+    let measure = |text: &str, _bold: bool| text.len() as f64 * 7.0;
+    let unboxed = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(40.0, measure, |text, _bold| text.len() as f64 * 6.0)
+            .labels
+            .into_iter()
+            .filter(|label| label.background.is_none())
+            .map(|label| (label.y, label.color))
+            .collect::<Vec<_>>()
+    };
+    let (red, green, blue) = aeris_charts_core::style::DARK_FOREGROUND_RGB;
+    assert_eq!(aeris_charts_core::style::DARK_FOREGROUND_CSS, "#c1c1c1");
+    let themed = Color::rgb(red, green, blue);
+    let labels = unboxed(&mut chart);
+    let time_row = chart.pane_h;
+    assert!(
+        labels.iter().any(|(y, _)| *y > time_row),
+        "time tick labels"
+    );
+    assert!(
+        labels.iter().any(|(y, _)| *y < time_row),
+        "price tick labels"
+    );
+    assert!(labels.iter().all(|(_, color)| *color == themed));
 }
 
 #[test]

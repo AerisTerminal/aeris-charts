@@ -20,42 +20,27 @@
   /* Surfaces */
   --surface: #ffffff;
   --surface-secondary: #fafafa;
-  /* Floating layers (menus, dialogs, tooltips) */
-  --surface-popover: #ffffff;
+  --surface-backdrop: #e5e5e5;
 
   /* Borders */
   --border: #0a0a0a33;
-  --border-secondary: #0a0a0a1a;
+  --border-secondary: #0a0a0a33;
   --border-subtle: #0a0a0a12;
-  /* Floating-layer edge: a 1px outer edge plus a 1px inner highlight. */
-  --border-popover: var(--border);
-  --border-popover-highlight: #ffffffcc;
   --border-width: 1px;
 
   /* Text */
   --text-default: #0a0a0a;
-  --text-secondary: #0a0a0a9a;
+  --text-secondary: #0a0a0a94;
   --text-muted: #0a0a0a40;
-  --text-positive: var(--positive);
-  --text-negative: var(--negative);
+  --text-positive: #0b9981;
+  --text-negative: #f23645;
   --text-danger: var(--danger);
   --text-warning: #ff6900;
-  /* Text on interactive items (buttons, tabs, links). Keep these values in
-     step with --icon / --icon-active: normal text = normal icon colour,
-     hover/active text = active icon colour. They are separate tokens on
-     purpose, never point one at the other. */
-  --text-interactive: #0a0a0a9a;
-  --text-hover: #0a0a0a;
-  --text-active: #0a0a0a;
 
   /* Interaction states — hover / selected fill, pressed fill, disabled fill. */
-  --hover-bg: #0a0a0a0d;
-  --active-bg: #0a0a0a0d;
+  --hover-bg: #0a0a0a14;
+  --active-bg: #0a0a0a1f;
   --disabled-bg: #0a0a0a0d;
-
-  /* Icons — normal and hovered/pressed/selected */
-  --icon: #0a0a0a9a;
-  --icon-active: #0a0a0a;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
@@ -134,11 +119,11 @@
   --radius-large: 999px;
 
   /* Chart */
-  --bullish: var(--positive);
-  --bearish: var(--negative);
+  --bullish: #0b9981;
+  --bearish: #f23645;
   /* Big-trade bubble fills; the bubble outline uses bullish / bearish. */
-  --buy-bubble: color-mix(in srgb, #089981 35%, transparent);
-  --sell-bubble: color-mix(in srgb, #f7525f 35%, transparent);
+  --buy-bubble: color-mix(in srgb, #0b9981 35%, transparent);
+  --sell-bubble: color-mix(in srgb, #f23645 35%, transparent);
 }
 
 .dark,
@@ -146,38 +131,29 @@
   color-scheme: dark;
 
   /* Surfaces */
-  --surface: #171717;
-  --surface-secondary: #fafafa0f;
-  --surface-popover: #262626;
+  --surface: #000000;
+  --surface-secondary: #171717;
+  --surface-backdrop: #262626;
 
   /* Borders */
-  --border: #fafafa1a;
-  --border-secondary: #fafafa26;
+  --border: #2c2c2c;
+  --border-secondary: #404040;
   --border-subtle: #fafafa12;
-  --border-popover: #000000cc;
-  --border-popover-highlight: #ffffff1a;
   --border-width: 1px;
 
   /* Text */
-  --text-default: #fafafa;
+  --text-default: #c1c1c1;
   --text-secondary: #fafafa8c;
-  --text-muted: #fafafa40;
-  --text-positive: var(--positive);
-  --text-negative: var(--negative);
+  --text-muted: #fafafa59;
+  --text-positive: #0b9981;
+  --text-negative: #f23645;
   --text-danger: #ffa2a2;
   --text-warning: #ffb86a;
-  --text-interactive: #fafafa8c;
-  --text-hover: #fafafa;
-  --text-active: #fafafa;
 
   /* Interaction states */
-  --hover-bg: #fafafa13;
+  --hover-bg: #fafafa1f;
   --active-bg: #fafafa26;
   --disabled-bg: #fafafa0d;
-
-  /* Icons */
-  --icon: #fafafa8c;
-  --icon-active: #fafafa;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
@@ -249,12 +225,13 @@
   --ring-primary: var(--primary);
 
   /* Chart */
-  --bullish: var(--positive);
-  --bearish: var(--negative);
+  --bullish: #0b9981;
+  --bearish: #f23645;
   /* Big-trade bubble fills; the bubble outline uses bullish / bearish. */
-  --buy-bubble: color-mix(in srgb, #089981 35%, transparent);
-  --sell-bubble: color-mix(in srgb, #f7525f 35%, transparent);
+  --buy-bubble: color-mix(in srgb, #0b9981 35%, transparent);
+  --sell-bubble: color-mix(in srgb, #f23645 35%, transparent);
 }
+
 *,
 *::before,
 *::after {
@@ -419,39 +396,30 @@ input[type="number"] {
 }
 
 .nc-interactive-muted {
-  color: var(--icon);
+  color: var(--text-secondary);
   transition: color 150ms ease;
 }
 
 .nc-interactive-muted[aria-pressed="true"],
 .nc-interactive-muted[aria-selected="true"] { color: var(--primary); }
 .nc-interactive-muted:not([aria-disabled="true"]):hover,
-.nc-interactive-muted:not([aria-disabled="true"]):focus-visible { color: var(--icon-active); }
+.nc-interactive-muted:not([aria-disabled="true"]):focus-visible { color: var(--text-default); }
 .nc-interactive-muted[aria-disabled="true"] { color: var(--text-muted); cursor: not-allowed; }
 
-/* Tooltips are floating layers: an opaque `--surface-popover` fill, a `--border-popover` hairline,
-   and a 1px `--border-popover-highlight` inner edge painted above the content. The tooltip script
-   sets the --nc-tooltip-* values for the chart's painted theme. */
+/* Tooltips match the platform tooltip: the secondary surface inside one 1px secondary border,
+   with no inner edge or shadow. The tooltip script sets the --nc-tooltip-* values from the chart's
+   tooltip tokens for its painted theme, which may differ from the host page's theme. */
 .aeris_charts-tooltip {
   min-width: 156px;
   overflow: hidden;
-  background: var(--nc-tooltip-surface, var(--surface-popover));
-  border: 1px solid var(--nc-tooltip-border, var(--border-popover));
+  background: var(--nc-tooltip-surface, var(--surface-secondary));
+  border: 1px solid var(--nc-tooltip-border, var(--border-secondary));
   border-radius: var(--radius-default);
   color: var(--nc-tooltip-foreground, var(--text-default));
   font-family: var(--nc-tooltip-font-family, -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   line-height: 16px;
-}
-
-.aeris_charts-tooltip::after {
-  position: absolute;
-  inset: 0;
-  border: 1px solid var(--nc-tooltip-highlight, var(--border-popover-highlight));
-  border-radius: calc(var(--radius-default) - 1px);
-  content: "";
-  pointer-events: none;
 }
 
 .aeris_charts-tooltip__header {
@@ -461,13 +429,13 @@ input[type="number"] {
   background: color-mix(
     in srgb,
     var(--nc-tooltip-foreground, var(--text-default)) 4%,
-    var(--nc-tooltip-surface, var(--surface-popover))
+    var(--nc-tooltip-surface, var(--surface-secondary))
   );
-  /* `--border` is default text at 10%, resolved here over the popover fill. */
+  /* A divider fainter than the outer edge: default text at 10% over the tooltip fill. */
   border-bottom: 1px solid color-mix(
     in srgb,
     var(--nc-tooltip-foreground, var(--text-default)) 10%,
-    var(--nc-tooltip-surface, var(--surface-popover))
+    var(--nc-tooltip-surface, var(--surface-secondary))
   );
 }
 

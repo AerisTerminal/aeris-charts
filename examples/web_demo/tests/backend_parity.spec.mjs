@@ -392,7 +392,7 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
         autoSize: false,
         backend: requested_backend,
         __force_webgpu_fallback_adapter: true,
-        // A transparent dark background selects the dark popover over the white host.
+        // A transparent dark background selects the dark tooltip tokens over the white host.
         layout: { background: { type: "solid", color: "rgba(0,0,0,0)" } },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         leftPriceScale: { visible: false },
@@ -420,8 +420,9 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const png = PNG.sync.read(await page.locator("#round-rect-host").screenshot());
     const pixel = (x, y) => Array.from(png.data.subarray((y * png.width + x) * 4, (y * png.width + x) * 4 + 3));
-    // Dark `--border-popover` (#080808 over the #262626 popover); nothing else on this chart is that dark.
-    const is_border = (x, y) => pixel(x, y).every((channel) => channel < 20);
+    // Dark `--border-secondary` edge (#404040 around the #171717 tooltip fill); no other horizontal
+    // run on this chart is that gray.
+    const is_border = (x, y) => pixel(x, y).every((channel) => Math.abs(channel - 64) <= 3);
     let top = null;
     for (let y = 0; y < 150 && top === null; y += 1) {
       for (let x = 0; x < png.width - 50; x += 1) {
@@ -432,13 +433,13 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
       }
     }
     expect(top, `${geometry.backend} must paint the tooltip border`).not.toBe(null);
-    // Rows 0-1 are the 1px border and rows 2-3 the transparent-filled highlight outline at DPR 2.
-    // The strip below them and above the text must be the plain #262626 popover surface: a
-    // border or highlight that floods its interior would darken or lighten it.
-    for (let dy = 5; dy < 10; dy += 1) {
+    // Rows 0-1 are the 1px border at DPR 2. Everything from row 2 down to the text must be the
+    // plain #171717 surface: there is no inner highlight edge, and a border that floods the
+    // interior would lighten it.
+    for (let dy = 2; dy < 10; dy += 1) {
       for (let dx = 8; dx < 48; dx += 1) {
         const [r, g, b] = pixel(top.x + dx, top.y + dy);
-        expect(Math.max(Math.abs(r - 38), Math.abs(g - 38), Math.abs(b - 38)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
+        expect(Math.max(Math.abs(r - 23), Math.abs(g - 23), Math.abs(b - 23)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
       }
     }
   }

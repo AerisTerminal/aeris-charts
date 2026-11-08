@@ -427,11 +427,6 @@ impl ChartEngine {
                         y += [primary_size + 4.0, secondary_size + 4.0][index];
                     }
                 }
-                out.push(popover.highlight_prim(
-                    (device.x, device.y, device.w, device.h),
-                    radius,
-                    border,
-                ));
             }
         }
     }

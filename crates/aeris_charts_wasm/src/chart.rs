@@ -5551,7 +5551,7 @@ impl AerisChart {
     }
 
     /// Whether the painted chart surface selects the light token theme. DOM tooltips choose
-    /// their popover tokens from it, matching the engine-drawn tooltips.
+    /// their tooltip tokens from it, matching the engine-drawn tooltips.
     pub fn surface_theme_is_light(&self) -> bool {
         self.inner.borrow().engine.surface_theme() == ChartTheme::Light
     }

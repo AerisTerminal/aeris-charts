@@ -131,7 +131,7 @@ function pane_index(pane: number | pane_api | undefined): number | undefined {
  * Dimming of a hidden entry, shared with the engine legend. Hidden entries remain operable toggles,
  * so default theme text keeps WCAG AA 4.5:1 at this opacity on both theme surfaces.
  */
-const HIDDEN_LEGEND_OPACITY = "0.56";
+const HIDDEN_LEGEND_OPACITY = "0.61";
 
 /**
  * Recharts `Legend` default `itemSorter="value"`, shared with the engine legend: JavaScript string
@@ -303,8 +303,7 @@ export function create_general_tooltip(
   element.setAttribute("role", "tooltip");
   if (options.lang !== undefined) element.lang = options.lang;
   // The financial tooltip's layout inline, so the look holds without the optional stylesheet.
-  // The 1px highlight is an inset shadow because rows carry no background.
-  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;box-sizing:border-box;min-width:min(156px,100%);max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;border:1px solid var(--nc-tooltip-border);border-radius:var(--radius-default,4px);background:var(--aeris-tooltip-background,var(--nc-tooltip-surface));color:var(--aeris-tooltip-color,var(--nc-tooltip-foreground));font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 1px var(--nc-tooltip-highlight)";
+  element.style.cssText = "position:absolute;z-index:5;display:none;pointer-events:none;box-sizing:border-box;min-width:min(156px,100%);max-width:min(280px,100%);max-height:100%;overflow:hidden;overflow-wrap:anywhere;border:1px solid var(--nc-tooltip-border);border-radius:var(--radius-default,4px);background:var(--aeris-tooltip-background,var(--nc-tooltip-surface));color:var(--aeris-tooltip-color,var(--nc-tooltip-foreground));font-size:12px;line-height:16px;font-variant-numeric:tabular-nums";
   // The engine's own tooltip would duplicate this one until the last DOM tooltip detaches.
   chart.retain_dom_general_tooltip(true);
   // Resolved on every show so any theme change, including `reset_style_to_defaults`, is followed.
@@ -316,7 +315,6 @@ export function create_general_tooltip(
     popover = next;
     element.style.setProperty("--nc-tooltip-surface", next.surface);
     element.style.setProperty("--nc-tooltip-border", next.border);
-    element.style.setProperty("--nc-tooltip-highlight", next.highlight);
     element.style.setProperty("--nc-tooltip-foreground", next.foreground);
     element.style.setProperty("--nc-tooltip-muted", next.muted_foreground);
   };

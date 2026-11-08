@@ -4118,7 +4118,7 @@ impl ChartEngine {
     /// A line's statistics card: a rounded panel beside the segment's midpoint (right of it,
     /// left of it, or centered per `stats_position`), on the vertical side the line leaves free
     /// (above a falling line, below a rising one), kept inside the pane. It is painted with the
-    /// brushable-area tooltip's popover chrome: same fill, hairline, radius and inner highlight.
+    /// brushable-area tooltip's chrome: same fill, 1 px edge and radius.
     fn build_info_line_prims(
         &self,
         drawing: &Drawing,
@@ -4216,7 +4216,6 @@ impl ChartEngine {
                 italic: false,
             });
         }
-        out.push(popover.highlight_prim(card, radius, border));
     }
 
     /// One measuring tool: translucent measured area, crisp boundary rules, start→end arrows,

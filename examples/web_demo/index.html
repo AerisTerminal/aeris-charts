@@ -74,8 +74,8 @@
   #replay_toggle svg { width: 18px; height: 18px; }
   #replay_bar { position: absolute; left: 50%; bottom: 44px; z-index: 5; display: flex; gap: 4px; align-items: center; padding: 4px; transform: translateX(-50%); color: var(--text-default); background: var(--surface); border: 1px solid var(--border-secondary); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: 12px; white-space: nowrap; }
   #replay_bar[hidden] { display: none; }
-  #replay_bar button { display: inline-grid; place-items: center; min-width: 36px; height: 36px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-compact); background: transparent; color: var(--icon); }
-  #replay_bar button:hover:not(:disabled) { color: var(--icon-active); background: var(--hover-bg); }
+  #replay_bar button { display: inline-grid; place-items: center; min-width: 36px; height: 36px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius-compact); background: transparent; color: var(--text-secondary); }
+  #replay_bar button:hover:not(:disabled) { color: var(--text-default); background: var(--hover-bg); }
   #replay_bar button:disabled { opacity: .4; }
   #replay_bar svg { width: 20px; height: 20px; }
   #replay_bar select { height: 36px; padding: 0 6px; color: var(--text-default); background: var(--surface-secondary); border: 1px solid var(--border-secondary); border-radius: var(--radius-compact); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -88,9 +88,9 @@
   #replay_bar [data-icon="pause"], #replay_bar[data-phase="playing"] [data-icon="play"] { display: none; }
   #replay_bar[data-phase="playing"] [data-icon="pause"] { display: inline-grid; }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
-  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
+  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--text-secondary); }
   .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
-  .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--icon-active); background: var(--hover-bg); }
+  .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--text-default); background: var(--hover-bg); }
   .icon-button:active, #quick_actions button:active, #tool_rail button:active { background: var(--active-bg); }
   .icon-button svg, #quick_actions svg, #tool_rail svg { width: 20px; height: 20px; }
   /* The header tools lay out inline on wide screens and collapse into the More menu on compact ones. */
@@ -139,8 +139,8 @@
   #inspector .tool-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
   #inspector .tool-buttons button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
   .icon_picker { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 4px; flex: 1; min-width: 0; }
-  .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--icon); }
-  .icon_picker button:hover { color: var(--icon-active); background: var(--hover-bg); }
+  .icon_picker button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-small); background: transparent; color: var(--text-secondary); }
+  .icon_picker button:hover { color: var(--text-default); background: var(--hover-bg); }
   .icon_picker button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); }
   .icon_picker svg { width: 20px; height: 20px; }
   #inspector .group h2 { flex-basis: 100%; margin: 0 0 6px; font-size: 13px; font-weight: 600; line-height: 1.4; }
@@ -163,7 +163,7 @@
   #feature_lab_group { display: block !important; }
   .feature-lab-intro { margin: 0 0 16px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
   .feature-search-wrap { position: relative; display: block !important; width: 100%; }
-  .feature-search-wrap svg { position: absolute; top: 11px; left: 12px; width: 18px; height: 18px; color: var(--icon); pointer-events: none; }
+  .feature-search-wrap svg { position: absolute; top: 11px; left: 12px; width: 18px; height: 18px; color: var(--text-secondary); pointer-events: none; }
   #feature_search { width: 100%; padding: 8px 12px 8px 38px; }
   #feature_filters { display: flex; gap: 4px; width: 100%; margin: 12px 0 16px; padding: 4px; background: var(--surface-secondary); border-radius: 10px; }
   #feature_filters button { flex: 1; min-width: 0; padding: 6px; font-size: 11px; border-color: transparent; background: transparent; }
@@ -171,7 +171,7 @@
   .scenario-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
   .scenario-grid .feature-card { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 12px; min-height: 64px; padding: 10px 8px; text-align: left; background: transparent; border-color: transparent; border-radius: var(--radius-default); }
   .scenario-grid .feature-card:hover { background: var(--hover-bg); }
-  .feature-card .feature-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 32px; height: 32px; margin-top: 2px; color: var(--icon); }
+  .feature-card .feature-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 32px; height: 32px; margin-top: 2px; color: var(--text-secondary); }
   .feature-card svg { width: 20px; height: 20px; }
   .feature-card strong { font-size: 13px; font-weight: 600; white-space: normal; }
   .feature-card small { color: var(--text-secondary); font-size: 11px; line-height: 1.4; white-space: normal; text-wrap: pretty; }
@@ -209,7 +209,7 @@
     #app_bar { padding: 6px 10px; gap: 4px; min-height: 60px; }
     html:not([data-demo-mode="general"]) .brand-lockup { margin-right: 0; }
     #more_toggle { display: inline-grid; }
-    #more_toggle[aria-expanded="true"] { color: var(--icon-active); background: var(--active-bg); }
+    #more_toggle[aria-expanded="true"] { color: var(--text-default); background: var(--active-bg); }
     #header_tools { position: absolute; top: calc(100% + 4px); right: 8px; z-index: 30; display: none; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 16px)); max-height: calc(100dvh - var(--demo-header-height, 60px) - 16px); overflow-y: auto; padding: 12px; background: var(--surface); border: 1px solid var(--border-secondary); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.28); }
     #header_tools[data-open="true"] { display: flex; }
     #header_tools #comparison_controls { flex-wrap: wrap; margin-left: 0; }
@@ -402,12 +402,12 @@
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
     <div class="group" id="candle_style" data-panel="series" data-caption="Candle style">
       <h2>Candle style</h2>
-      <label>up <input type="color" id="up_color" value="#089981"></label>
-      <label>down <input type="color" id="down_color" value="#f7525f"></label>
-      <label>wick up <input type="color" id="wick_up_color" value="#089981"></label>
-      <label>wick dn <input type="color" id="wick_down_color" value="#f7525f"></label>
-      <label>border up <input type="color" id="border_up_color" value="#089981"></label>
-      <label>border dn <input type="color" id="border_down_color" value="#f7525f"></label>
+      <label>up <input type="color" id="up_color" value="#0b9981"></label>
+      <label>down <input type="color" id="down_color" value="#f23645"></label>
+      <label>wick up <input type="color" id="wick_up_color" value="#0b9981"></label>
+      <label>wick dn <input type="color" id="wick_down_color" value="#f23645"></label>
+      <label>border up <input type="color" id="border_up_color" value="#0b9981"></label>
+      <label>border dn <input type="color" id="border_down_color" value="#f23645"></label>
       <label><input type="checkbox" id="wick_visible" checked> wicks</label>
       <label><input type="checkbox" id="border_visible" checked> borders</label>
       <label title="Engine-owned Heikin Ashi projection; the canonical bars stay raw"><input type="checkbox" id="heikin_ashi_toggle"> heikin ashi</label>
@@ -426,7 +426,7 @@
     <!-- area fill -->
     <div class="group" id="area_style" data-panel="series" data-caption="Area style" hidden>
       <h2>Area style</h2>
-      <label>color <input type="color" id="area_top" value="#089981"></label>
+      <label>color <input type="color" id="area_top" value="#0b9981"></label>
     </div>
 
     <!-- footprint presentation: engine-owned cell modes and the per-bar summary -->
@@ -474,8 +474,8 @@
       <label>cell <input type="color" id="footprint_cell_color" value="#f0f0f0"></label>
       <label>strip up <input type="color" id="footprint_range_up_color" value="#006edd"></label>
       <label>strip down <input type="color" id="footprint_range_down_color" value="#d9306a"></label>
-      <label title="Volume line of the bar summary">summary V <input type="color" id="footprint_summary_text_color" value="#6b6b6b"></label>
-      <label title="Unclassified volume in the Profile mode">unclassified <input type="color" id="footprint_unclassified_color" value="#6b6b6b"></label>
+      <label title="Volume line of the bar summary">summary V <input type="color" id="footprint_summary_text_color" value="#717171"></label>
+      <label title="Unclassified volume in the Profile mode">unclassified <input type="color" id="footprint_unclassified_color" value="#717171"></label>
       <button id="footprint_colors_reset" title="Return the colors above to the theme defaults">theme colors</button>
     </div>
 
@@ -1052,12 +1052,12 @@ const main = chart.add_series("candlestick", {
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
   ...(parity_fixture !== null ? {
     countdown_visible: false,
-    up_color: "#089981",
-    down_color: "#f7525f",
-    wick_up_color: "#089981",
-    wick_down_color: "#f7525f",
-    border_up_color: "#089981",
-    border_down_color: "#f7525f",
+    up_color: "#0b9981",
+    down_color: "#f23645",
+    wick_up_color: "#0b9981",
+    wick_down_color: "#f23645",
+    border_up_color: "#0b9981",
+    border_down_color: "#f23645",
   } : {}),
 });
 main.set_data(data);
@@ -2144,8 +2144,8 @@ function sync_active_toolbar() {
 
 // Grid controls drive both families (vert + horz) at once; the engine stores them separately,
 // so a package consumer can style each family independently. Style set: 0 solid, 1 dotted
-// (renders sparse), 2 dashed (renders large) — the reference's normal dot/dash patterns are
-// intentionally absent.
+// (renders the reference's dense dots), 2 dashed (renders large) — the reference's short dash
+// pattern is intentionally absent.
 function apply_grid_style() {
   const color = document.getElementById("grid_color").value;
   const style = Number(document.getElementById("grid_style").value);

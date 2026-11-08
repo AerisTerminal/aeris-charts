@@ -119,8 +119,8 @@ pub fn chart_theme_patch(theme: ChartTheme) -> Value {
     })
 }
 
-/// `LineStyle`, numeric wire form (0 Solid, 1 Dotted = sparse, 2 Dashed = large). Values 3/4
-/// (the reference's LargeDashed/SparseDotted) are retired and fold into 2/1 at the engine edge.
+/// `LineStyle`, numeric wire form (0 Solid, 1 Dotted, 2 Dashed = large). Values 3/4 (the
+/// reference's LargeDashed/SparseDotted) are retired and fold into 2/1 at the engine edge.
 pub mod line_style {
     pub const SOLID: u8 = 0;
     pub const DOTTED: u8 = 1;

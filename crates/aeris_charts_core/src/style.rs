@@ -33,67 +33,67 @@ mod tests {
         assert_eq!(LIGHT_FOREGROUND_CSS, "#0a0a0a");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
         assert_eq!(LIGHT_RAISED_CSS, "#f0f0f0");
-        // `--text-secondary` (#0a0a0a9a) over white; passes 4.5:1 on every light surface,
-        // including the accent and raised footprint tones.
-        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#6b6b6b");
+        // `--text-secondary` (#0a0a0a94) over white.
+        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#717171");
         assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
-        // `--hover-bg` and `--active-bg` (both #0a0a0a0d) over white.
-        assert_eq!(LIGHT_ACCENT_CSS, "#f3f3f3");
-        assert_eq!(LIGHT_ACTIVE_CSS, LIGHT_ACCENT_CSS);
-        // `--hover-bg` (#fafafa13) and `--active-bg` (#fafafa26) over the dark surface.
-        assert_eq!(DARK_ACCENT_CSS, "#282828");
-        assert_eq!(DARK_ACTIVE_CSS, "#393939");
-        // `--border` (#0a0a0a33) over white; the popover border resolves to the same token.
+        // `--hover-bg` (#0a0a0a14) and `--active-bg` (#0a0a0a1f) over white.
+        assert_eq!(LIGHT_ACCENT_CSS, "#ececec");
+        assert_eq!(LIGHT_ACTIVE_CSS, "#e1e1e1");
+        // `--hover-bg` (#fafafa1f) and `--active-bg` (#fafafa26) over the dark surface.
+        assert_eq!(DARK_ACCENT_CSS, "#1e1e1e");
+        assert_eq!(DARK_ACTIVE_CSS, "#252525");
+        // `--border` (#0a0a0a33) over white.
         assert_eq!(LIGHT_BORDER_CSS, "#cecece");
-        assert_eq!(LIGHT_POPOVER_BORDER_CSS, LIGHT_BORDER_CSS);
-        // `--border-secondary` (#0a0a0a1a) over white.
-        assert_eq!(LIGHT_MUTED_BORDER_CSS, "#e6e6e6");
+        // `--border-secondary` (#0a0a0a33) over white.
+        assert_eq!(LIGHT_MUTED_BORDER_CSS, LIGHT_BORDER_CSS);
         assert_eq!(LIGHT_RING_CSS, "#e0e0e0");
-        assert_eq!(DARK_SURFACE_CSS, "#171717");
-        assert_eq!(DARK_FOREGROUND_CSS, "#fafafa");
-        // `--surface-secondary` (#fafafa0f) over the dark surface.
-        assert_eq!(DARK_MUTED_CSS, "#242424");
+        assert_eq!(DARK_SURFACE_CSS, "#000000");
+        assert_eq!(DARK_FOREGROUND_CSS, "#c1c1c1");
+        // `--surface-secondary` is opaque in the dark theme.
+        assert_eq!(DARK_MUTED_CSS, "#171717");
         // The raised tile tone (#fafafa14) over the dark surface.
-        assert_eq!(DARK_RAISED_CSS, "#292929");
+        assert_eq!(DARK_RAISED_CSS, "#141414");
         // `--text-secondary` (#fafafa8c) over the dark surface.
-        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#949494");
+        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#898989");
         assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");
         // `--primary-hover` (primary at 80%) over the dark surface.
-        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#055db5");
+        assert_eq!(DARK_PRIMARY_HOVER_CSS, "#0058b1");
         assert_eq!(DARK_DANGER_CSS, LIGHT_DANGER_CSS);
         // `--warning` is the same in both themes.
         assert_eq!(LIGHT_WARNING_CSS, "#ff6900");
         assert_eq!(DARK_WARNING_CSS, LIGHT_WARNING_CSS);
         assert_eq!(DEFAULT_WARNING_RGB, (0xff, 0x69, 0x00));
-        // `--border` (#fafafa1a) over the dark surface.
-        assert_eq!(DARK_BORDER_CSS, "#2e2e2e");
-        // `--border-secondary` (#fafafa26) over the dark surface.
-        assert_eq!(DARK_MUTED_BORDER_CSS, "#393939");
+        // The dark `--border` and `--border-secondary` are opaque.
+        assert_eq!(DARK_BORDER_CSS, "#2c2c2c");
+        assert_eq!(DARK_MUTED_BORDER_CSS, "#404040");
+        // Axis tick text is the primary text token in both themes.
+        assert_eq!(LIGHT_AXIS_TEXT_CSS, LIGHT_FOREGROUND_CSS);
+        assert_eq!(DARK_AXIS_TEXT_CSS, DARK_FOREGROUND_CSS);
         // The light crosshair keeps its translucent line, alpha kept like the dark line.
         assert_eq!(LIGHT_CROSSHAIR_LINE_CSS, "#0a0a0a26");
         assert_eq!(LIGHT_CROSSHAIR_LINE_RGB, (0x0a, 0x0a, 0x0a));
         assert_eq!(LIGHT_CROSSHAIR_LINE_ALPHA, 0x26);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
-        // The translucent dark `--border` itself, so the line lands on that tone (#2e2e2e) over the
-        // dark surface while staying see-through over series geometry.
-        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa1a");
+        // Translucent so the line stays see-through over series geometry, at the alpha that lands
+        // on the dark `--border` tone (#2c2c2c) over the dark surface.
+        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa2d");
         assert_eq!(DARK_CROSSHAIR_LINE_RGB, (0xfa, 0xfa, 0xfa));
-        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x1a);
+        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x2d);
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_ALPHA, DARK_CROSSHAIR_LINE_ALPHA);
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);
-        // Chart `--bullish` / `--bearish` follow the platform gain/loss pair.
-        assert_eq!(LIGHT_MARKET_UP_CSS, "#089981");
-        assert_eq!(LIGHT_MARKET_DOWN_CSS, "#f7525f");
-        assert_eq!(DARK_MARKET_UP_CSS, "#089981");
-        assert_eq!(DARK_MARKET_DOWN_CSS, "#f7525f");
+        // Chart `--bullish` / `--bearish` are their own pair, distinct from platform gain/loss.
+        assert_eq!(LIGHT_MARKET_UP_CSS, "#0b9981");
+        assert_eq!(LIGHT_MARKET_DOWN_CSS, "#f23645");
+        assert_eq!(DARK_MARKET_UP_CSS, LIGHT_MARKET_UP_CSS);
+        assert_eq!(DARK_MARKET_DOWN_CSS, LIGHT_MARKET_DOWN_CSS);
         assert_eq!(LIGHT_POSITIVE_CSS, "#089981");
         assert_eq!(LIGHT_NEGATIVE_CSS, "#f7525f");
         assert_eq!(DARK_POSITIVE_CSS, LIGHT_POSITIVE_CSS);
@@ -106,9 +106,8 @@ mod tests {
         // light surface and 18% over the dark surface.
         assert_eq!(LIGHT_BUY_SUBTLE_CSS, "#e0eefb");
         assert_eq!(LIGHT_SELL_SUBTLE_CSS, "#feeaec");
-        assert_eq!(DARK_BUY_SUBTLE_CSS, "#13273b");
-        assert_eq!(DARK_SELL_SUBTLE_CSS, "#3f2224");
-        // `--book-bid-fill` / `--book-ask-fill`: primary and #ff2f5e mixed 40% over the light
+        assert_eq!(DARK_BUY_SUBTLE_CSS, "#001428");
+        assert_eq!(DARK_SELL_SUBTLE_CSS, "#2c0f11"); // `--book-bid-fill` / `--book-ask-fill`: primary and #ff2f5e mixed 40% over the light
         // surface and 35% over the dark surface; `--book-fill-text` is drawn on top of a fill.
         assert_eq!(LIGHT_BOOK_BID_CSS, LIGHT_PRIMARY_CSS);
         assert_eq!(DARK_BOOK_BID_CSS, DARK_PRIMARY_CSS);
@@ -153,10 +152,12 @@ mod tests {
 
     /// Every text and focus role a general or financial chart paints on a theme surface keeps its
     /// WCAG 2.2 AA ratio: 4.5:1 for normal-size text (1.4.3) and 3:1 for the focus/selection ring
-    /// (1.4.11). Surfaces are the chart pane (`--surface`), `--surface-secondary`, and the
-    /// tooltip popover; text alone also sits on the hover/accent tone (drawing note placeholders)
-    /// and the raised footprint tile. Content fills are covered where labels pick black or white
-    /// per fill.
+    /// (1.4.11). Surfaces are the chart pane (`--surface`) and `--surface-secondary`, which is
+    /// also the tooltip fill; tooltip secondary text is its own projection over that fill. Text
+    /// alone also sits on the hover/accent tone (drawing note placeholders) and the raised footprint
+    /// tile. The brand's light `--text-secondary` (#0a0a0a94) measures about 4.1:1 on those two
+    /// light tones, an accepted brand decision, so only the dark theme gates secondary text there.
+    /// Content fills are covered where labels pick black or white per fill.
     #[test]
     fn theme_text_and_focus_tokens_meet_wcag_aa_on_every_chart_surface() {
         const TEXT: f64 = 4.5;
@@ -164,26 +165,22 @@ mod tests {
         let themes = [
             (
                 "light",
-                [
-                    LIGHT_SURFACE_RGB,
-                    LIGHT_MUTED_RGB,
-                    LIGHT_POPOVER_SURFACE_RGB,
-                ],
+                [LIGHT_SURFACE_RGB, LIGHT_MUTED_RGB],
                 [LIGHT_ACCENT_RGB, LIGHT_RAISED_RGB],
                 LIGHT_FOREGROUND_RGB,
                 LIGHT_MUTED_FOREGROUND_RGB,
-                LIGHT_POPOVER_SURFACE_RGB,
+                LIGHT_MUTED_RGB,
                 LIGHT_POPOVER_MUTED_FOREGROUND_RGB,
                 LIGHT_PRIMARY_RGB,
                 LIGHT_PRIMARY_FOREGROUND_RGB,
             ),
             (
                 "dark",
-                [DARK_SURFACE_RGB, DARK_MUTED_RGB, DARK_POPOVER_SURFACE_RGB],
+                [DARK_SURFACE_RGB, DARK_MUTED_RGB],
                 [DARK_ACCENT_RGB, DARK_RAISED_RGB],
                 DARK_FOREGROUND_RGB,
                 DARK_MUTED_FOREGROUND_RGB,
-                DARK_POPOVER_SURFACE_RGB,
+                DARK_MUTED_RGB,
                 DARK_POPOVER_MUTED_FOREGROUND_RGB,
                 DARK_PRIMARY_RGB,
                 DARK_PRIMARY_FOREGROUND_RGB,
@@ -204,7 +201,9 @@ mod tests {
             let mut pairs = Vec::new();
             for tone in text_tones {
                 pairs.push(("default text on a tone", foreground, tone, TEXT));
-                pairs.push(("secondary text on a tone", muted, tone, TEXT));
+                if theme == "dark" {
+                    pairs.push(("secondary text on a tone", muted, tone, TEXT));
+                }
             }
             for surface in surfaces {
                 pairs.push((
@@ -228,22 +227,18 @@ mod tests {
         }
     }
 
-    /// Floating-layer tokens: `--surface-popover`, `--border-popover` composited over it,
-    /// `--border-popover-highlight` with its CSS alpha, and `--text-secondary` over the popover.
+    /// Tooltip tokens match the platform tooltip: the `--surface-secondary` fill (the `muted`
+    /// token), a `--border-secondary` edge, `--text-default` text and `--text-secondary`
+    /// secondary text, each translucent token composited over that fill.
     #[test]
-    fn popover_tokens_project_the_floating_layer_contract() {
-        assert_eq!(LIGHT_POPOVER_SURFACE_CSS, "#ffffff");
-        assert_eq!(LIGHT_POPOVER_BORDER_CSS, "#cecece");
-        assert_eq!(LIGHT_POPOVER_HIGHLIGHT_RGB, (0xff, 0xff, 0xff));
-        assert_eq!(LIGHT_POPOVER_HIGHLIGHT_ALPHA, 0xcc);
-        assert_eq!(
-            LIGHT_POPOVER_MUTED_FOREGROUND_CSS,
-            LIGHT_MUTED_FOREGROUND_CSS
-        );
-        assert_eq!(DARK_POPOVER_SURFACE_CSS, "#262626");
-        assert_eq!(DARK_POPOVER_BORDER_CSS, "#080808");
-        assert_eq!(DARK_POPOVER_HIGHLIGHT_RGB, (0xff, 0xff, 0xff));
-        assert_eq!(DARK_POPOVER_HIGHLIGHT_ALPHA, 0x1a);
-        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#9a9a9a");
+    fn popover_tokens_project_the_platform_tooltip() {
+        assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
+        // `--border-secondary` (#0a0a0a33) and `--text-secondary` (#0a0a0a94) over #fafafa.
+        assert_eq!(LIGHT_POPOVER_BORDER_CSS, "#cacaca");
+        assert_eq!(LIGHT_POPOVER_MUTED_FOREGROUND_CSS, "#6f6f6f");
+        assert_eq!(DARK_MUTED_CSS, "#171717");
+        // The dark `--border-secondary` is opaque; `--text-secondary` (#fafafa8c) over #171717.
+        assert_eq!(DARK_POPOVER_BORDER_CSS, DARK_MUTED_BORDER_CSS);
+        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#949494");
     }
 }

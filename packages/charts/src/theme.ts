@@ -88,22 +88,21 @@ export function theme_palette(name: theme_name): chart_theme {
 }
 
 /**
- * Floating-layer (tooltip) colors: `--surface-popover`, `--border-popover` composited over it,
- * `--border-popover-highlight` with its CSS alpha, and primary/secondary text over the popover.
+ * Floating-layer (tooltip) colors matching the platform tooltip: the `--surface-secondary` fill
+ * (`muted`), the `--border-secondary` edge and `--text-secondary` text composited over that fill,
+ * and `--text-default` text.
  */
 export interface popover_palette {
   surface: string;
   border: string;
-  highlight: string;
   foreground: string;
   muted_foreground: string;
 }
 
 function popover_tokens(tokens: typeof style_tokens.light): popover_palette {
   return {
-    surface: tokens.popover_surface,
+    surface: tokens.muted,
     border: tokens.popover_border,
-    highlight: with_alpha(tokens.popover_highlight, tokens.popover_highlight_alpha),
     foreground: tokens.foreground,
     muted_foreground: tokens.popover_muted_foreground,
   };
