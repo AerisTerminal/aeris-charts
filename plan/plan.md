@@ -982,7 +982,8 @@ design); parallel-coordinates and scatter-matrix marks address real rows. A `sta
 replaces the whole option block like `histogram`, and non-default `stats` on a non-statistics
 series is `invalid_options`. V2 persistence stores samples and options, never derived models.
 The demo catalog gains thirteen complete-only statistics scenarios (deterministic seeded data),
-which the standard-build dashboard skips with a `complete-only` marker, and
+whose dashboard cards load the complete entry on first use (see "Demo dashboard and
+attribution scope" below), and
 `g11_statistics.spec.mjs` exercises rendering, per-series hits, option validation and
 round-trips, matrix updates, persistence, and dashboard mounting on `chromium-complete`.
 Statistics tooltip text (`{count} samples`, `from`, `to`) and the hexbin fallback label come
@@ -1191,6 +1192,23 @@ Known limits and deferrals: intersecting pieces resolve whole rather than per pi
 value transitions or auto-rotate, no 3D map or globe, surfaces take sampled grids rather than
 equations, and no calibrated visual review. The GPUI gallery links the standard engine, so it skips
 the 3D examples as it does the other complete-only families.
+
+### Demo dashboard and attribution scope (2026-11-08)
+
+The web demo's General tab left all 29 complete-only cards (gauge, relationships, hierarchy, maps,
+3D and statistics) blank on the default server, because the dashboard imported only the standard
+entry and skipped those cards. `general_dashboard.js` now loads
+`dist/aeris_charts_financial_complete.js` on first use for complete-only cards, as a consumer of
+`@aeristerminal/aeris-charts/complete` does, and keeps the standard entry for the rest, so the
+financial tab never downloads the larger build. `general_charts.spec.mjs` now requires every card
+to mount on every project.
+
+The Aeris Terminal attribution logo is scoped to financial charts: `create_chart` shows it only
+while the chart has at least one financial-time pane, rechecked on each repaint, so general-only
+charts carry no logo and adding or removing a financial pane adds or removes it. NOTICE section
+7(b), the readme, `docs/public_api.md` and `docs/architecture.md` state the same scope.
+`license_attribution.spec.mjs` covers the general-only, mixed and removal cases and the logo's
+placement in a general bottom pane of a mixed chart.
 
 ## Known gaps
 

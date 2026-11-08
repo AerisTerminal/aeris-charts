@@ -274,7 +274,8 @@ series. `create_partial_price_line()` remains only as a compatibility controller
 series options, not a separate primitive or rendering implementation.
 
 `create_chart` adds a small Aeris Terminal logo link (to https://aeristerminal.com/) in the
-bottom-left corner of the bottom pane, using the light- or dark-theme logo to match the selected
+bottom-left corner of the bottom pane while the chart has a financial pane (charts made only of
+general panes carry no logo), using the light- or dark-theme logo to match the selected
 theme, and the first chart on a page prints one license notice to the browser console. Both are
 required legal notices under [NOTICE](../NOTICE). Commercial licensees pass `licenseKey` to hide
 them; the key is read at creation and never reaches the engine. `layout` contains only visual chart

@@ -1224,8 +1224,8 @@ test("general dashboard showcases every catalog example", async ({ page, browser
     "box_plot", "heatmap_grid", "scatter", "bubble", "pie", "radar", "polar_area", "radial_bar",
     "waterfall", "bullet",
     "funnel", "treemap", "sankey", "sunburst", "gantt", "calendar_heatmap", "marimekko",
-    // Complete-build statistics, gauge, relationship, hierarchy, map and 3D families; the standard
-    // build lists these cards but skips mounting them.
+    // Complete-build statistics, gauge, relationship, hierarchy, map and 3D families; their cards
+    // load the complete entry, so they render on the standard demo page too.
     "violin", "density_curve", "ridgeline", "strip_plot", "beeswarm", "dot_plot",
     "ecdf", "qq_plot", "hexbin", "contour", "parallel_coordinates", "scatter_matrix",
     "gauge", "chord", "tree", "dendrogram", "circle_packing", "icicle", "network", "venn", "word_cloud",
@@ -1245,11 +1245,12 @@ test("general dashboard showcases every catalog example", async ({ page, browser
   await page.getByRole("button", { name: "All" }).click();
   await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(total);
   const first_card = page.locator("#general_workspace .general-chart-card").first();
-  // Complete-only statistics cards report data-mounted="complete-only" on the standard build;
-  // the scroll assertion targets the last card that this build actually mounts.
-  const last = page.locator("#general_workspace .general-chart-card:not([data-complete-only=\"true\"])").last();
-  await last.scrollIntoViewIfNeeded();
-  await expect(last).toHaveAttribute("data-mounted", "true");
+  // Every card paints, including complete-only families, whichever build the page itself loaded.
+  for (const card of await page.locator("#general_workspace .general-chart-card").all()) {
+    await card.scrollIntoViewIfNeeded();
+    await expect(card).toHaveAttribute("data-mounted", "true");
+  }
+  expect(await page.evaluate(() => window.__generalDashboard.errors)).toEqual([]);
   await page.waitForTimeout(500);
   // Charts scrolled past stay mounted, so scrolling back never shows a blank card.
   await expect(first_card).toHaveAttribute("data-mounted", "true");
@@ -1258,9 +1259,10 @@ test("general dashboard showcases every catalog example", async ({ page, browser
   // Cards carry only the chart and its legend: no header, description, or status footer.
   expect(await page.locator("#general_workspace .general-chart-card h2, #general_workspace .general-chart-card p").count()).toBe(0);
 
-  // Product attribution is not part of the chart surface. The hosts contain canvases/tooltips only;
-  // legacy attribution options are retired and cannot inject a mark back into general charts.
+  // The Aeris Terminal logo belongs to financial charts only; no general card carries it.
   expect(await page.locator("#general_workspace .aeris_charts-attribution-logo").count()).toBe(0);
+  expect(await page.locator('#general_workspace a[href^="https://aeristerminal.com"]').count()).toBe(0);
+  expect(await page.locator("#general_workspace .general-chart-host img").count()).toBe(0);
   expect(await page.locator("#general_workspace .general-chart-host svg").count()).toBe(0);
   expect(await page.locator("#general_workspace .general-chart-host").evaluateAll((hosts) =>
     hosts.every((host) => !/Aeris Terminal|powered by/i.test(host.textContent ?? "")))).toBe(true);

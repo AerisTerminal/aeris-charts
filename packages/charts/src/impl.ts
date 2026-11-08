@@ -4599,6 +4599,7 @@ export class chart_impl implements chart_api {
   private readonly canvas_primitives: canvas_primitive_entry[] = [];
   private plugin_resize_observer: ResizeObserver | null = null;
   private backend_loss_count = 0;
+  private attribution_required = false;
   private attribution: HTMLAnchorElement | null = null;
   private attribution_left = -1;
   private attribution_bottom = -1;
@@ -4770,7 +4771,7 @@ export class chart_impl implements chart_api {
       this.text_editor_reposition?.();
       this.run_canvas_primitives();
       this.emit_visible_range_changes();
-      this.place_attribution();
+      this.sync_attribution();
       // The engine owns whether a pulse is drawn (line/area default on, data required), so any
       // repaint-driving change — new series, type change, data, removal — re-syncs the loop.
       this.sync_animation();
@@ -4778,11 +4779,41 @@ export class chart_impl implements chart_api {
   }
 
   /**
-   * Show the Aeris Terminal attribution logo in the bottom-left corner of the bottom pane. NOTICE
-   * section 7(b) requires it for AGPL use; `create_chart` skips it for commercial license keys.
+   * Require the Aeris Terminal attribution logo in the bottom-left corner of the bottom pane while
+   * the chart has a financial pane. NOTICE section 7(b) requires it for AGPL use of financial
+   * charts; `create_chart` skips it for commercial license keys. General-only charts carry no logo.
    */
   show_attribution(): void {
-    if (this.removed || this.attribution !== null) return;
+    if (this.removed) return;
+    this.attribution_required = true;
+    this.sync_attribution();
+  }
+
+  private has_financial_pane(): boolean {
+    const panes = this.wasm.pane_count();
+    for (let pane = 0; pane < panes; pane++) {
+      if (this.wasm.pane_is_financial_time(pane)) return true;
+    }
+    return false;
+  }
+
+  /** Panes can switch between financial and general content, so the logo follows every frame. */
+  private sync_attribution(): void {
+    const wanted = this.attribution_required && !this.removed && this.has_financial_pane();
+    if (!wanted) {
+      if (this.attribution !== null) {
+        this.attribution.remove();
+        this.attribution = null;
+        this.attribution_left = -1;
+        this.attribution_bottom = -1;
+      }
+      return;
+    }
+    if (this.attribution === null) this.create_attribution();
+    this.place_attribution();
+  }
+
+  private create_attribution(): void {
     const link = document.createElement("a");
     link.href = "https://aeristerminal.com/";
     link.target = "_blank";
@@ -4800,7 +4831,6 @@ export class chart_impl implements chart_api {
     this.container.appendChild(link);
     this.attribution = link;
     this.sync_attribution_theme();
-    this.place_attribution();
   }
 
   private sync_attribution_theme(): void {

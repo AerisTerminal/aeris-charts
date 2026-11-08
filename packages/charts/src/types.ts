@@ -2344,8 +2344,9 @@ export interface chart_options {
   autoSize: boolean;
   /**
    * Aeris Charts Commercial License key. Any non-empty key hides the once-per-page license notice
-   * in the browser console and the bottom-left Aeris Terminal attribution logo. Only commercial
-   * licensees may set it; AGPL use must keep both (see NOTICE). Package-level: read at chart
+   * in the browser console and the bottom-left Aeris Terminal attribution logo that charts with a
+   * financial pane display (general-only charts carry no logo). Only commercial licensees may set
+   * it; AGPL use must keep both (see NOTICE). Package-level: read at chart
    * creation and never forwarded to the engine.
    */
   licenseKey: string;

@@ -27,20 +27,32 @@ function create_card(example, index) {
   return card;
 }
 
-/** The statistics catalog entries exist only in the complete build; `null` skips the card. */
-function complete_build_active() {
+let complete_create_chart = null;
+
+function loaded_build_is_complete() {
   try {
     return build_variant() === "complete";
   } catch {
-    return null; // engine not initialized yet; the post-create check below decides
+    return false; // engine not initialized yet
   }
 }
 
+/**
+ * Complete-only families exist only in `@aeristerminal/aeris-charts/complete`. Their cards load
+ * that entry on first use, as a consumer of those families does, so every card renders without
+ * the financial tab downloading the larger build.
+ */
+function chart_factory(example) {
+  if (example.complete_only !== true || loaded_build_is_complete()) return create_chart;
+  complete_create_chart ??= import("./dist/aeris_charts_financial_complete.js")
+    .then((module) => module.create_chart);
+  return complete_create_chart;
+}
+
 async function mount_example(example, card) {
-  if (example.complete_only === true && complete_build_active() === false) return null;
   const host = card.querySelector(".general-chart-host");
   const grid = example.grid !== false;
-  const chart = await create_chart(host, {
+  const chart = await (await chart_factory(example))(host, {
     autoSize: true,
     // Auto tries WebGPU first. Unsupported browsers and machines without an available adapter
     // must still render the same chart through the engine's Canvas2D fallback.
@@ -65,10 +77,6 @@ async function mount_example(example, card) {
     },
     kinetic_scroll: false,
   });
-  if (example.complete_only === true && complete_build_active() === false) {
-    chart.remove();
-    return null;
-  }
   const pane = chart.panes()[0];
   const pane_index = pane.pane_index();
   for (const axis of example.axes ?? []) chart.add_axis({ ...axis, pane: pane_index });
@@ -130,15 +138,11 @@ function update_error_status() {
 }
 
 async function mount_state(state) {
-  if (!dashboard_active || !state.desired || state.entry !== null || state.mounting !== null || state.failed || state.skipped || state.card.hidden) return;
+  if (!dashboard_active || !state.desired || state.entry !== null || state.mounting !== null || state.failed || state.card.hidden) return;
   state.mounting = mount_example(state.example, state.card);
   try {
     const entry = await state.mounting;
-    if (entry === null) {
-      // Complete-build-only example on the standard build: keep the card, skip the chart.
-      state.skipped = true;
-      state.card.dataset.mounted = "complete-only";
-    } else if (!dashboard_active || !state.desired || state.card.hidden) {
+    if (!dashboard_active || !state.desired || state.card.hidden) {
       entry.dispose();
       state.card.dataset.mounted = "false";
     } else {
@@ -163,7 +167,7 @@ async function mount_state(state) {
 function reconcile_active_charts() {
   if (!dashboard_active) return;
   for (const state of states) {
-    if (state.card.hidden || state.failed || state.skipped) {
+    if (state.card.hidden || state.failed) {
       state.desired = false;
       unmount_state(state);
     } else if (state.visible) {
@@ -240,7 +244,6 @@ export function install_general_dashboard({ root, backend = "auto", theme = "dar
       entry: null,
       mounting: null,
       failed: false,
-      skipped: false,
       visible: false,
       desired: false,
       index,
