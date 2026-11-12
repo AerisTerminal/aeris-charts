@@ -18870,6 +18870,22 @@ fn axis_primitives_keep_normal_and_round_tick_weights_distinct() {
             .iter()
             .any(|prim| matches!(prim, Prim::Text { text, weight: 700, .. } if text == "rounded"))
     );
+
+    chart
+        .apply_options(r#"{"layout":{"fontWeight":500}}"#)
+        .expect("layout font weight applies");
+    primitives.clear();
+    chart.build_axis_primitives_into(&axis, &mut primitives);
+    assert!(
+        primitives
+            .iter()
+            .any(|prim| matches!(prim, Prim::Text { text, weight: 500, .. } if text == "normal"))
+    );
+    assert!(
+        primitives
+            .iter()
+            .any(|prim| matches!(prim, Prim::Text { text, weight: 700, .. } if text == "rounded"))
+    );
 }
 
 #[test]

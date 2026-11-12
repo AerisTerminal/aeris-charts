@@ -229,7 +229,21 @@ pub struct LayoutOptions {
     pub font_size: f64,
     #[serde(rename = "fontFamily")]
     pub font_family: String,
+    /// Weight of regular axis and scale label text (CSS 100–900). Hosts measure regular axis
+    /// text at this weight; bold labels use 700, or this weight when it is heavier.
+    #[serde(rename = "fontWeight")]
+    pub font_weight: u16,
     pub panes: PanesOptions,
+}
+
+impl LayoutOptions {
+    /// The painted weight of an axis label: [`Self::font_weight`] within the CSS range, raised
+    /// to at least 700 for a bold label.
+    #[must_use]
+    pub fn axis_label_weight(&self, bold: bool) -> u16 {
+        let regular = self.font_weight.clamp(100, 900);
+        if bold { regular.max(700) } else { regular }
+    }
 }
 
 impl Default for LayoutOptions {
@@ -242,6 +256,7 @@ impl Default for LayoutOptions {
             bearish_color: DEFAULT_MARKET_DOWN_CSS.into(),
             font_size: 12.0,
             font_family: default_font_family(),
+            font_weight: 400,
             panes: PanesOptions::default(),
         }
     }
@@ -861,12 +876,45 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn axis_label_weight_follows_layout_font_weight_within_the_css_range() {
+        let mut layout = LayoutOptions::default();
+        assert_eq!(
+            (
+                layout.axis_label_weight(false),
+                layout.axis_label_weight(true)
+            ),
+            (400, 700)
+        );
+        layout.font_weight = 500;
+        assert_eq!(
+            (
+                layout.axis_label_weight(false),
+                layout.axis_label_weight(true)
+            ),
+            (500, 700)
+        );
+        layout.font_weight = 800;
+        assert_eq!(
+            (
+                layout.axis_label_weight(false),
+                layout.axis_label_weight(true)
+            ),
+            (800, 800)
+        );
+        layout.font_weight = 0;
+        assert_eq!(layout.axis_label_weight(false), 100);
+        layout.font_weight = 2000;
+        assert_eq!(layout.axis_label_weight(false), 900);
+    }
+
+    #[test]
     fn defaults_match_aeris_style() {
         let o = ChartOptions::default();
         assert_eq!(o.layout.background.color, DEFAULT_SURFACE_CSS);
         assert_eq!(o.layout.text_color, DEFAULT_FOREGROUND_CSS);
         assert_eq!(o.layout.muted_text_color, DEFAULT_MUTED_FOREGROUND_CSS);
         assert_eq!(o.layout.font_size, 12.0);
+        assert_eq!(o.layout.font_weight, 400);
         assert_eq!(o.grid.vert_lines.color, DEFAULT_BORDER_CSS);
         assert_eq!(o.grid.horz_lines.style, line_style::DASHED);
         assert!(!o.grid.vert_lines.visible);

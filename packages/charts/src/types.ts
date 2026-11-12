@@ -2306,6 +2306,11 @@ export interface chart_options {
     bearishColor: string;
     fontSize: number;
     fontFamily: string;
+    /**
+     * Weight of regular axis and scale label text (CSS 100–900, default 400). Bold labels use
+     * 700, or this weight when it is heavier.
+     */
+    fontWeight: number;
     panes: {
       separatorColor: string;
       /** Hover band for an interactive pane separator. */

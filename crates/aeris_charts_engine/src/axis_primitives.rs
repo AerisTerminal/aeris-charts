@@ -205,7 +205,7 @@ impl ChartEngine {
 
         let append_text = |label: &AxisLabel, output: &mut Vec<Prim>| {
             let size = layout.font_size * label.font_scale;
-            let weight = if label.bold { 700 } else { 400 };
+            let weight = layout.axis_label_weight(label.bold);
             let correction = if label.midpoint == AxisTextMidpoint::None || label.text.is_empty() {
                 0.0
             } else {
@@ -247,7 +247,7 @@ impl ChartEngine {
                     AxisTextAlign::Right => TextAlign::Right,
                     AxisTextAlign::Center => TextAlign::Center,
                 },
-                weight: if label.bold { 700 } else { 400 },
+                weight: layout.axis_label_weight(label.bold),
                 italic: false,
                 angle: label.angle as f32,
             });
