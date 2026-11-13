@@ -1228,6 +1228,82 @@ impl ChartEngine {
     }
 }
 
+/// Clips every horizontal and vertical line to the pane's device-pixel clip.
+///
+/// Executors walk a dashed line one dash at a time, so a line reaching far outside the pane (a
+/// drawing anchored long before the visible bars, or a deeply zoomed price scale) would cost
+/// millions of dashes per frame. A clipped dashed line starts a whole number of pattern periods
+/// later, so every visible pixel is unchanged. A line wholly outside the clip keeps its slot,
+/// leaving the pane's segment indices valid, as an empty span.
+fn clip_lines_to_scissor(prims: &mut [Prim], scissor: [u32; 4]) {
+    let [left, top, width, height] = scissor.map(i64::from);
+    let horizontal = (left, left + width);
+    let vertical = (top, top + height);
+    for prim in prims {
+        match prim {
+            Prim::HLine {
+                y,
+                x0,
+                x1,
+                width,
+                style,
+                ..
+            } => clip_line_span(*y, x0, x1, *width, *style, horizontal, vertical),
+            Prim::VLine {
+                x,
+                y0,
+                y1,
+                width,
+                style,
+                ..
+            } => clip_line_span(*x, y0, y1, *width, *style, vertical, horizontal),
+            _ => {}
+        }
+    }
+}
+
+/// Clips the `[from, to)` span of a line centered on `across` to the `along` and `beside` clip
+/// ranges, keeping the dash phase. Reversed spans paint nothing in any executor and are left as is.
+fn clip_line_span(
+    across: i32,
+    from: &mut i32,
+    to: &mut i32,
+    width: i32,
+    style: LineStyle,
+    along: (i64, i64),
+    beside: (i64, i64),
+) {
+    if *from > *to {
+        return;
+    }
+    let margin = i64::from(width.max(1));
+    let (start, end) = (i64::from(*from), i64::from(*to));
+    let center = i64::from(across);
+    let (lowest, highest) = (along.0 - margin, along.1 + margin);
+    if center + margin < beside.0 || center - margin > beside.1 || end <= lowest || start >= highest
+    {
+        *to = *from;
+        return;
+    }
+    if start < lowest {
+        let period = style
+            .dash_pattern(width as f32)
+            .iter()
+            .map(|segment| f64::from(*segment))
+            .sum::<f64>()
+            .round() as i64;
+        let clipped = if period > 0 {
+            start + (lowest - start) / period * period
+        } else {
+            lowest
+        };
+        *from = clipped as i32;
+    }
+    if end > highest {
+        *to = highest as i32;
+    }
+}
+
 fn translate_prims_x(prims: &mut [Prim], dx: i32) {
     let dxf = dx as f32;
     for prim in prims {
@@ -2746,6 +2822,9 @@ impl ChartEngine {
                 for point in &mut out.points {
                     point[0] += pane_left_px as f32;
                 }
+            }
+            for layer in [&mut out.under, &mut out.main, &mut out.top_prims] {
+                clip_lines_to_scissor(layer, out.scissor);
             }
             retained.segments[pi] = FramePaneSegments {
                 under_end: out.under.len(),

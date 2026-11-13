@@ -23805,3 +23805,172 @@ fn radial_bar_defaults_draw_one_ring_per_category_with_value_arcs() {
     assert_eq!(polar_hit_row(&reversed, 45.0, ring(2.0)), Some(0));
     assert_eq!(polar_hit_row(&reversed, 45.0, ring(0.0)), Some(2));
 }
+
+/// Dash spans as every executor emits them, cut to `[lo, hi)`.
+fn visible_dashes(
+    style: LineStyle,
+    width: i32,
+    from: i32,
+    to: i32,
+    lo: i32,
+    hi: i32,
+) -> Vec<(i32, i32)> {
+    let pattern = style.dash_pattern(width as f32);
+    let mut spans = Vec::new();
+    if pattern.is_empty() {
+        spans.push((from, to));
+    } else {
+        let mut pos = from as f32;
+        let mut i = 0usize;
+        let mut on = true;
+        while pos < to as f32 {
+            let seg = pattern[i % pattern.len()];
+            if on {
+                let a = pos.round() as i32;
+                let b = ((pos + seg).min(to as f32)).round() as i32;
+                if b > a {
+                    spans.push((a, b));
+                }
+            }
+            pos += seg;
+            i += 1;
+            on = !on;
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(a, b)| (a.max(lo), b.min(hi)))
+        .filter(|(a, b)| b > a)
+        .collect()
+}
+
+#[test]
+fn clipped_dashed_lines_keep_their_visible_dashes() {
+    let scissor = [0, 0, 800, 600];
+    for (style, width) in [
+        (LineStyle::Dashed, 1),
+        (LineStyle::Dashed, 3),
+        (LineStyle::Dotted, 2),
+        (LineStyle::Solid, 1),
+    ] {
+        let (from, to) = (-100_003, 5_000);
+        let mut prims = vec![
+            Prim::HLine {
+                y: 10,
+                x0: from,
+                x1: to,
+                width,
+                style,
+                color: PRIMARY,
+            },
+            Prim::VLine {
+                x: 10,
+                y0: from,
+                y1: to,
+                width,
+                style,
+                color: PRIMARY,
+            },
+        ];
+        clip_lines_to_scissor(&mut prims, scissor);
+        let Prim::HLine { x0, x1, .. } = prims[0] else {
+            unreachable!()
+        };
+        assert!(
+            x1 - x0 <= 800 + 2 * width + 2 * 6 * width,
+            "{style:?} {x0}..{x1}"
+        );
+        assert_eq!(
+            visible_dashes(style, width, x0, x1, 0, 800),
+            visible_dashes(style, width, from, to, 0, 800),
+            "{style:?} width {width} keeps its visible horizontal dashes"
+        );
+        let Prim::VLine { y0, y1, .. } = prims[1] else {
+            unreachable!()
+        };
+        assert!(
+            y1 - y0 <= 600 + 2 * width + 2 * 6 * width,
+            "{style:?} {y0}..{y1}"
+        );
+        assert_eq!(
+            visible_dashes(style, width, y0, y1, 0, 600),
+            visible_dashes(style, width, from, to, 0, 600),
+            "{style:?} width {width} keeps its visible vertical dashes"
+        );
+    }
+
+    // Wholly outside the clip, along or across the line: the slot stays, empty.
+    let mut outside = vec![
+        Prim::HLine {
+            y: 10,
+            x0: -59_924_829,
+            x1: -11_702_109,
+            width: 1,
+            style: LineStyle::Dashed,
+            color: PRIMARY,
+        },
+        Prim::HLine {
+            y: -89_404,
+            x0: 0,
+            x1: 800,
+            width: 1,
+            style: LineStyle::Dashed,
+            color: PRIMARY,
+        },
+    ];
+    clip_lines_to_scissor(&mut outside, scissor);
+    assert_eq!(outside.len(), 2);
+    for prim in &outside {
+        let Prim::HLine { x0, x1, .. } = prim else {
+            unreachable!()
+        };
+        assert_eq!(x0, x1, "an invisible line paints nothing");
+    }
+}
+
+#[test]
+fn far_off_pane_drawing_lines_are_clipped_to_the_pane() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = countdown_chart();
+    chart
+        .add_drawing(
+            DrawingKind::FibonacciRetracement,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: -5_000_000.0,
+                    price: 10.5,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let frame = chart.build_frame();
+    let pane = &frame.panes[0];
+    let [left, top, width, height] = pane.scissor.map(|value| value as i32);
+    let mut visible_lines = 0;
+    for prim in pane.under.iter().chain(&pane.main).chain(&pane.top_prims) {
+        let (from, to, low, high, line_width) = match prim {
+            Prim::HLine {
+                x0, x1, width: w, ..
+            } => (*x0, *x1, left, left + width, *w),
+            Prim::VLine {
+                y0, y1, width: w, ..
+            } => (*y0, *y1, top, top + height, *w),
+            _ => continue,
+        };
+        if to > from {
+            visible_lines += 1;
+            assert!(
+                from >= low - line_width - 12 * line_width && to <= high + line_width,
+                "line {from}..{to} stays within the pane clip {low}..{high}"
+            );
+        }
+    }
+    assert!(visible_lines > 0, "the retracement levels cross the pane");
+}
