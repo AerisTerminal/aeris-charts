@@ -11,7 +11,7 @@ use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
 use aeris_charts_core::style::{DEFAULT_WARNING_RGB, ORDER_FLOW_BUY_RGB, ORDER_FLOW_SELL_RGB};
 use aeris_charts_render::color::Color;
 
-use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
+use crate::{ChartEngine, PriceFormatKind, SeriesEntry, SeriesKind, SeriesPriceFormat};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const REPLAY_CHECKPOINT_INTERVAL: usize = 1_024;
@@ -2199,6 +2199,23 @@ impl FootprintAggregator {
 }
 
 impl ChartEngine {
+    /// The series whose price-axis chrome (title, last value, countdown, price line and
+    /// bid/ask) `series` shows. A footprint drawn for an order-flow presentation stands in for
+    /// the presentation's primary price series, which the host keeps as whitespace, so it shows
+    /// the primary's chrome: the host's price-axis toggles, symbol title and quotes keep
+    /// applying when the chart type changes to or from the footprint.
+    pub(crate) fn price_chrome_source<'a>(&'a self, series: &'a SeriesEntry) -> &'a SeriesEntry {
+        let Some(stream) = series.footprint.as_ref().map(|state| state.trade_stream_id) else {
+            return series;
+        };
+        self.order_flow_tapes
+            .iter()
+            .find(|&&(_, tape)| tape == stream)
+            .and_then(|&(primary, _)| self.series_entry(primary))
+            .filter(|primary| primary.id != series.id && primary.pane_index == series.pane_index)
+            .unwrap_or(series)
+    }
+
     pub(crate) fn apply_indicator_chrome_to_trade_studies(
         &mut self,
         options: crate::IndicatorChromeOptions,
@@ -2676,9 +2693,6 @@ impl ChartEngine {
                     visual: options.visual,
                 })?;
                 self.bind_footprint_series_to_stream(series, stream)?;
-                if let Some(entry) = self.series_entry_mut(series) {
-                    entry.countdown_visible = true;
-                }
                 presentation.footprint_series = Some(series);
             }
             if options.show_cumulative_delta {
@@ -2775,9 +2789,6 @@ impl ChartEngine {
                 if let Err(error) = self.bind_footprint_series_to_stream(series, stream_id) {
                     self.remove_series(series);
                     return Err(error);
-                }
-                if let Some(entry) = self.series_entry_mut(series) {
-                    entry.countdown_visible = true;
                 }
                 presentation.footprint_series = Some(series);
                 if let Some(id) = presentation.big_trades {
@@ -7581,7 +7592,7 @@ mod tests {
     }
 
     #[test]
-    fn order_flow_presentation_is_atomic_and_the_footprint_owns_the_price_chrome() {
+    fn order_flow_presentation_is_atomic_and_the_footprint_shows_the_primary_price_chrome() {
         let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
         let presentation = chart
             .add_order_flow_presentation(
@@ -7625,7 +7636,7 @@ mod tests {
             crate::SEPARATE_INDICATOR_PANE_STRETCH
         );
         let entry = chart.series_entry(footprint).unwrap();
-        assert!(entry.last_value_visible && entry.price_line_visible && entry.countdown_visible);
+        assert_eq!(chart.price_chrome_source(entry).id, 0);
         // The primary is never cut over: the host supplies it as whitespace instead.
         assert_eq!(chart.series_entry(0).unwrap().render_before_time, None);
 
@@ -7704,6 +7715,72 @@ mod tests {
                 .precision,
             0
         );
+    }
+
+    #[test]
+    fn the_primary_price_axis_toggles_drive_its_footprint_stand_in() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        if let Some(primary) = chart.series_entry_mut(0) {
+            primary.title = "NQ".to_string();
+            primary.title_visible = true;
+            primary.last_value_visible = true;
+        }
+        let presentation = chart
+            .add_order_flow_presentation(
+                "CME:NQ",
+                0,
+                OrderFlowPresentationOptions {
+                    show_cumulative_delta: false,
+                    ..order_flow_options(true)
+                },
+            )
+            .unwrap();
+        let footprint = presentation.footprint_series().unwrap();
+        // The footprint's own chrome is not what the price axis shows.
+        if let Some(entry) = chart.series_entry_mut(footprint) {
+            entry.title_visible = false;
+            entry.last_value_visible = false;
+        }
+        chart
+            .update_order_flow_presentation(
+                presentation,
+                vec![
+                    trade(1_000_000, 100.0, 2.0, AggressorSide::Buy),
+                    trade(61_000_000, 101.0, 1.0, AggressorSide::Sell),
+                ],
+                false,
+            )
+            .unwrap();
+        chart.time_scale.set_width(600.0);
+        chart.fit_content();
+        let axis_texts = |chart: &mut ChartEngine| {
+            chart.build_frame();
+            chart
+                .build_axis_frame(
+                    100.0,
+                    |text, _bold| text.len() as f64 * 7.0,
+                    |text, _bold| text.len() as f64 * 6.0,
+                )
+                .labels
+                .into_iter()
+                .filter(|label| label.background.is_some())
+                .map(|label| label.text)
+                .collect::<Vec<_>>()
+        };
+        let texts = axis_texts(&mut chart);
+        assert!(texts.iter().any(|text| text == "NQ"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "101"), "{texts:?}");
+
+        assert!(chart.toggle_series_chrome(0, crate::SeriesChromeFlag::Title));
+        let texts = axis_texts(&mut chart);
+        assert!(!texts.iter().any(|text| text == "NQ"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "101"), "{texts:?}");
+
+        assert!(chart.toggle_series_chrome(0, crate::SeriesChromeFlag::Title));
+        assert!(chart.toggle_series_chrome(0, crate::SeriesChromeFlag::LastValue));
+        let texts = axis_texts(&mut chart);
+        assert!(texts.iter().any(|text| text == "NQ"), "{texts:?}");
+        assert!(!texts.iter().any(|text| text == "101"), "{texts:?}");
     }
 
     fn order_flow_options(show_footprint: bool) -> OrderFlowPresentationOptions {

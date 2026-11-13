@@ -1754,7 +1754,8 @@ impl ChartEngine {
         for series in &self.series {
             // reference SeriesPriceLinePaneView: one built-in last-price line per visible series
             // with `priceLineVisible` (default true), drawn on the series' own price scale.
-            if !series.visible || !series.price_line_visible {
+            let chrome = self.price_chrome_source(series);
+            if !series.visible || !chrome.price_line_visible {
                 continue;
             }
             if series.pane_index != pane_index {
@@ -1872,7 +1873,8 @@ impl ChartEngine {
     ) {
         let pane = &self.panes[pane_index];
         for series in &self.series {
-            if !series.visible || !series.bid_ask_visible || series.pane_index != pane_index {
+            let chrome = self.price_chrome_source(series);
+            if !series.visible || !chrome.bid_ask_visible || series.pane_index != pane_index {
                 continue;
             }
             let scale = pane_scale(pane, series_scale_target(series));
@@ -1884,8 +1886,8 @@ impl ChartEngine {
             };
             let market = self.market_colors();
             let sides = [
-                (series.bid, series.bid_color.as_str(), PRIMARY),
-                (series.ask, series.ask_color.as_str(), market.down),
+                (chrome.bid, chrome.bid_color.as_str(), PRIMARY),
+                (chrome.ask, chrome.ask_color.as_str(), market.down),
             ];
             for (value, css, fallback) in sides {
                 let Some(price) = value else {
@@ -1896,8 +1898,8 @@ impl ChartEngine {
                     y: (scale.price_to_coordinate(price, base_value) * vpr).round() as i32,
                     x0: 0,
                     x1: width,
-                    width: 1f64.max((series.bid_ask_line_width * hpr).floor()) as i32,
-                    style: crate::line_style_from_u8(series.bid_ask_line_style),
+                    width: 1f64.max((chrome.bid_ask_line_width * hpr).floor()) as i32,
+                    style: crate::line_style_from_u8(chrome.bid_ask_line_style),
                     color,
                 });
             }

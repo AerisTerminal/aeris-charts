@@ -1498,7 +1498,9 @@ pane-local price scale. Any series may carry a `render_before_time` cutoff: rows
 their data, scale participation, and last-value chrome but are not drawn. An order-flow
 presentation never hides its primary: a host showing a footprint installs the primary as
 whitespace (times only), so it supplies the bar grid and time axis while the footprint series owns
-autoscale, the last-value label, price line, and countdown. A partial live price line (the default extent) runs from the latest bar to the edge where its price scale and last-value label sit, so it follows the scale to the left or right side (`live_price_line_span`); a full line spans the pane. Up/down volume histograms read each
+autoscale and draws the last-value label, price line, countdown and bid/ask. Which of those show,
+and the label's title, still come from the primary (`price_chrome_source`), so the host's
+price-axis toggles and symbol title apply unchanged to a footprint chart. A partial live price line (the default extent) runs from the latest bar to the edge where its price scale and last-value label sit, so it follows the scale to the left or right side (`live_price_line_span`); a full line spans the pane. Up/down volume histograms read each
 column's direction from the candle or bar series a Volume indicator was computed from, then from
 the primary bar and, where that row is whitespace, from the visible footprint bar in the same slot.
 A host that presents a footprint can therefore keep its OHLC bars in a hidden candle series as the

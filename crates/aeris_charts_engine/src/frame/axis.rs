@@ -1914,7 +1914,7 @@ impl ChartEngine {
                         false,
                     ));
                 }
-                if series.countdown_visible
+                if self.price_chrome_source(series).countdown_visible
                     && let Some(countdown) = self.series_countdown_text(series.id)
                 {
                     text_width =
@@ -2355,13 +2355,14 @@ impl ChartEngine {
                 if !series.visible || series.pane_index != pi {
                     continue;
                 }
-                let show_price = series.last_value_visible;
-                let title = if titles_visible && series.title_visible && !series.title.is_empty() {
-                    Some(series.title.clone())
+                let chrome = self.price_chrome_source(series);
+                let show_price = chrome.last_value_visible;
+                let title = if titles_visible && chrome.title_visible && !chrome.title.is_empty() {
+                    Some(chrome.title.clone())
                 } else {
                     None
                 };
-                let countdown = if series.countdown_visible {
+                let countdown = if chrome.countdown_visible {
                     self.series_countdown_text(series.id)
                 } else {
                     None
@@ -2515,20 +2516,20 @@ impl ChartEngine {
                 // title+price cluster per side with a live quote, centered on the quote's
                 // coordinate. Their attach groups are offset far from any series id so the
                 // chips never chain into the main cluster (or each other) when adjacent.
-                if series.bid_ask_visible {
+                if chrome.bid_ask_visible {
                     let market = self.market_colors();
                     let sides = [
                         (
                             crate::text::trading::BID.text(self.language),
-                            series.bid,
-                            series.bid_color.as_str(),
+                            chrome.bid,
+                            chrome.bid_color.as_str(),
                             PRIMARY,
                             1u32,
                         ),
                         (
                             crate::text::trading::ASK.text(self.language),
-                            series.ask,
-                            series.ask_color.as_str(),
+                            chrome.ask,
+                            chrome.ask_color.as_str(),
                             market.down,
                             2u32,
                         ),

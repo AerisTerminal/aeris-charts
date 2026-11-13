@@ -3298,7 +3298,9 @@ impl ChartEngine {
                 let layout_changed = self
                     .series
                     .iter()
-                    .filter(|series| series.visible && series.countdown_visible)
+                    .filter(|series| {
+                        series.visible && self.price_chrome_source(series).countdown_visible
+                    })
                     .any(|series| {
                         let previous = self.series_countdown_layout_key_at(series.id, previous_now);
                         let next = self.series_countdown_layout_key_at(series.id, Some(now));
@@ -3328,7 +3330,7 @@ impl ChartEngine {
         if self
             .series
             .iter()
-            .any(|series| series.visible && series.countdown_visible)
+            .any(|series| series.visible && self.price_chrome_source(series).countdown_visible)
         {
             // The countdown row contributes to the price-axis width.
             self.invalidate_frame_layout_and_axis();
