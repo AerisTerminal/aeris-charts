@@ -975,8 +975,11 @@ session's left edge with cells at most 14 CSS px wide, so neighbouring sessions 
 Level of detail is chosen per profile from its cell size: letters, then blocks, then one bar per
 row (rows sharing a device pixel merged) when cells fall under 3 CSS px or more than 8,192 cells
 are visible. Value-area and single-print colors, the POC line and the initial-balance bar are
-lowered into the shared ordered frame, so every executor paints the same cells. `tpo_profiles`
-remains a read-only query over any OHLC series; the former TPO overlay primitive is removed.
+lowered into the shared ordered frame, so every executor paints the same cells. A TPO series is
+also an OHLC price source wherever candles are: candle profile queries, periodic profile
+presentations, volume-profile indicators, profile drawings (`set_series_volume_source`) and
+volume direction. `tpo_profiles` remains a read-only query over any OHLC series; the former TPO
+overlay primitive is removed.
 Price and volume corrections invalidate only drawings bound to that series; tape updates and
 replay seeks invalidate drawings bound to that stream even when no footprint series is attached.
 A stream remains in use while a profile drawing refers to it, so removal cannot leave a live

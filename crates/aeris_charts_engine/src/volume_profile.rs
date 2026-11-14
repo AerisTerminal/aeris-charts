@@ -109,7 +109,7 @@ impl ChartEngine {
             || !options.valid()
             || !matches!(
                 price.kind,
-                crate::SeriesKind::Candlestick | crate::SeriesKind::Bar
+                crate::SeriesKind::Candlestick | crate::SeriesKind::Bar | crate::SeriesKind::Tpo
             )
             || !matches!(
                 volume.kind,

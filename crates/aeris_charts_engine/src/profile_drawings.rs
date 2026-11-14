@@ -184,7 +184,7 @@ impl ChartEngine {
     ) -> bool {
         if !matches!(
             self.series_entry(price_series).map(|entry| entry.kind),
-            Some(SeriesKind::Candlestick | SeriesKind::Bar)
+            Some(SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Tpo)
         ) {
             return false;
         }

@@ -866,7 +866,10 @@ impl ChartEngine {
             .map(|binding| binding.source)
             .filter(|&source| {
                 self.series_entry(source).is_some_and(|series| {
-                    matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar)
+                    matches!(
+                        series.kind,
+                        SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Tpo
+                    )
                 })
             });
         let Some(primary) = self.primary_series() else {

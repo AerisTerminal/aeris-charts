@@ -447,6 +447,33 @@ mod tests {
     }
 
     #[test]
+    fn a_tpo_series_is_a_price_source_for_volume_profiles_and_profile_drawings() {
+        let (mut chart, id) = tpo_chart();
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let (times, _) = chart.data.series_data(id).unwrap();
+        let times = times.iter().map(|&time| time as f64).collect::<Vec<_>>();
+        let ones = vec![1.0; times.len()];
+        chart
+            .set_series_data(volume, &times, &ones, &ones, &ones, &ones)
+            .unwrap();
+        assert!(chart.set_series_volume_source(id, Some(volume)));
+        let profiles = chart
+            .periodic_volume_profiles(
+                crate::ProfileSource::Candles {
+                    price_series: id,
+                    volume_series: volume,
+                },
+                &[session(0)],
+                1.0,
+                12,
+                70.0,
+            )
+            .unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].total_volume > 0.0);
+    }
+
+    #[test]
     fn an_ohlc_series_converts_to_tpo_and_back_without_losing_bars() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         chart
