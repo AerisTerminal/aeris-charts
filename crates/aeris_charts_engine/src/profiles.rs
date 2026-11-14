@@ -137,7 +137,6 @@ impl PeriodicProfilePresentationOptions {
 pub const MAX_TPO_PERIODS: usize = 1_024;
 pub const MAX_TPO_TOTAL_ROWS: usize = 100_000;
 pub const MAX_TPO_TOTAL_CELLS: usize = 100_000;
-pub const MAX_TPO_PRESENTATIONS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,59 +144,6 @@ pub enum TpoCellMode {
     #[default]
     Letters,
     Blocks,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct TpoPresentationOptions {
-    pub mode: TpoCellMode,
-    pub color: String,
-    pub value_area_color: String,
-    pub single_print_color: String,
-    pub poc_color: String,
-    pub initial_balance_color: String,
-}
-
-impl Default for TpoPresentationOptions {
-    fn default() -> Self {
-        Self {
-            mode: TpoCellMode::Letters,
-            color: "#8493a8".into(),
-            value_area_color: "#335cff".into(),
-            single_print_color: "#fb4b5f".into(),
-            poc_color: "#f5a623".into(),
-            initial_balance_color: "#7d52f4".into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TpoPresentationState {
-    pub request: TpoRequest,
-    pub mode: TpoCellMode,
-    pub colors: [Color; 5],
-}
-
-impl TpoPresentationOptions {
-    fn colors(&self) -> Option<[Color; 5]> {
-        let colors = [
-            &self.color,
-            &self.value_area_color,
-            &self.single_print_color,
-            &self.poc_color,
-            &self.initial_balance_color,
-        ];
-        if colors.iter().any(|color| color.len() > 32) {
-            return None;
-        }
-        Some([
-            Color::parse_css(colors[0])?,
-            Color::parse_css(colors[1])?,
-            Color::parse_css(colors[2])?,
-            Color::parse_css(colors[3])?,
-            Color::parse_css(colors[4])?,
-        ])
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,47 +394,6 @@ impl ChartEngine {
                     mode: options.mode,
                     extend_naked_levels: options.extend_naked_levels,
                     show_developing: options.show_developing,
-                },
-            )),
-        )
-        .ok_or(ProfileError::LimitExceeded)
-    }
-    pub fn add_tpo_presentation(
-        &mut self,
-        request: TpoRequest,
-        options: TpoPresentationOptions,
-    ) -> Result<NativePrimitiveId, ProfileError> {
-        if !matches!(
-            self.series_entry(request.price_series)
-                .map(|entry| entry.kind),
-            Some(SeriesKind::Candlestick | SeriesKind::Bar)
-        ) {
-            return Err(ProfileError::UnknownSource);
-        }
-        let colors = options.colors().ok_or(ProfileError::InvalidRequest)?;
-        let live = self
-            .series
-            .iter()
-            .flat_map(|series| &series.native_primitives)
-            .filter(|primitive| {
-                matches!(
-                    primitive.kind,
-                    crate::native_primitives::NativeSeriesPrimitiveKind::TpoProfile(_)
-                )
-            })
-            .count();
-        if live >= MAX_TPO_PRESENTATIONS {
-            return Err(ProfileError::LimitExceeded);
-        }
-        self.tpo_profiles(&request)?;
-        let source = request.price_series;
-        self.insert_native_primitive(
-            source,
-            crate::native_primitives::NativeSeriesPrimitiveKind::TpoProfile(Box::new(
-                TpoPresentationState {
-                    request,
-                    mode: options.mode,
-                    colors,
                 },
             )),
         )
@@ -991,118 +896,31 @@ impl ChartEngine {
     }
 
     pub fn tpo_profiles(&self, request: &TpoRequest) -> Result<Vec<TpoSnapshot>, ProfileError> {
-        if request.boundaries.is_empty()
-            || request.boundaries.len() > MAX_PROFILE_PERIODS
-            || request.boundaries.iter().any(|boundary| {
-                boundary.start_time >= boundary.end_time
-                    || boundary.start_time.checked_mul(1_000_000).is_none()
-                    || boundary.end_time.checked_mul(1_000_000).is_none()
-            })
-            || request
-                .boundaries
-                .windows(2)
-                .any(|pair| pair[0].end_time > pair[1].start_time)
-            || request.period_seconds == 0
-            || !valid_tick(request.tick_size)
-            || !(0.0 < request.value_area_percent && request.value_area_percent <= 100.0)
-            || request.initial_balance_periods == 0
-        {
+        let rules = TpoRules {
+            period_seconds: request.period_seconds,
+            tick_size: request.tick_size,
+            value_area_percent: request.value_area_percent,
+            initial_balance_periods: request.initial_balance_periods,
+        };
+        if !valid_tpo_boundaries(&request.boundaries) || !rules.valid() {
             return Err(ProfileError::InvalidRequest);
         }
         let (times, values) = self
             .data
             .series_data(request.price_series)
             .ok_or(ProfileError::UnknownSource)?;
-        let period_micros = i128::from(request.period_seconds) * 1_000_000;
         let mut output = Vec::with_capacity(request.boundaries.len());
-        let mut group_start = 0;
         let mut total_rows = 0usize;
         let mut total_cells = 0usize;
-        while group_start < request.boundaries.len() {
-            let session_id = request.boundaries[group_start].session_id;
-            let group_end = group_start
-                + request.boundaries[group_start..]
-                    .iter()
-                    .take_while(|boundary| boundary.session_id == session_id)
-                    .count();
-            let mut rows: BTreeMap<i64, Vec<u16>> = BTreeMap::new();
-            let mut ib_low = f64::INFINITY;
-            let mut ib_high = f64::NEG_INFINITY;
-            let mut period_offset = 0usize;
-            for boundary in &request.boundaries[group_start..group_end] {
-                let start = boundary.start_time * 1_000_000;
-                let end = boundary.end_time * 1_000_000;
-                let period_count = usize::try_from(
-                    (i128::from(end) - i128::from(start) + period_micros - 1) / period_micros,
-                )
-                .map_err(|_| ProfileError::LimitExceeded)?;
-                if period_count > MAX_TPO_PERIODS.saturating_sub(period_offset) {
-                    return Err(ProfileError::LimitExceeded);
-                }
-                let first = times.partition_point(|&time| time < boundary.start_time);
-                let finish = times.partition_point(|&time| time < boundary.end_time);
-                for row in first..finish {
-                    let time = times[row] * 1_000_000;
-                    let period = period_offset
-                        + ((i128::from(time) - i128::from(start)) / period_micros) as usize;
-                    if period < usize::from(request.initial_balance_periods) {
-                        ib_low = ib_low.min(values[2][row]);
-                        ib_high = ib_high.max(values[1][row]);
-                    }
-                    let low = price_level(values[2][row], request.tick_size);
-                    let high = price_level(values[1][row], request.tick_size);
-                    if high.saturating_sub(low) as usize > MAX_PROFILE_ROWS {
-                        return Err(ProfileError::LimitExceeded);
-                    }
-                    for level in low..=high {
-                        let periods = rows.entry(level).or_default();
-                        let period = period as u16;
-                        if periods.last() != Some(&period) {
-                            if total_cells == MAX_TPO_TOTAL_CELLS {
-                                return Err(ProfileError::LimitExceeded);
-                            }
-                            periods.push(period);
-                            total_cells += 1;
-                        }
-                    }
-                    if rows.len() > MAX_PROFILE_ROWS {
-                        return Err(ProfileError::LimitExceeded);
-                    }
-                }
-                period_offset += period_count;
-            }
-            if rows.len() > MAX_PROFILE_ROWS {
-                return Err(ProfileError::LimitExceeded);
-            }
-            total_rows += rows.len();
+        for group in tpo_session_groups(&request.boundaries) {
+            let mut cells = MAX_TPO_TOTAL_CELLS - total_cells;
+            let snapshot = tpo_session(times, values, group, &rules, &mut cells)?;
+            total_cells = MAX_TPO_TOTAL_CELLS - cells;
+            total_rows += snapshot.rows.len();
             if total_rows > MAX_TPO_TOTAL_ROWS {
                 return Err(ProfileError::LimitExceeded);
             }
-            let counts = rows
-                .iter()
-                .map(|(&level, periods)| (level, periods.len() as f64))
-                .collect::<Vec<_>>();
-            let (poc, val, vah) =
-                value_area_levels(&counts, request.value_area_percent, request.tick_size);
-            output.push(TpoSnapshot {
-                session_id,
-                start_timestamp_micros: request.boundaries[group_start].start_time * 1_000_000,
-                end_timestamp_micros: request.boundaries[group_end - 1].end_time * 1_000_000,
-                rows: rows
-                    .into_iter()
-                    .map(|(level, periods)| TpoRowSnapshot {
-                        price: level as f64 * request.tick_size,
-                        single_print: periods.len() == 1,
-                        periods,
-                    })
-                    .collect(),
-                poc,
-                value_area_low: val,
-                value_area_high: vah,
-                initial_balance_low: ib_low.is_finite().then_some(ib_low),
-                initial_balance_high: ib_high.is_finite().then_some(ib_high),
-            });
-            group_start = group_end;
+            output.push(snapshot);
         }
         Ok(output)
     }
@@ -1474,6 +1292,132 @@ fn valid_tick(tick: f64) -> bool {
 }
 fn price_level(price: f64, tick: f64) -> i64 {
     (price / tick).round() as i64
+}
+
+/// How one TPO profile is built from OHLC bars, shared by the TPO query, the overlay and the
+/// TPO series.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TpoRules {
+    pub period_seconds: u32,
+    pub tick_size: f64,
+    pub value_area_percent: f64,
+    pub initial_balance_periods: u16,
+}
+
+impl TpoRules {
+    pub(crate) fn valid(&self) -> bool {
+        self.period_seconds > 0
+            && valid_tick(self.tick_size)
+            && (0.0 < self.value_area_percent && self.value_area_percent <= 100.0)
+            && self.initial_balance_periods > 0
+    }
+}
+
+/// Ascending, non-overlapping boundaries whose microsecond bounds fit `i64`.
+pub(crate) fn valid_tpo_boundaries(boundaries: &[ResampleBoundary]) -> bool {
+    !boundaries.is_empty()
+        && boundaries.len() <= MAX_PROFILE_PERIODS
+        && boundaries.iter().all(|boundary| {
+            boundary.start_time < boundary.end_time
+                && boundary.start_time.checked_mul(1_000_000).is_some()
+                && boundary.end_time.checked_mul(1_000_000).is_some()
+        })
+        && boundaries
+            .windows(2)
+            .all(|pair| pair[0].end_time <= pair[1].start_time)
+}
+
+/// Consecutive boundaries sharing one session ID form one profile.
+pub(crate) fn tpo_session_groups(
+    boundaries: &[ResampleBoundary],
+) -> impl Iterator<Item = &[ResampleBoundary]> {
+    boundaries.chunk_by(|first, second| first.session_id == second.session_id)
+}
+
+/// Build one session's profile from the bars inside its boundaries. `cells` is the remaining
+/// cell budget and is reduced by the cells this profile uses.
+pub(crate) fn tpo_session(
+    times: &[i64],
+    values: [&[f64]; 4],
+    group: &[ResampleBoundary],
+    rules: &TpoRules,
+    cells: &mut usize,
+) -> Result<TpoSnapshot, ProfileError> {
+    let period_micros = i128::from(rules.period_seconds) * 1_000_000;
+    let mut rows: BTreeMap<i64, Vec<u16>> = BTreeMap::new();
+    let mut ib_low = f64::INFINITY;
+    let mut ib_high = f64::NEG_INFINITY;
+    let mut period_offset = 0usize;
+    for boundary in group {
+        let start = boundary.start_time * 1_000_000;
+        let end = boundary.end_time * 1_000_000;
+        let period_count = usize::try_from(
+            (i128::from(end) - i128::from(start) + period_micros - 1) / period_micros,
+        )
+        .map_err(|_| ProfileError::LimitExceeded)?;
+        if period_count > MAX_TPO_PERIODS.saturating_sub(period_offset) {
+            return Err(ProfileError::LimitExceeded);
+        }
+        let first = times.partition_point(|&time| time < boundary.start_time);
+        let finish = times.partition_point(|&time| time < boundary.end_time);
+        for row in first..finish {
+            let (high, low) = (values[1][row], values[2][row]);
+            // Whitespace rows carry no prices and print nothing.
+            if !high.is_finite() || !low.is_finite() {
+                continue;
+            }
+            let time = times[row] * 1_000_000;
+            let period =
+                period_offset + ((i128::from(time) - i128::from(start)) / period_micros) as usize;
+            if period < usize::from(rules.initial_balance_periods) {
+                ib_low = ib_low.min(low);
+                ib_high = ib_high.max(high);
+            }
+            let low = price_level(low, rules.tick_size);
+            let high = price_level(high, rules.tick_size);
+            if high.saturating_sub(low) as usize > MAX_PROFILE_ROWS {
+                return Err(ProfileError::LimitExceeded);
+            }
+            let period = period as u16;
+            for level in low..=high {
+                let periods = rows.entry(level).or_default();
+                if periods.last() != Some(&period) {
+                    if *cells == 0 {
+                        return Err(ProfileError::LimitExceeded);
+                    }
+                    periods.push(period);
+                    *cells -= 1;
+                }
+            }
+            if rows.len() > MAX_PROFILE_ROWS {
+                return Err(ProfileError::LimitExceeded);
+            }
+        }
+        period_offset += period_count;
+    }
+    let counts = rows
+        .iter()
+        .map(|(&level, periods)| (level, periods.len() as f64))
+        .collect::<Vec<_>>();
+    let (poc, val, vah) = value_area_levels(&counts, rules.value_area_percent, rules.tick_size);
+    Ok(TpoSnapshot {
+        session_id: group[0].session_id,
+        start_timestamp_micros: group[0].start_time * 1_000_000,
+        end_timestamp_micros: group[group.len() - 1].end_time * 1_000_000,
+        rows: rows
+            .into_iter()
+            .map(|(level, periods)| TpoRowSnapshot {
+                price: level as f64 * rules.tick_size,
+                single_print: periods.len() == 1,
+                periods,
+            })
+            .collect(),
+        poc,
+        value_area_low: val,
+        value_area_high: vah,
+        initial_balance_low: ib_low.is_finite().then_some(ib_low),
+        initial_balance_high: ib_high.is_finite().then_some(ib_high),
+    })
 }
 
 fn value_area_levels(

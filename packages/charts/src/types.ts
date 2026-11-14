@@ -36,6 +36,7 @@ export type series_kind =
   | "histogram"
   | "baseline"
   | "footprint"
+  | "tpo"
   /** @deprecated Use an ordinary `"area"` series with `enable_brushable_area_interaction()`. */
   | "brushable_area"
   | feature_series_kind
@@ -2849,6 +2850,7 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   histogram: 4,
   baseline: 5,
   footprint: 8,
+  tpo: 9,
   // Compatibility alias only: brushable area is an ordinary Area series in the engine.
   brushable_area: 3,
   grouped_bars: 7,
@@ -2879,6 +2881,10 @@ export function is_feature_series_kind(kind: series_kind): kind is feature_serie
 
 export function is_footprint_series_kind(kind: series_kind): kind is "footprint" {
   return kind === "footprint";
+}
+
+export function is_tpo_series_kind(kind: series_kind): kind is "tpo" {
+  return kind === "tpo";
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3660,7 +3666,14 @@ export interface tpo_snapshot {
   initialBalanceHigh: number | null;
 }
 
-export interface tpo_presentation_options {
+/** Rules and colors of a `"tpo"` series. */
+export interface tpo_series_options {
+  /** Length of one TPO period (one letter), in seconds. Default 1800. */
+  periodSeconds: number;
+  /** Price height of one profile row. */
+  tickSize: number;
+  valueAreaPercent: number;
+  initialBalancePeriods: number;
   mode: "letters" | "blocks";
   color: string;
   valueAreaColor: string;
@@ -3911,6 +3924,19 @@ export interface footprint_series_api extends series_api {
   apply_options(options: Partial<any_series_options> & Partial<footprint_series_options>): void;
   options(): any_series_options & footprint_series_options;
   series_type(): "footprint";
+}
+
+/** A market profile (TPO) series. Its data is ordinary OHLC bars (`set_data`, `update`). */
+export interface tpo_series_api extends series_api {
+  /**
+   * Replace the sessions the series draws. Consecutive boundaries sharing a `sessionId` form one
+   * profile; boundaries must be ascending and non-overlapping. An empty list draws nothing.
+   */
+  set_sessions(boundaries: readonly resample_boundary[]): void;
+  /** The profiles currently drawn, oldest session first. */
+  profiles(): readonly tpo_snapshot[];
+  apply_options(options: Partial<any_series_options> & Partial<tpo_series_options>): void;
+  series_type(): "tpo";
 }
 
 /** The horizontal (time) scale. */
@@ -4722,9 +4748,6 @@ export interface chart_api {
   periodic_volume_profiles(source: profile_source, boundaries: readonly resample_boundary[], tick_size: number, row_count: number, value_area_percent: number): readonly profile_snapshot[] | null;
   periodic_naked_profile_levels(source: profile_source, boundaries: readonly resample_boundary[], tick_size: number, row_count: number, value_area_percent: number): readonly naked_profile_level[] | null;
   tpo_profiles(request: tpo_request): readonly tpo_snapshot[] | null;
-  /** Add engine-rendered TPO letters or blocks on the source series' pane. */
-  add_tpo_presentation(request: tpo_request, options?: Partial<tpo_presentation_options>): number;
-  remove_tpo_presentation(id: number): boolean;
   /** Render host-boundary volume profiles on an existing price series' pane. */
   add_periodic_profile_presentation(anchor: series_api, request: periodic_profile_presentation_request, options?: Partial<periodic_profile_presentation_options>): number;
   remove_periodic_profile_presentation(id: number): boolean;
@@ -4738,6 +4761,8 @@ export interface chart_api {
   configure_profile_drawing(drawing: drawing_api, options: profile_drawing_options): void;
   profile_drawing_snapshot(drawing: drawing_api): profile_drawing_snapshot | null;
   add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
+  /** A market profile series: OHLC bars drawn as one TPO profile per session. */
+  add_series(kind: "tpo", options?: Partial<any_series_options> & Partial<tpo_series_options>): tpo_series_api;
   add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**

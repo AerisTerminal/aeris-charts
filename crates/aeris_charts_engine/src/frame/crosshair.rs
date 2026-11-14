@@ -470,7 +470,10 @@ impl ChartEngine {
             let keys: &[PlotValueIndex] = if include_ohlc
                 && matches!(
                     series.kind,
-                    SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint
+                    SeriesKind::Candlestick
+                        | SeriesKind::Bar
+                        | SeriesKind::Footprint
+                        | SeriesKind::Tpo
                 ) {
                 &[
                     PlotValueIndex::Open,

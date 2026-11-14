@@ -314,7 +314,7 @@ impl ChartEngine {
             }
         };
         match series.kind {
-            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint | SeriesKind::Tpo => {
                 let [high, low] = self
                     .heikin_ashi_row(series.id, row)
                     .map(|values| [values[1], values[2]])

@@ -54,6 +54,7 @@ mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
 mod tests;
+mod tpo_geometry;
 mod trading_geometry;
 
 pub(crate) use drawings::stat_label_height;
@@ -1119,7 +1120,7 @@ impl ChartEngine {
                 }
             }
             // reference bar/candlestick colorer: up when open <= close.
-            SeriesKind::Candlestick | SeriesKind::Bar => {
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Tpo => {
                 let MarketColors { up, down } = self.market_colors();
                 let open = plot.value_at(row, PlotValueIndex::Open);
                 let close = plot.value_at(row, PlotValueIndex::Close);
@@ -2120,6 +2121,17 @@ impl ChartEngine {
                                 to,
                                 hpr,
                                 vpr,
+                                &mut series_layer.layer.prims,
+                                scale,
+                            ),
+                            SeriesKind::Tpo => self.build_tpo_series_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                pane.top,
+                                pane.height,
                                 &mut series_layer.layer.prims,
                                 scale,
                             ),

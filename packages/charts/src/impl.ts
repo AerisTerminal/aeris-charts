@@ -47,7 +47,7 @@ import type {
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   replay_change_handler, replay_clock_stats, replay_seek_stats, replay_state, replay_step, resample_boundary, resample_options, resampled_bar, study_annotations, synthetic_bar, synthetic_bar_options, trade_stream_stats,
-  profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_presentation_options,
+  profile_source, profile_request, profile_snapshot, naked_profile_level, tpo_request, tpo_snapshot, tpo_series_api, tpo_series_options,
   periodic_profile_presentation_request, periodic_profile_presentation_options,
   anchored_vwap_point, profile_drawing_options, profile_drawing_snapshot,
   time_and_sales_options, time_and_sales_row, time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
@@ -63,7 +63,7 @@ import type {
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
-  is_feature_series_kind, is_footprint_series_kind,
+  is_feature_series_kind, is_footprint_series_kind, is_tpo_series_kind,
 } from "./types.js";
 import {
   default_theme_name,
@@ -243,7 +243,7 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 ] as const;
 
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
-const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom", undefined, "footprint"] as const;
+const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom", undefined, "footprint", "tpo"] as const;
 const FEATURE_KIND_NAMES = [
   undefined,
   undefined,
@@ -2333,10 +2333,15 @@ class series_impl implements series_api {
 
   set_type(kind: series_kind): void {
     this.assert_live();
-    if (kind === "custom" || is_feature_series_kind(kind) || is_footprint_series_kind(kind)) {
+    if (
+      kind === "custom"
+      || is_feature_series_kind(kind)
+      || is_footprint_series_kind(kind)
+      || is_tpo_series_kind(kind)
+    ) {
       throw new AerisChartsError(
         "unsupported_operation",
-        "set_type() only converts built-in series; remove and re-add custom or advanced series",
+        "set_type() only converts built-in series; remove and re-add custom, advanced or TPO series",
       );
     }
     if (!this.chart.wasm.set_series_kind(this.id, KIND_TO_U8[kind])) {
@@ -3465,6 +3470,60 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
   }
 }
 
+/** A public handle for a market profile series: OHLC bars drawn as one TPO profile per session. */
+class tpo_series_impl extends series_impl implements tpo_series_api {
+  constructor(id: number, chart: chart_impl) {
+    super(id, "tpo", chart);
+  }
+
+  set_sessions(boundaries: readonly resample_boundary[]): void {
+    this.assert_live();
+    if (!this.chart.wasm.set_tpo_sessions(this.id, JSON.stringify(boundaries))) {
+      throw new AerisChartsError("invalid_data", "TPO sessions must be ascending and non-overlapping");
+    }
+    this.chart.repaint();
+  }
+
+  profiles(): readonly tpo_snapshot[] {
+    this.assert_live();
+    return (JSON.parse(this.chart.wasm.tpo_series_profiles_json(this.id)) as tpo_snapshot[] | null) ?? [];
+  }
+
+  apply_options(options: Partial<any_series_options> & Partial<tpo_series_options>): void {
+    this.assert_live();
+    super.apply_options(options);
+    const current = JSON.parse(this.chart.wasm.tpo_series_options_json(this.id)) as tpo_series_options;
+    if (!this.chart.wasm.configure_tpo_series(this.id, JSON.stringify({ ...current, ...pick_tpo_options(options) }))) {
+      throw new AerisChartsError("invalid_options", "TPO series options were rejected by the engine");
+    }
+    this.chart.repaint();
+  }
+
+  options(): any_series_options & tpo_series_options {
+    return {
+      ...super.options(),
+      ...(JSON.parse(this.chart.wasm.tpo_series_options_json(this.id)) as tpo_series_options),
+    };
+  }
+
+  series_type(): "tpo" {
+    return "tpo";
+  }
+}
+
+const TPO_OPTION_KEYS = [
+  "periodSeconds", "tickSize", "valueAreaPercent", "initialBalancePeriods", "mode",
+  "color", "valueAreaColor", "singlePrintColor", "pocColor", "initialBalanceColor",
+] as const satisfies readonly (keyof tpo_series_options)[];
+
+function pick_tpo_options(options: Partial<tpo_series_options>): Partial<tpo_series_options> {
+  const picked: Record<string, unknown> = {};
+  for (const key of TPO_OPTION_KEYS) {
+    if (options[key] !== undefined) picked[key] = options[key];
+  }
+  return picked as Partial<tpo_series_options>;
+}
+
 class time_scale_impl implements time_scale_api {
   fitContent(): void { this.fit_content(); }
   scrollToRealTime(): void { this.scroll_to_real_time(); }
@@ -4255,6 +4314,7 @@ class alert_impl implements alert_api {
 
 export class chart_impl implements chart_api {
   addSeries(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
+  addSeries(kind: "tpo", options?: Partial<any_series_options> & Partial<tpo_series_options>): tpo_series_api;
   addSeries(kind: general_series_kind, options: general_series_options): general_series_api;
   addSeries(kind: series_kind, options?: Partial<any_series_options>): series_api;
   addSeries(kind: series_kind | general_series_kind, options?: Partial<any_series_options> | general_series_options): series_api | general_series_api {
@@ -5653,6 +5713,7 @@ export class chart_impl implements chart_api {
     kind: "footprint",
     options?: Partial<any_series_options> & Partial<footprint_series_options>,
   ): footprint_series_api;
+  add_series(kind: "tpo", options?: Partial<any_series_options> & Partial<tpo_series_options>): tpo_series_api;
   add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   add_series(
@@ -5747,6 +5808,27 @@ export class chart_impl implements chart_api {
       if (financial_options) series.apply_options(financial_options);
       this.next_extra_series = true;
       this.series_by_id.set(id, series);
+      this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+      return series;
+    }
+    if (is_tpo_series_kind(kind)) {
+      const tpo_options = options as (Partial<any_series_options> & Partial<tpo_series_options>) | undefined;
+      const engine_options = JSON.stringify(pick_tpo_options(tpo_options ?? {}));
+      let id: number;
+      if (!this.next_extra_series && this.wasm.series_kind(0) !== undefined) {
+        id = 0;
+        if (!this.wasm.configure_tpo_series(0, engine_options)) id = 0xffffffff;
+      } else {
+        id = this.wasm.add_tpo_series(engine_options);
+        if (id === 0) id = 0xffffffff;
+      }
+      if (id === 0xffffffff) {
+        throw new AerisChartsError("invalid_options", "TPO series options were rejected by the engine");
+      }
+      this.next_extra_series = true;
+      const series = new tpo_series_impl(id, this);
+      this.series_by_id.set(id, series);
+      if (tpo_options) series.apply_options(tpo_options);
       this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
       return series;
     }
@@ -5879,6 +5961,8 @@ export class chart_impl implements chart_api {
           : new feature_series_impl(id, feature_kind, this);
       } else if (kind === 8) {
         series = new footprint_series_impl(id, this);
+      } else if (kind === 9) {
+        series = new tpo_series_impl(id, this);
       } else {
         series = new series_impl(id, KIND_NAMES[kind] ?? "candlestick", this);
       }
@@ -6152,22 +6236,6 @@ export class chart_impl implements chart_api {
 
   tpo_profiles(request: tpo_request): readonly tpo_snapshot[] | null {
     return JSON.parse(this.wasm.tpo_profiles_json(JSON.stringify(request))) as tpo_snapshot[] | null;
-  }
-
-  add_tpo_presentation(request: tpo_request, options: Partial<tpo_presentation_options> = {}): number {
-    if (!this.series_by_id.has(request.priceSeries)) {
-      throw new AerisChartsError("invalid_handle", "TPO presentation requires a live source series from this chart");
-    }
-    const id = this.wasm.add_tpo_presentation(JSON.stringify(request), JSON.stringify(options));
-    if (id === 0) throw new AerisChartsError("invalid_options", "invalid TPO boundaries, options, or presentation limit");
-    this.repaint();
-    return id;
-  }
-
-  remove_tpo_presentation(id: number): boolean {
-    const removed = this.wasm.remove_native_primitive(id);
-    if (removed) this.repaint();
-    return removed;
   }
 
   add_periodic_profile_presentation(

@@ -215,7 +215,7 @@ impl ChartEngine {
         let close = plot.value_at(row, PlotValueIndex::Close);
         if matches!(
             series.kind,
-            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint | SeriesKind::Tpo
         ) {
             let open = plot.value_at(row, PlotValueIndex::Open);
             let high = plot.value_at(row, PlotValueIndex::High);

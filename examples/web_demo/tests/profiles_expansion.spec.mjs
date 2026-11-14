@@ -132,22 +132,13 @@ test("host profile periods, tape levels, TPO, and profile drawings use the engin
     .toBe(1_700_000_002_000_100);
 });
 
-test("TPO blocks are painted by the shared frame and removed with their handle", async ({ page }) => {
+test("a TPO series paints its sessions through the shared frame and leaves with the series", async ({ page }) => {
   await page.goto("/");
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
     chart.remove_series(window.__main);
     const base = 1_700_000_000;
-    const source = chart.add_series("candlestick");
-    source.set_data([0, 60, 120, 180].map((offset, index) => ({
-      time: base + offset,
-      open: 100 + index,
-      high: 101 + index,
-      low: 99 + index,
-      close: 100 + index,
-    })));
-    chart.time_scale().fit_content();
     const magenta_pixels = () => {
       const canvas = chart.take_screenshot();
       const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
@@ -158,28 +149,39 @@ test("TPO blocks are painted by the shared frame and removed with their handle",
       return count;
     };
     const before = magenta_pixels();
-    const id = chart.add_tpo_presentation({
-      priceSeries: source.id,
-      boundaries: [{ startTime: base, endTime: base + 240, sessionId: 1 }],
+    const tpo = chart.add_series("tpo", {
+      mode: "blocks",
       periodSeconds: 60,
       tickSize: 1,
-      valueAreaPercent: 70,
-      initialBalancePeriods: 2,
-    }, {
-      mode: "blocks",
       color: "#ff00ff",
       valueAreaColor: "#ff00ff",
       singlePrintColor: "#ff00ff",
       pocColor: "#ff00ff",
       initialBalanceColor: "#ff00ff",
     });
+    tpo.set_data([0, 60, 120, 180].map((offset, index) => ({
+      time: base + offset,
+      open: 100 + index,
+      high: 101 + index,
+      low: 99 + index,
+      close: 100 + index,
+    })));
+    const without_sessions = magenta_pixels();
+    tpo.set_sessions([{ startTime: base, endTime: base + 240, sessionId: 1 }]);
+    chart.time_scale().fit_content();
     const with_tpo = magenta_pixels();
-    const removed = chart.remove_tpo_presentation(id);
+    const profiles = tpo.profiles();
+    const kind = tpo.series_type();
+    const tick = tpo.options().tickSize;
+    chart.remove_series(tpo);
     const after = magenta_pixels();
-    return { before, with_tpo, removed, after };
+    return { before, without_sessions, with_tpo, profiles: profiles.length, kind, tick, after };
   });
+  expect(result.kind).toBe("tpo");
+  expect(result.tick).toBe(1);
+  expect(result.profiles).toBe(1);
+  expect(result.without_sessions).toBe(result.before);
   expect(result.with_tpo).toBeGreaterThan(result.before);
-  expect(result.removed).toBe(true);
   expect(result.after).toBe(result.before);
 });
 

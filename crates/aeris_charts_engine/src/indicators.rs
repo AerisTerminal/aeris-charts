@@ -3861,11 +3861,17 @@ impl ChartEngine {
             self.series_entry(dependency),
             self.data.series_generation(dependency),
         ) {
+            let from = if change.full_replace { 0 } else { change.from };
             series.heikin_ashi_cache.borrow_mut().note_change(
                 change.previous_generation,
                 generation,
-                if change.full_replace { 0 } else { change.from },
+                from,
             );
+            if let Some(tpo) = series.tpo.as_ref() {
+                tpo.cache
+                    .borrow_mut()
+                    .note_change(change.previous_generation, generation, from);
+            }
         }
         self.indicator_changes.clear();
         self.indicator_changes.push((dependency, change));

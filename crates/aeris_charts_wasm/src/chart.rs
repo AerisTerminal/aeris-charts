@@ -3115,18 +3115,58 @@ impl AerisChart {
             .unwrap_or_else(|_| "null".into())
     }
 
-    pub fn add_tpo_presentation(&mut self, request_json: &str, options_json: &str) -> u32 {
-        let (Ok(request), Ok(options)) = (
-            serde_json::from_str::<aeris_charts_engine::TpoRequest>(request_json),
-            serde_json::from_str::<aeris_charts_engine::TpoPresentationOptions>(options_json),
-        ) else {
+    /// Add a market profile (TPO) series and return its id, or 0 for invalid options.
+    pub fn add_tpo_series(&mut self, options_json: &str) -> u32 {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::TpoSeriesOptions>(options_json)
+        else {
             return 0;
         };
         self.inner
             .borrow_mut()
             .engine
-            .add_tpo_presentation(request, options)
+            .add_tpo_series(options)
             .unwrap_or(0)
+    }
+
+    /// Change a TPO series' rules and colors, keeping its bars and sessions.
+    pub fn configure_tpo_series(&mut self, id: u32, options_json: &str) -> bool {
+        let Ok(options) =
+            serde_json::from_str::<aeris_charts_engine::TpoSeriesOptions>(options_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .configure_tpo_series(id, options)
+            .is_ok()
+    }
+
+    /// Replace the sessions a TPO series draws.
+    pub fn set_tpo_sessions(&mut self, id: u32, boundaries_json: &str) -> bool {
+        let Ok(boundaries) =
+            serde_json::from_str::<Vec<aeris_charts_engine::ResampleBoundary>>(boundaries_json)
+        else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_tpo_sessions(id, boundaries)
+            .is_ok()
+    }
+
+    /// A TPO series' options, or `null` for a series that is not a TPO.
+    pub fn tpo_series_options_json(&self, id: u32) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.tpo_series_options(id))
+            .unwrap_or_else(|_| "null".into())
+    }
+
+    /// The profiles a TPO series currently draws, or `null` for a series that is not a TPO.
+    pub fn tpo_series_profiles_json(&self, id: u32) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.tpo_series_profiles(id))
+            .unwrap_or_else(|_| "null".into())
     }
 
     pub fn add_periodic_profile_presentation(

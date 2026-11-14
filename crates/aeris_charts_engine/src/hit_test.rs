@@ -563,7 +563,7 @@ impl ChartEngine {
         // pixels, so the tested items must be selected with the same ratio they were drawn.
         let hpr = (self.pane_w * self.dpr.max(0.01)).round().max(1.0) / self.pane_w.max(1.0);
         let result = match series.kind {
-            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint | SeriesKind::Tpo => {
                 let footprint_aggregation = series
                     .footprint
                     .as_ref()

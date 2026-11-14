@@ -962,11 +962,21 @@ the five palette colors are drawing options validated by the patch path and pers
 Consecutive TPO boundaries with the same host session identity merge into one profile with
 continuous period indices; distinct identities split profiles, and gaps between supplied
 segments add no synthetic periods. Initial balance counts periods from the first segment.
-The TPO presentation is a bounded native primitive attached to its OHLC source series. Its
-letter and block modes, value-area and single-print colors, POC and initial-balance lines are
-lowered into the shared ordered frame, so every executor paints the same cells. Query output is
-bounded across the whole request as well as per profile; the frame switches to compact blocks
-when individual cells exceed the detailed presentation budget.
+The TPO is a first-class series kind (`SeriesKind::Tpo`, wire ID 9, `tpo_series.rs`), not an
+overlay on candles. Its rows are ordinary OHLC bars, so autoscale, crosshair, legend values,
+last-price chrome, hit testing and trading geometry treat it like a candle series; its frame
+builder (`frame/tpo_geometry.rs`) draws one profile per host-supplied session
+(`set_tpo_sessions`) in place of candle bodies. A series keeps one cached profile per session
+against its data generation: a data change reports its first changed row, so a live tip update
+rebuilds only the sessions at or after it (normally the forming one), and an unobserved mutation
+rebuilds every session once. The whole series shares the query's 100,000-cell bound; a session
+past a bound draws nothing. Each profile fits its session's own time span, packed from the
+session's left edge with cells at most 14 CSS px wide, so neighbouring sessions never overlap.
+Level of detail is chosen per profile from its cell size: letters, then blocks, then one bar per
+row (rows sharing a device pixel merged) when cells fall under 3 CSS px or more than 8,192 cells
+are visible. Value-area and single-print colors, the POC line and the initial-balance bar are
+lowered into the shared ordered frame, so every executor paints the same cells. `tpo_profiles`
+remains a read-only query over any OHLC series; the former TPO overlay primitive is removed.
 Price and volume corrections invalidate only drawings bound to that series; tape updates and
 replay seeks invalidate drawings bound to that stream even when no footprint series is attached.
 A stream remains in use while a profile drawing refers to it, so removal cannot leave a live

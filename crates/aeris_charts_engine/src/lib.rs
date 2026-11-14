@@ -46,6 +46,8 @@ mod language_tests;
 mod native_primitives;
 mod synthetic_bars;
 mod text;
+mod tpo_series;
+pub use tpo_series::TpoSeriesOptions;
 mod volume_profile;
 pub use volume_profile::{
     MAX_VOLUME_PROFILE_INDICATORS, VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot,
@@ -288,11 +290,11 @@ pub use profiles::{
     AnchoredVwapPoint, DevelopingValueArea, MAX_PERIODIC_PROFILE_PRESENTATIONS,
     MAX_PROFILE_DEVELOPING_POINTS, MAX_PROFILE_PERIODS, MAX_PROFILE_ROWS,
     MAX_PROFILE_TOTAL_DEVELOPING_POINTS, MAX_PROFILE_TOTAL_ROWS, MAX_TPO_PERIODS,
-    MAX_TPO_PRESENTATIONS, MAX_TPO_TOTAL_CELLS, MAX_TPO_TOTAL_ROWS, NakedProfileLevel,
-    NakedProfileLevelKind, PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest,
-    ProfileDisplayMode, ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError,
-    ProfileRequest, ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode,
-    TpoPresentationOptions, TpoRequest, TpoRowSnapshot, TpoSnapshot,
+    MAX_TPO_TOTAL_CELLS, MAX_TPO_TOTAL_ROWS, NakedProfileLevel, NakedProfileLevelKind,
+    PeriodicProfilePresentationOptions, PeriodicProfilePresentationRequest, ProfileDisplayMode,
+    ProfileDrawingOptions, ProfileDrawingSnapshot, ProfileError, ProfileRequest,
+    ProfileRowSnapshot, ProfileSnapshot, ProfileSource, TpoCellMode, TpoRequest, TpoRowSnapshot,
+    TpoSnapshot,
 };
 pub use replay::{
     MAX_REPLAY_INTERVAL_MICROS, MAX_REPLAY_SPEED, MIN_REPLAY_SPEED, ReplayPhase, ReplayResume,
@@ -376,6 +378,8 @@ pub struct EngineMemoryUsage {
     pub drawing_runtime_capacity_bytes: usize,
     pub feature_series_capacity_bytes: usize,
     pub footprint_capacity_bytes: usize,
+    /// TPO series sessions and their cached profiles.
+    pub tpo_capacity_bytes: usize,
     pub depth_capacity_bytes: usize,
     pub resampling_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
@@ -405,6 +409,7 @@ impl EngineMemoryUsage {
             + self.drawing_runtime_capacity_bytes
             + self.feature_series_capacity_bytes
             + self.footprint_capacity_bytes
+            + self.tpo_capacity_bytes
             + self.depth_capacity_bytes
             + self.resampling_capacity_bytes
             + self.native_primitive_capacity_bytes
@@ -579,6 +584,10 @@ pub enum SeriesKind {
     /// A first-class tick-driven footprint / numbers-bar series. Its OHLC projection participates
     /// in shared scales and queries while the authoritative tape and clusters remain engine-owned.
     Footprint,
+    /// A first-class market profile (TPO) series. Its rows are ordinary OHLC bars, so it joins
+    /// shared scales, crosshair, legend and price chrome like a candle series, while each
+    /// host-supplied session draws as one engine-built profile of letters or blocks.
+    Tpo,
 }
 
 /// Horizontal extent of a series' built-in live-price line.
@@ -850,6 +859,7 @@ impl SeriesKind {
             6 => Self::Custom,
             7 => Self::Feature,
             8 => Self::Footprint,
+            9 => Self::Tpo,
             _ => Self::Candlestick,
         }
     }
@@ -865,6 +875,7 @@ impl SeriesKind {
             Self::Custom => 6,
             Self::Feature => 7,
             Self::Footprint => 8,
+            Self::Tpo => 9,
         }
     }
 
@@ -1234,6 +1245,8 @@ pub struct SeriesEntry {
     pub(crate) feature: Option<feature_series::FeatureSeriesState>,
     /// Tick-truth footprint state. Present only when `kind == SeriesKind::Footprint`.
     pub(crate) footprint: Option<footprint::FootprintSeriesState>,
+    /// Market profile state. Present only when `kind == SeriesKind::Tpo`.
+    pub(crate) tpo: Option<tpo_series::TpoSeriesState>,
     /// First-class financial primitives whose state and geometry live in the shared engine.
     pub(crate) native_primitives: Vec<native_primitives::NativeSeriesPrimitive>,
     /// Retention ceiling: the series holds at most this many rows, oldest evicted first.
@@ -1332,6 +1345,7 @@ impl SeriesEntry {
             custom_frame: CustomSeriesFrameValues::default(),
             feature: None,
             footprint: None,
+            tpo: (kind == SeriesKind::Tpo).then(tpo_series::TpoSeriesState::default_state),
             native_primitives: Vec::new(),
             max_points: None,
             render_before_time: None,
@@ -2620,6 +2634,7 @@ impl ChartEngine {
             drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
             feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
             footprint_capacity_bytes: self.footprint_capacity_bytes(),
+            tpo_capacity_bytes: self.tpo_capacity_bytes(),
             depth_capacity_bytes: self.depth_capacity_bytes(),
             resampling_capacity_bytes: self.resampling_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
@@ -3621,6 +3636,11 @@ impl ChartEngine {
             if kind != SeriesKind::Footprint {
                 s.footprint = None;
             }
+            if kind != SeriesKind::Tpo {
+                s.tpo = None;
+            } else if s.tpo.is_none() {
+                s.tpo = Some(tpo_series::TpoSeriesState::default_state());
+            }
             self.data
                 .set_rows_count_as_data(id, kind == SeriesKind::Custom);
             self.clear_sequence_axis_if_unused();
@@ -3707,6 +3727,7 @@ impl ChartEngine {
                 entry.markers.clear();
                 entry.feature = None;
                 entry.footprint = None;
+                entry.tpo = None;
                 entry.native_primitives.clear();
             }
             // Release the data slot; its opaque identity is invalid forever and the storage may

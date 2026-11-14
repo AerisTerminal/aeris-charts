@@ -8,7 +8,9 @@ import { announce_license, ensure_init, time_to_utc_seconds } from "./impl.js";
 import { controller_pointer_flags } from "./gestures.js";
 import { AerisChartsError } from "./errors.js";
 import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
-import { FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind, is_footprint_series_kind } from "./types.js";
+import {
+  FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind, is_footprint_series_kind, is_tpo_series_kind,
+} from "./types.js";
 import type {
   any_series_options,
   backend_status,
@@ -297,6 +299,19 @@ export class offscreen_chart {
       this.primary_adopted = true;
       if (id === 0xffffffff) {
         throw new AerisChartsError("invalid_options", `advanced series '${kind}' was rejected by the engine`);
+      }
+      this.render();
+      return id;
+    }
+    if (is_tpo_series_kind(kind)) {
+      const adopt_primary = !this.primary_adopted;
+      this.primary_adopted = true;
+      const engine_options = JSON.stringify(options);
+      const id = adopt_primary
+        ? (this.wasm.configure_tpo_series(0, engine_options) ? 0 : 0xffffffff)
+        : (this.wasm.add_tpo_series(engine_options) || 0xffffffff);
+      if (id === 0xffffffff) {
+        throw new AerisChartsError("invalid_options", "TPO series options were rejected by the engine");
       }
       this.render();
       return id;
