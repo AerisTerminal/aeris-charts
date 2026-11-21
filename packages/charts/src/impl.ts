@@ -30,7 +30,7 @@ import type {
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_profile_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template, builtin_drawing_icon,
-  study_calendar_policy, previous_period,
+  study_calendar_policy, previous_period, session_zones_config, session_zones_input,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_composition, general_pane_composition_result, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
@@ -6942,6 +6942,84 @@ export class chart_impl implements chart_api {
       this.indicator_series(ids[1]!, options),
       this.indicator_series(ids[2]!, options),
     ];
+  }
+  add_adr_levels(
+    source: series_api, period = 14, calendar: study_calendar_policy = "utc",
+    options?: Partial<series_options>,
+  ): [series_api, series_api] {
+    if (!Number.isInteger(period) || period < 1) {
+      throw new AerisChartsError("invalid_options", "ADR period must be a positive integer");
+    }
+    this.validate_study_calendar_policy(calendar);
+    const ids = this.wasm.add_adr_levels(source.id, period, calendar);
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid ADR Levels source or configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+  add_twap(source: series_api, reset: vwap_reset = "session", options?: Partial<series_options>): series_api {
+    if (!["session", "weekly", "monthly"].includes(reset)) {
+      throw new AerisChartsError("invalid_options", "TWAP reset must be session, weekly, or monthly");
+    }
+    return this.indicator_series(this.wasm.add_twap(source.id, reset), options);
+  }
+  add_squeeze_momentum(
+    source: series_api, bb_period = 20, bb_mult = 2, kc_period = 20, kc_mult = 1.5,
+    options?: Partial<series_options>,
+  ): [series_api, series_api] {
+    const ids = this.wasm.add_squeeze_momentum(
+      source.id,
+      Math.max(1, Math.floor(bb_period)),
+      bb_mult,
+      Math.max(1, Math.floor(kc_period)),
+      kc_mult,
+    );
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Squeeze Momentum configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+  set_session_zones(config: session_zones_input): void {
+    const parse_hhmm = (value: string, label: string): number => {
+      const m = /^(\d{2}):(\d{2})$/.exec(value.trim());
+      if (!m) throw new AerisChartsError("invalid_options", `invalid ${label} time "${value}" (expected HH:MM)`);
+      const hh = Number(m[1]);
+      const mm = Number(m[2]);
+      if (hh === 24 && mm === 0) return 0;
+      if (hh < 0 || hh >= 24 || mm < 0 || mm >= 60) {
+        throw new AerisChartsError("invalid_options", `invalid ${label} time "${value}"`);
+      }
+      return hh * 60 + mm;
+    };
+    const normalized: session_zones_config = {
+      enabled: Boolean(config.enabled),
+      time_zone: config.time_zone,
+      sessions: config.sessions.map((s) => ({
+        id: s.id,
+        name: s.name,
+        enabled: s.enabled ?? true,
+        start_minute: s.start !== undefined ? parse_hhmm(s.start, "start") : (s.start_minute ?? 0),
+        end_minute: s.end !== undefined ? parse_hhmm(s.end, "end") : (s.end_minute ?? 0),
+        color: s.color,
+        opacity: s.opacity ?? 0.1,
+        show_label: s.show_label ?? true,
+        show_range_box: s.show_range_box ?? false,
+        ...(s.time_zone !== undefined && s.time_zone !== null ? { time_zone: s.time_zone } : {}),
+      })),
+    };
+    const error = this.wasm.set_session_zones_json(JSON.stringify(normalized));
+    if (error) throw new AerisChartsError("invalid_options", error);
+    this.repaint();
+  }
+  session_zones(): session_zones_config | null {
+    return JSON.parse(this.wasm.session_zones_json()) as session_zones_config | null;
+  }
+  default_session_zones(): session_zones_config {
+    return JSON.parse(this.wasm.default_session_zones_json()) as session_zones_config;
+  }
+  clear_session_zones(): boolean {
+    const removed = this.wasm.clear_session_zones();
+    if (removed) this.repaint();
+    return removed;
+  }
+  supported_time_zones(): string[] {
+    return JSON.parse(this.wasm.supported_time_zones_json()) as string[];
   }
 
   register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void {

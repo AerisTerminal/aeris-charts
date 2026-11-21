@@ -177,6 +177,8 @@ struct StateV3 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     price_transforms: Vec<PriceTransformV3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_zones: Option<crate::SessionZonesConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     general_transition_duration_ms: Option<f64>,
 }
 
@@ -685,7 +687,10 @@ fn drop_retired_indicators(envelope: &mut serde_json::Value) {
 fn incremental_output_count(kind: &IndicatorKind) -> usize {
     match kind {
         IndicatorKind::Custom { output_count, .. } => *output_count,
-        IndicatorKind::SwingPoints { .. } | IndicatorKind::SessionLevels { .. } => 2,
+        IndicatorKind::SwingPoints { .. }
+        | IndicatorKind::SessionLevels { .. }
+        | IndicatorKind::AdrLevels { .. }
+        | IndicatorKind::SqueezeMomentum { .. } => 2,
         IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => 3,
         IndicatorKind::Sma { .. }
         | IndicatorKind::Ema { .. }
@@ -695,6 +700,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
+        | IndicatorKind::Twap { .. }
         | IndicatorKind::Obv
         | IndicatorKind::RelativeVolume { .. }
         | IndicatorKind::Cmf { .. }
@@ -761,6 +767,20 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::OpeningRange {
             duration_seconds, ..
         } => *duration_seconds > 0,
+        IndicatorKind::AdrLevels { period, .. } => *period > 0,
+        IndicatorKind::SqueezeMomentum {
+            bb_period,
+            bb_mult,
+            kc_period,
+            kc_mult,
+        } => {
+            *bb_period > 0
+                && *kc_period > 0
+                && bb_mult.is_finite()
+                && *bb_mult >= 0.0
+                && kc_mult.is_finite()
+                && *kc_mult >= 0.0
+        }
         IndicatorKind::Sma { period }
         | IndicatorKind::Ema { period }
         | IndicatorKind::Vwma { period }
@@ -777,6 +797,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::ParabolicSar
         | IndicatorKind::Ichimoku
         | IndicatorKind::Vwap
+        | IndicatorKind::Twap { .. }
         | IndicatorKind::Obv => true,
         IndicatorKind::Keltner { period, multiplier }
         | IndicatorKind::SuperTrend { period, multiplier } => {
@@ -878,7 +899,9 @@ fn remap_indicator_source(
 impl ChartEngine {
     /// Deterministic JSON of stable chart state. Plain financial charts retain the V1 wire format.
     pub fn export_state_json(&self) -> Result<String, ChartError> {
-        if (!self.indicators.is_empty() || !self.synthetic_series.is_empty())
+        if (!self.indicators.is_empty()
+            || !self.synthetic_series.is_empty()
+            || self.session_zones.is_some())
             && self
                 .panes
                 .iter()
@@ -966,6 +989,7 @@ impl ChartEngine {
             drawings: base.drawings,
             indicators,
             price_transforms,
+            session_zones: self.session_zones.clone(),
             general_transition_duration_ms: (self.general_transition_duration_ms > 0.0)
                 .then_some(self.general_transition_duration_ms),
         })
@@ -2752,7 +2776,13 @@ impl ChartEngine {
                 )));
             }
         }
+        if let Some(zones) = state.session_zones.as_ref() {
+            zones
+                .validate()
+                .map_err(|error| invalid(format!("session zones invalid: {error}")))?;
+        }
         let mut result = self.install_validated_state(validated)?;
+        self.session_zones = state.session_zones;
         if let Some(definition) = state.price_transforms.first() {
             self.configure_synthetic_bar_series(definition.series_id, definition.options)
                 .map_err(|error| {

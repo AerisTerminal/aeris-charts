@@ -1866,7 +1866,49 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "relative_volume" | "sma" | "ema" | "vwma" | "cci" | "stochastic_rsi" | "donchian" | "pivot_points" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands";
+export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "adr_levels" | "swing_points" | "relative_volume" | "sma" | "ema" | "vwma" | "cci" | "stochastic_rsi" | "donchian" | "pivot_points" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "twap" | "squeeze_momentum" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands";
+/** One customizable trading session or killzone window (minutes since midnight in the chosen IANA timezone). */
+export interface session_zone_definition {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Local start minute of day (`0..1439`). Values greater than `end_minute` wrap overnight. */
+  start_minute: number;
+  /** Local end minute of day (`0..1439`). `0` with `start_minute > 0` means midnight (`00:00`). */
+  end_minute: number;
+  color: string;
+  opacity: number;
+  show_label: boolean;
+  show_range_box: boolean;
+  /** Optional per-session IANA timezone override. Inherits `session_zones_config.time_zone` when omitted. */
+  time_zone?: string | null;
+}
+/** Input shape accepted by `set_session_zones`; callers may pass `"HH:MM"` strings via `start`/`end` or numeric minutes. */
+export interface session_zone_input {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  start?: string;
+  end?: string;
+  start_minute?: number;
+  end_minute?: number;
+  color: string;
+  opacity?: number;
+  show_label?: boolean;
+  show_range_box?: boolean;
+  time_zone?: string | null;
+}
+export interface session_zones_config {
+  enabled: boolean;
+  /** Any valid IANA timezone identifier (e.g. `"America/New_York"`, `"Asia/Kolkata"`, `"Europe/London"`, `"UTC"`). */
+  time_zone: string;
+  sessions: session_zone_definition[];
+}
+export interface session_zones_input {
+  enabled: boolean;
+  time_zone: string;
+  sessions: readonly session_zone_input[];
+}
 /** UTC groups by calendar day/week/month; host uses spans supplied by set_study_calendar. */
 export type study_calendar_policy = "utc" | "host";
 export type previous_period = "day" | "week" | "month";
@@ -4807,6 +4849,22 @@ export interface chart_api {
   add_previous_period_levels(source: series_api, period?: previous_period, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Running opening high/low/mid, fixed after duration_seconds from the session start. */
   add_opening_range(source: series_api, duration_seconds: number, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Average Daily Range projected High/Low levels from the rolling mean of the previous `period` completed sessions. */
+  add_adr_levels(source: series_api, period?: number, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api];
+  /** Time-Weighted Average Price (equal-weighted mean of HLC3) resetting per session, week, or month. */
+  add_twap(source: series_api, reset?: vwap_reset, options?: Partial<series_options>): series_api;
+  /** Squeeze Momentum (TTM Squeeze) in its own oscillator pane: 4-state momentum histogram plus zero-line squeeze-state crosses. */
+  add_squeeze_momentum(source: series_api, bb_period?: number, bb_mult?: number, kc_period?: number, kc_mult?: number, options?: Partial<series_options>): [series_api, series_api];
+  /** Configure customizable trading sessions / killzones in any IANA timezone with editable start/end times. */
+  set_session_zones(config: session_zones_input): void;
+  /** Current customizable session / killzone configuration, or null when unset. */
+  session_zones(): session_zones_config | null;
+  /** Default institutional killzones preset (Asia, London, NY AM, NY PM in `America/New_York`). */
+  default_session_zones(): session_zones_config;
+  /** Remove customizable session / killzone highlights from the chart. */
+  clear_session_zones(): boolean;
+  /** Built-in TradingView-parity IANA timezone identifiers (any valid IANA timezone is also accepted by `set_session_zones`). */
+  supported_time_zones(): string[];
   /** Add an SMA using an explicit OHLC/aggregate input from the source series. */
   add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */

@@ -2992,10 +2992,31 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.percent_lower).collect(),
             ]
         }
+        IndicatorKind::Twap { reset } => vec![aeris_charts_indicators::twap(
+            times, source[1], source[2], source[3], reset,
+        )],
+        IndicatorKind::SqueezeMomentum {
+            bb_period,
+            bb_mult,
+            kc_period,
+            kc_mult,
+        } => {
+            let points = aeris_charts_indicators::squeeze_momentum(
+                source[1], source[2], source[3], bb_period, bb_mult, kc_period, kc_mult,
+            );
+            vec![
+                points.iter().map(|point| point.momentum).collect(),
+                points
+                    .iter()
+                    .map(|point| point.squeeze_on.map(|_| 0.0))
+                    .collect(),
+            ]
+        }
         IndicatorKind::SwingPoints { .. }
         | IndicatorKind::SessionLevels { .. }
         | IndicatorKind::PreviousPeriodLevels { .. }
-        | IndicatorKind::OpeningRange { .. } => {
+        | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::AdrLevels { .. } => {
             panic!(
                 "session and structural studies require calendar/annotation-aware reference fixtures"
             )
@@ -3075,6 +3096,15 @@ fn all_engine_indicator_kinds() -> Vec<IndicatorKind> {
             standard_deviation: 1.0,
             percent: 5.0,
         },
+        IndicatorKind::Twap {
+            reset: aeris_charts_indicators::VwapReset::Session,
+        },
+        IndicatorKind::SqueezeMomentum {
+            bb_period: 5,
+            bb_mult: 2.0,
+            kc_period: 5,
+            kc_mult: 1.5,
+        },
         IndicatorKind::Obv,
         IndicatorKind::RelativeVolume { period: 5 },
         IndicatorKind::Cmf { period: 5 },
@@ -3121,6 +3151,10 @@ fn every_language_titles_and_labels_every_indicator_output() {
         IndicatorKind::SessionLevels { calendar },
         IndicatorKind::OpeningRange {
             duration_seconds: 3_600,
+            calendar,
+        },
+        IndicatorKind::AdrLevels {
+            period: 14,
             calendar,
         },
     ]);
@@ -3487,14 +3521,15 @@ fn every_indicator_engine_path_matches_fresh_engine_on_gap_mutations() {
             "session_levels",
             "previous_period_levels",
             "opening_range",
+            "adr_levels",
         ]
         .into_iter()
         .map(|name| IndicatorKind::schema_definition(name, 5, 2.0).unwrap()),
     );
     assert_eq!(
         kinds.len(),
-        29,
-        "28 built-in variants with both Volume average modes"
+        32,
+        "31 built-in variants with both Volume average modes"
     );
     // Rebuild each kind in a *different* engine, not merely via the dense
     // formula used by assert_indicator_binding_matches_full.

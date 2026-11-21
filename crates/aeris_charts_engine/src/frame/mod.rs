@@ -1964,6 +1964,7 @@ impl ChartEngine {
                         vpr,
                         &mut cache.under.prims,
                     );
+                    self.build_session_zones_frame(pi, from, to, hpr, vpr, &mut cache.under.prims);
                     self.build_depth_heatmap_frame(pi, hpr, vpr, &mut cache.under.prims);
                 }
                 self.append_general_grid_frame(

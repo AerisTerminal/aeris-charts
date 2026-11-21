@@ -71,6 +71,11 @@ mod profiles;
 mod replay;
 mod resampling;
 mod series_query_api;
+mod session_zones;
+pub use session_zones::{
+    MAX_SESSION_ZONES, SessionZoneDefinition, SessionZonesConfig, SessionZonesError, format_hhmm,
+    parse_hhmm,
+};
 #[cfg(test)]
 mod tests;
 mod trading;
@@ -2063,6 +2068,8 @@ pub struct ChartEngine {
     /// Host-supplied study sessions; runtime-only, never included in workspace persistence.
     study_calendar: Vec<ResampleBoundary>,
     study_calendar_spans: Vec<aeris_charts_indicators::SessionSpan>,
+    /// User-customizable trading sessions / killzones (persisted in V3 state).
+    session_zones: Option<SessionZonesConfig>,
     depth_streams: HashMap<u64, DepthBook>,
     depth_stream_keys: HashMap<String, u64>,
     next_depth_stream_id: u64,
@@ -2417,6 +2424,7 @@ impl ChartEngine {
             resampled_series: HashMap::new(),
             study_calendar: Vec::new(),
             study_calendar_spans: Vec::new(),
+            session_zones: None,
             depth_streams: HashMap::new(),
             depth_stream_keys: HashMap::new(),
             next_depth_stream_id: 1,

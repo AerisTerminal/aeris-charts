@@ -65,3 +65,9 @@ output_percent_lower = % inferior
 output_stoch_rsi = RSI estocástico
 output_supertrend = SuperTrend
 output_relative_volume = Volumen relativo
+
+adr_levels = ADR {period}
+twap = TWAP
+squeeze_momentum = Impulso Squeeze {bb_period} {kc_period}
+output_momentum = Impulso
+output_squeeze = Squeeze

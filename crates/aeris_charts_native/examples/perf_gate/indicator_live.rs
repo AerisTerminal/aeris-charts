@@ -35,7 +35,7 @@ const BAR_SECONDS: f64 = 60.0;
 const SPARSE_VOLUME_STRIDE: usize = 10;
 const CUSTOM_TYPE: &str = "perf.close";
 /// `IndicatorKind` variants, including `Custom`.
-const VARIANTS: usize = 29;
+const VARIANTS: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Volume {
@@ -101,17 +101,20 @@ fn variant_slot(kind: &IndicatorKind) -> usize {
         IndicatorKind::Mfi { .. } => 21,
         IndicatorKind::Volume { .. } => 22,
         IndicatorKind::VwapBands { .. } => 23,
-        IndicatorKind::SwingPoints { .. } => 24,
-        IndicatorKind::SessionLevels { .. } => 25,
-        IndicatorKind::PreviousPeriodLevels { .. } => 26,
-        IndicatorKind::OpeningRange { .. } => 27,
-        IndicatorKind::Custom { .. } => 28,
+        IndicatorKind::Twap { .. } => 24,
+        IndicatorKind::SqueezeMomentum { .. } => 25,
+        IndicatorKind::AdrLevels { .. } => 26,
+        IndicatorKind::SwingPoints { .. } => 27,
+        IndicatorKind::SessionLevels { .. } => 28,
+        IndicatorKind::PreviousPeriodLevels { .. } => 29,
+        IndicatorKind::OpeningRange { .. } => 30,
+        IndicatorKind::Custom { .. } => 31,
     }
 }
 
 /// Engine schema names. `schema_definition(name, 14, 2.0)` is the documented canonical-default
 /// query; pivot points select their variant by index instead, and 1 is the default (standard).
-const DEFAULT_KIND_NAMES: [&str; 28] = [
+const DEFAULT_KIND_NAMES: [&str; 31] = [
     "sma",
     "ema",
     "vwma",
@@ -136,6 +139,9 @@ const DEFAULT_KIND_NAMES: [&str; 28] = [
     "mfi",
     "volume",
     "vwap_bands",
+    "twap",
+    "squeeze_momentum",
+    "adr_levels",
     "swing_points",
     "session_levels",
     "previous_period_levels",

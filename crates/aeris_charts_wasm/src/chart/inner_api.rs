@@ -333,6 +333,63 @@ impl ChartInner {
             .add_opening_range(source_id as SeriesId, duration_seconds, calendar)
     }
 
+    pub fn add_adr_levels(&mut self, source_id: u32, period: u32, calendar: &str) -> Vec<u32> {
+        let Some(calendar) = Self::study_calendar_policy(calendar) else {
+            return Vec::new();
+        };
+        self.engine
+            .add_adr_levels(source_id as SeriesId, period as usize, calendar)
+    }
+
+    pub fn add_twap(&mut self, source_id: u32, reset: &str) -> u32 {
+        let reset = match reset {
+            "session" => VwapReset::Session,
+            "weekly" => VwapReset::Weekly,
+            "monthly" => VwapReset::Monthly,
+            _ => return u32::MAX,
+        };
+        self.engine
+            .add_twap(source_id as SeriesId, reset)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_squeeze_momentum(
+        &mut self,
+        source_id: u32,
+        bb_period: u32,
+        bb_mult: f64,
+        kc_period: u32,
+        kc_mult: f64,
+    ) -> Vec<u32> {
+        self.engine.add_squeeze_momentum(
+            source_id as SeriesId,
+            bb_period as usize,
+            bb_mult,
+            kc_period as usize,
+            kc_mult,
+        )
+    }
+
+    pub fn set_session_zones_json(&mut self, config_json: &str) -> String {
+        let config: aeris_charts_engine::SessionZonesConfig =
+            match serde_json::from_str(config_json) {
+                Ok(config) => config,
+                Err(error) => return error.to_string(),
+            };
+        match self.engine.set_session_zones(config) {
+            Ok(()) => String::new(),
+            Err(error) => error.message,
+        }
+    }
+
+    pub fn session_zones_json(&self) -> String {
+        serde_json::to_string(&self.engine.session_zones()).unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn clear_session_zones(&mut self) -> bool {
+        self.engine.clear_session_zones()
+    }
+
     pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
         let Some(source_input) = Self::indicator_input_source(source) else {
             return u32::MAX;

@@ -65,3 +65,9 @@ output_percent_lower = % 하단
 output_stoch_rsi = 스토캐스틱 RSI
 output_supertrend = 슈퍼트렌드
 output_relative_volume = 상대 거래량
+
+adr_levels = ADR {period}
+twap = TWAP
+squeeze_momentum = 스퀴즈 모멘텀 {bb_period} {kc_period}
+output_momentum = 모멘텀
+output_squeeze = 스퀴즈

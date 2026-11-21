@@ -2765,6 +2765,46 @@ impl AerisChart {
             .add_opening_range(source_id, duration_seconds, calendar)
     }
 
+    pub fn add_adr_levels(&mut self, source_id: u32, period: u32, calendar: &str) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_adr_levels(source_id, period, calendar)
+    }
+
+    pub fn add_twap(&mut self, source_id: u32, reset: &str) -> u32 {
+        self.inner.borrow_mut().add_twap(source_id, reset)
+    }
+
+    pub fn add_squeeze_momentum(
+        &mut self,
+        source_id: u32,
+        bb_period: u32,
+        bb_mult: f64,
+        kc_period: u32,
+        kc_mult: f64,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_squeeze_momentum(source_id, bb_period, bb_mult, kc_period, kc_mult)
+    }
+
+    pub fn set_session_zones_json(&mut self, config_json: &str) -> String {
+        self.inner.borrow_mut().set_session_zones_json(config_json)
+    }
+
+    pub fn session_zones_json(&self) -> String {
+        self.inner.borrow().session_zones_json()
+    }
+
+    pub fn default_session_zones_json(&self) -> String {
+        serde_json::to_string(&aeris_charts_engine::SessionZonesConfig::default_killzones())
+            .unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn clear_session_zones(&mut self) -> bool {
+        self.inner.borrow_mut().clear_session_zones()
+    }
+
     pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
         self.inner
             .borrow_mut()

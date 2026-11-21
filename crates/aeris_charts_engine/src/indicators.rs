@@ -212,6 +212,19 @@ pub enum IndicatorKind {
         standard_deviation: f64,
         percent: f64,
     },
+    Twap {
+        reset: aeris_charts_indicators::VwapReset,
+    },
+    SqueezeMomentum {
+        bb_period: usize,
+        bb_mult: f64,
+        kc_period: usize,
+        kc_mult: f64,
+    },
+    AdrLevels {
+        period: usize,
+        calendar: StudyCalendarPolicy,
+    },
     SwingPoints {
         left: usize,
         right: usize,
@@ -317,6 +330,19 @@ impl IndicatorKind {
                 // study's own default is 1.0. Other values remain explicit overrides.
                 standard_deviation: if deviation == 2.0 { 1.0 } else { deviation },
                 percent: 10.0,
+            },
+            "twap" => Self::Twap {
+                reset: VwapReset::Session,
+            },
+            "squeeze_momentum" => Self::SqueezeMomentum {
+                bb_period: if period == 14 { 20 } else { period },
+                bb_mult: deviation,
+                kc_period: if period == 14 { 20 } else { period },
+                kc_mult: 1.5,
+            },
+            "adr_levels" => Self::AdrLevels {
+                period,
+                calendar: StudyCalendarPolicy::Utc,
             },
             _ => return None,
         })
@@ -790,10 +816,21 @@ fn indicator_default_color(
             _ => (None, None),
         },
         IndicatorKind::Vwap => (None, Some(GOLD)),
+        IndicatorKind::Twap { .. } => (None, Some(TEAL)),
         IndicatorKind::VwapBands { .. } => match output_index {
             0 => (None, Some(GOLD)),
             1 | 2 => (None, Some(SKY)),
             3 | 4 => (None, Some(TEAL)),
+            _ => (None, None),
+        },
+        IndicatorKind::SqueezeMomentum { .. } => match output_index {
+            0 => (Some(MarketTone::Up), None),
+            1 => (None, Some(SLATE)),
+            _ => (None, None),
+        },
+        IndicatorKind::AdrLevels { .. } => match output_index {
+            0 => (Some(MarketTone::Down), None),
+            1 => (Some(MarketTone::Up), None),
             _ => (None, None),
         },
         IndicatorKind::Volume { .. } => match output_index {
@@ -816,6 +853,7 @@ fn indicator_default_line_style(kind: &IndicatorKind, output_index: usize) -> u8
         IndicatorKind::OpeningRange { .. } if output_index == 2 => 2, // Dashed OR mid
         IndicatorKind::PreviousPeriodLevels { .. } if output_index == 2 => 2, // Dashed prior close
         IndicatorKind::VwapBands { .. } if output_index >= 3 => 2, // Dashed % bands
+        IndicatorKind::AdrLevels { .. } => 2,                     // Dashed ADR ceiling/floor
         _ => 0,
     }
 }
@@ -827,7 +865,9 @@ fn indicator_default_line_break_mode(kind: &IndicatorKind) -> LineBreakMode {
         | IndicatorKind::SessionLevels { .. }
         | IndicatorKind::PreviousPeriodLevels { .. }
         | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::AdrLevels { .. }
         | IndicatorKind::Vwap
+        | IndicatorKind::Twap { .. }
         | IndicatorKind::VwapBands { .. } => LineBreakMode::OnSegmentBreak,
         _ => LineBreakMode::Continuous,
     }
@@ -854,6 +894,7 @@ fn indicator_default_level_tag(kind: &IndicatorKind, output_index: usize) -> Opt
             PreviousPeriod::Month => ["PMH", "PML", "PMC"].get(output_index)?,
         },
         IndicatorKind::OpeningRange { .. } => ["ORH", "ORL", "ORM"].get(output_index)?,
+        IndicatorKind::AdrLevels { .. } => ["ADR H", "ADR L"].get(output_index)?,
         _ => return None,
     };
     Some(tag.to_string())
@@ -878,7 +919,10 @@ fn indicator_default_reference_lines(
         IndicatorKind::Rsi { .. } => {
             lines[0] = dashed(50.0);
         }
-        IndicatorKind::Macd { .. } | IndicatorKind::Cci { .. } | IndicatorKind::Cmf { .. } => {
+        IndicatorKind::Macd { .. }
+        | IndicatorKind::Cci { .. }
+        | IndicatorKind::Cmf { .. }
+        | IndicatorKind::SqueezeMomentum { .. } => {
             lines[0] = dashed(0.0);
         }
         IndicatorKind::AdxDmi { .. } => {
@@ -943,7 +987,9 @@ fn segment_period_key(
     let utc_week = |t: i64| (utc_day(t) + 3).div_euclid(7);
     match kind {
         IndicatorKind::PivotPoints { .. } => Some(utc_day(time)),
-        IndicatorKind::SessionLevels { .. } | IndicatorKind::OpeningRange { .. } => {
+        IndicatorKind::SessionLevels { .. }
+        | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::AdrLevels { .. } => {
             if calendar == Some(StudyCalendarPolicy::Host) {
                 host_session_key(host_spans, time)
             } else {
@@ -962,7 +1008,7 @@ fn segment_period_key(
             PreviousPeriod::Month => Some(utc_month_key(time)),
         },
         IndicatorKind::Vwap => Some(utc_day(time)),
-        IndicatorKind::VwapBands { reset, .. } => match reset {
+        IndicatorKind::Twap { reset } | IndicatorKind::VwapBands { reset, .. } => match reset {
             VwapReset::Session => Some(utc_day(time)),
             VwapReset::Weekly => Some(utc_week(time)),
             VwapReset::Monthly => Some(utc_month_key(time)),
@@ -1057,6 +1103,51 @@ impl ChartEngine {
         )
     }
 
+    /// Add Average Daily Range projected High/Low levels (`session_low + ADR`, `session_high - ADR`)
+    /// from the rolling mean of the previous `period` completed sessions' ranges.
+    pub fn add_adr_levels(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        calendar: StudyCalendarPolicy,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::AdrLevels { period, calendar }, None)
+    }
+
+    /// Add Time-Weighted Average Price (equal-weighted mean of HLC3) resetting per session,
+    /// week, or month.
+    pub fn add_twap(
+        &mut self,
+        source: SeriesId,
+        reset: aeris_charts_indicators::VwapReset,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Twap { reset }, None)
+            .into_iter()
+            .next()
+    }
+
+    /// Add Squeeze Momentum (TTM Squeeze) in its own oscillator pane: 4-state momentum histogram
+    /// plus zero-line squeeze-state crosses (red = squeeze ON, green = squeeze OFF).
+    pub fn add_squeeze_momentum(
+        &mut self,
+        source: SeriesId,
+        bb_period: usize,
+        bb_mult: f64,
+        kc_period: usize,
+        kc_mult: f64,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::SqueezeMomentum {
+                bb_period,
+                bb_mult,
+                kc_period,
+                kc_mult,
+            },
+            None,
+        )
+    }
+
     /// Add confirmed swing levels on the source price pane.
     pub fn add_swing_points(
         &mut self,
@@ -1098,6 +1189,12 @@ impl ChartEngine {
                     series.point_markers = true;
                     series.point_marker_shape = PointMarkerShape::Circle;
                     series.point_markers_radius = Some(2.5);
+                }
+                if matches!(kind, IndicatorKind::SqueezeMomentum { .. }) && output_index == 1 {
+                    series.line_visible = false;
+                    series.point_markers = true;
+                    series.point_marker_shape = PointMarkerShape::Cross;
+                    series.point_markers_radius = Some(3.0);
                 }
                 if matches!(kind, IndicatorKind::Cmf { .. }) {
                     series.baseline = Some(0.0);
@@ -1146,12 +1243,16 @@ impl ChartEngine {
         let mut macd_ids = Vec::new();
         let mut rvol_ids = Vec::new();
         let mut directional_pairs = Vec::new();
-        for binding in &self.indicators {
+        let mut squeeze_indices = Vec::new();
+        for (binding_index, binding) in self.indicators.iter().enumerate() {
             match binding.kind {
                 IndicatorKind::Macd { .. } => {
                     if let Some(&id) = binding.outputs.get(2) {
                         macd_ids.push(id);
                     }
+                }
+                IndicatorKind::SqueezeMomentum { .. } => {
+                    squeeze_indices.push(binding_index);
                 }
                 IndicatorKind::RelativeVolume { .. } => {
                     if let Some(&id) = binding.outputs.first() {
@@ -1165,6 +1266,9 @@ impl ChartEngine {
                 }
                 _ => {}
             }
+        }
+        for binding_index in squeeze_indices {
+            self.rebuild_indicator(binding_index, 0, true);
         }
         macd_ids.extend(self.external_momentum_histogram_series());
         for id in macd_ids {
@@ -1795,6 +1899,42 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Twap { reset } => (
+                            "twap",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                reset: Some(reset),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::SqueezeMomentum {
+                            bb_period,
+                            bb_mult,
+                            kc_period,
+                            kc_mult,
+                        } => (
+                            "squeeze_momentum",
+                            bb_period,
+                            Some(bb_mult),
+                            IndicatorParameters {
+                                period: Some(bb_period),
+                                deviation: Some(bb_mult),
+                                k_period: Some(kc_period),
+                                standard_deviation: Some(kc_mult),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::AdrLevels { period, calendar } => (
+                            "adr_levels",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                calendar: Some(calendar),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                     };
                     let output_name = if let IndicatorKind::Custom {
                         ref type_id,
@@ -2134,6 +2274,15 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::SqueezeMomentum { .. } => {
+                if let Some(&histogram) = ids.first() {
+                    self.convert_series_kind(histogram, SeriesKind::Histogram);
+                    if let Some(series) = self.series_entry_mut(histogram) {
+                        series.base = 0.0;
+                    }
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::RelativeVolume { .. } => {
                 if let Some(&histogram) = ids.first() {
                     self.convert_series_kind(histogram, SeriesKind::Histogram);
@@ -2185,11 +2334,13 @@ impl ChartEngine {
             | IndicatorKind::SuperTrend { .. }
             | IndicatorKind::Ichimoku
             | IndicatorKind::Vwap
+            | IndicatorKind::Twap { .. }
             | IndicatorKind::VwapBands { .. }
             | IndicatorKind::SwingPoints { .. }
             | IndicatorKind::SessionLevels { .. }
             | IndicatorKind::PreviousPeriodLevels { .. }
-            | IndicatorKind::OpeningRange { .. } => {
+            | IndicatorKind::OpeningRange { .. }
+            | IndicatorKind::AdrLevels { .. } => {
                 if let Some((pane, target)) = self.series_price_scale(source) {
                     for &id in &ids {
                         if let Some((output_pane, output_target)) = self.series_price_scale(id) {
@@ -2295,6 +2446,7 @@ impl ChartEngine {
             IndicatorKind::SessionLevels { .. }
                 | IndicatorKind::PreviousPeriodLevels { .. }
                 | IndicatorKind::OpeningRange { .. }
+                | IndicatorKind::AdrLevels { .. }
         ) {
             parameters.clear();
         }
@@ -2325,7 +2477,8 @@ impl ChartEngine {
             IndicatorKind::SwingPoints { left, right } => swing(&mut parameters, left, right),
             IndicatorKind::SessionLevels { calendar }
             | IndicatorKind::PreviousPeriodLevels { calendar, .. }
-            | IndicatorKind::OpeningRange { calendar, .. } => {
+            | IndicatorKind::OpeningRange { calendar, .. }
+            | IndicatorKind::AdrLevels { calendar, .. } => {
                 if let IndicatorKind::PreviousPeriodLevels { period, .. } = kind {
                     parameters.push(
                         IndicatorParameterDescriptor::choice(
@@ -2345,6 +2498,9 @@ impl ChartEngine {
                 } = kind
                 {
                     parameters.push(integer("duration_seconds", *duration_seconds as usize));
+                }
+                if let IndicatorKind::AdrLevels { period, .. } = kind {
+                    parameters.push(integer("period", *period));
                 }
                 parameters.push(
                     IndicatorParameterDescriptor::choice(
@@ -2474,6 +2630,27 @@ impl ChartEngine {
                     max: None,
                     options: None,
                 });
+            }
+            IndicatorKind::Twap { reset } => {
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "reset".into(),
+                    parameter_type: IndicatorParameterType::Source,
+                    default: serde_json::json!(reset),
+                    min: None,
+                    max: None,
+                    options: None,
+                });
+            }
+            IndicatorKind::SqueezeMomentum {
+                bb_period,
+                bb_mult,
+                kc_period,
+                kc_mult,
+            } => {
+                parameters.push(integer("bb_period", bb_period));
+                parameters.push(number("bb_mult", bb_mult));
+                parameters.push(integer("kc_period", kc_period));
+                parameters.push(number("kc_mult", kc_mult));
             }
             IndicatorKind::Custom { .. } => unreachable!("custom schema handled above"),
         }
@@ -2728,6 +2905,21 @@ impl ChartEngine {
                 IndicatorKind::OpeningRange {
                     duration_seconds, ..
                 } => *duration_seconds == 0,
+                IndicatorKind::AdrLevels { period, .. } => *period == 0,
+                IndicatorKind::Twap { .. } => false,
+                IndicatorKind::SqueezeMomentum {
+                    bb_period,
+                    bb_mult,
+                    kc_period,
+                    kc_mult,
+                } => {
+                    *bb_period == 0
+                        || *kc_period == 0
+                        || !bb_mult.is_finite()
+                        || *bb_mult < 0.0
+                        || !kc_mult.is_finite()
+                        || *kc_mult < 0.0
+                }
                 IndicatorKind::Custom { .. } => true,
             }
         {
@@ -2792,12 +2984,19 @@ impl ChartEngine {
                     s.point_marker_shape = PointMarkerShape::Circle;
                     s.point_markers_radius = Some(2.5);
                 }
+                if matches!(kind, IndicatorKind::SqueezeMomentum { .. }) && output_index == 1 {
+                    s.line_visible = false;
+                    s.point_markers = true;
+                    s.point_marker_shape = PointMarkerShape::Cross;
+                    s.point_markers_radius = Some(3.0);
+                }
                 if matches!(
                     kind,
                     IndicatorKind::SwingPoints { .. }
                         | IndicatorKind::SessionLevels { .. }
                         | IndicatorKind::PreviousPeriodLevels { .. }
                         | IndicatorKind::OpeningRange { .. }
+                        | IndicatorKind::AdrLevels { .. }
                 ) && let Some((pane_index, price_scale_target)) = source_placement
                 {
                     s.pane_index = pane_index;
@@ -2838,7 +3037,8 @@ impl ChartEngine {
         let calendar = match &kind {
             IndicatorKind::SessionLevels { calendar }
             | IndicatorKind::PreviousPeriodLevels { calendar, .. }
-            | IndicatorKind::OpeningRange { calendar, .. } => Some(*calendar),
+            | IndicatorKind::OpeningRange { calendar, .. }
+            | IndicatorKind::AdrLevels { calendar, .. } => Some(*calendar),
             _ => None,
         };
         let session = session_study_kind(&kind).map(SessionStudyState::new);
@@ -3275,6 +3475,7 @@ impl ChartEngine {
             volume_source.and_then(|id| self.data.series_generation(id));
 
         let mut full_histogram_colors = None;
+        let mut full_squeeze_colors = None;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
             let source_from = leading_source
@@ -3308,11 +3509,30 @@ impl ChartEngine {
                     .position(|value| !value.is_nan())
                     .unwrap_or(values.len());
                 values.drain(..first);
-                if output_index == 2
-                    && matches!(self.indicators[index].kind, IndicatorKind::Macd { .. })
+                if (output_index == 2
+                    && matches!(self.indicators[index].kind, IndicatorKind::Macd { .. }))
+                    || (output_index == 0
+                        && matches!(
+                            self.indicators[index].kind,
+                            IndicatorKind::SqueezeMomentum { .. }
+                        ))
                 {
                     full_histogram_colors =
                         Some(momentum_histogram_colors(&values, self.market_colors()));
+                } else if output_index == 1
+                    && matches!(
+                        self.indicators[index].kind,
+                        IndicatorKind::SqueezeMomentum { .. }
+                    )
+                {
+                    let market = self.market_colors();
+                    let flags = self.indicators[index]
+                        .runtime
+                        .built_in()
+                        .squeeze_flags()
+                        .unwrap_or(&[]);
+                    let aligned = flags.get(first..first + values.len()).unwrap_or(&[]);
+                    full_squeeze_colors = Some(squeeze_flag_colors(aligned, market));
                 } else if output_index == 0
                     && matches!(
                         self.indicators[index].kind,
@@ -3365,6 +3585,7 @@ impl ChartEngine {
 
         let point_colored = match self.indicators[index].kind {
             IndicatorKind::Macd { .. } => Some((outputs[2].unwrap(), 2, 0u8)),
+            IndicatorKind::SqueezeMomentum { .. } => Some((outputs[0].unwrap(), 0, 0u8)),
             IndicatorKind::RelativeVolume { .. } => Some((outputs[0].unwrap(), 0, 1u8)),
             IndicatorKind::SuperTrend { .. } | IndicatorKind::ParabolicSar => {
                 Some((outputs[0].unwrap(), 0, 2u8))
@@ -3442,6 +3663,41 @@ impl ChartEngine {
                 }
             }
         }
+        if matches!(
+            self.indicators[index].kind,
+            IndicatorKind::SqueezeMomentum { .. }
+        ) && let Some(squeeze_id) = outputs[1]
+        {
+            if let Some(colors) = full_squeeze_colors {
+                self.data
+                    .set_point_colors(squeeze_id, [Some(colors), None, None]);
+            } else {
+                let market = self.market_colors();
+                let runtime = self.indicators[index].runtime.built_in();
+                let source_from = leading_source + runtime.output_from(1);
+                let flags = runtime.squeeze_flags().unwrap_or(&[]).to_vec();
+                let output_start = source_from.saturating_sub(
+                    self.data
+                        .series_data(squeeze_id)
+                        .and_then(|(output_times, _)| output_times.first().copied())
+                        .and_then(|first| {
+                            self.data
+                                .series_data(source)
+                                .and_then(|(times, _)| times.binary_search(&first).ok())
+                        })
+                        .unwrap_or(source_from),
+                );
+                for (offset, &flag) in flags.iter().enumerate() {
+                    let color = squeeze_flag_color(flag, market);
+                    self.data.set_point_color(
+                        squeeze_id,
+                        PointColorChannel::Body,
+                        output_start + offset,
+                        color,
+                    );
+                }
+            }
+        }
         self.indicators[index]
             .runtime
             .built_in()
@@ -3458,6 +3714,21 @@ fn rvol_histogram_color(value: f64, market: crate::frame::MarketColors) -> u32 {
     } else {
         market.up.0
     }
+}
+
+fn squeeze_flag_color(flag: u8, market: crate::frame::MarketColors) -> u32 {
+    match flag {
+        1 => market.down.solid().0,
+        2 => market.up.solid().0,
+        _ => aeris_charts_core::model::data_layer::POINT_COLOR_ABSENT,
+    }
+}
+
+fn squeeze_flag_colors(flags: &[u8], market: crate::frame::MarketColors) -> Vec<u32> {
+    flags
+        .iter()
+        .map(|&flag| squeeze_flag_color(flag, market))
+        .collect()
 }
 
 fn rvol_histogram_colors(values: &[f64], market: crate::frame::MarketColors) -> Vec<u32> {
@@ -3535,6 +3806,9 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Mfi { .. } => "mfi",
         IndicatorKind::Volume { .. } => "volume",
         IndicatorKind::VwapBands { .. } => "vwap_bands",
+        IndicatorKind::Twap { .. } => "twap",
+        IndicatorKind::SqueezeMomentum { .. } => "squeeze_momentum",
+        IndicatorKind::AdrLevels { .. } => "adr_levels",
         IndicatorKind::Custom { .. } => "custom",
     }
 }
@@ -3548,7 +3822,7 @@ fn structure_output_count(kind: &IndicatorKind) -> Option<usize> {
 
 fn session_output_count(kind: &IndicatorKind) -> Option<usize> {
     match kind {
-        IndicatorKind::SessionLevels { .. } => Some(2),
+        IndicatorKind::SessionLevels { .. } | IndicatorKind::AdrLevels { .. } => Some(2),
         IndicatorKind::PreviousPeriodLevels { .. } | IndicatorKind::OpeningRange { .. } => Some(3),
         _ => None,
     }
@@ -3569,6 +3843,9 @@ fn session_study_kind(kind: &IndicatorKind) -> Option<SessionStudy> {
         } => Some(SessionStudy::OpeningRange {
             duration_seconds: i64::from(*duration_seconds),
         }),
+        IndicatorKind::AdrLevels { period, .. } => {
+            Some(SessionStudy::AdrLevels { period: *period })
+        }
         _ => None,
     }
 }
@@ -3602,7 +3879,8 @@ pub(crate) fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators
         IndicatorKind::SwingPoints { .. }
         | IndicatorKind::SessionLevels { .. }
         | IndicatorKind::PreviousPeriodLevels { .. }
-        | IndicatorKind::OpeningRange { .. } => aeris_charts_indicators::IncrementalState::sma(1),
+        | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::AdrLevels { .. } => aeris_charts_indicators::IncrementalState::sma(1),
         IndicatorKind::Sma { period } => aeris_charts_indicators::IncrementalState::sma(period),
         IndicatorKind::Ema { period } => aeris_charts_indicators::IncrementalState::ema(period),
         IndicatorKind::Vwma { period } => aeris_charts_indicators::IncrementalState::vwma(period),
@@ -3660,6 +3938,15 @@ pub(crate) fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators
             reset,
             standard_deviation,
             percent,
+        ),
+        IndicatorKind::Twap { reset } => aeris_charts_indicators::IncrementalState::twap(reset),
+        IndicatorKind::SqueezeMomentum {
+            bb_period,
+            bb_mult,
+            kc_period,
+            kc_mult,
+        } => aeris_charts_indicators::IncrementalState::squeeze_momentum(
+            bb_period, bb_mult, kc_period, kc_mult,
         ),
         IndicatorKind::Custom { .. } => unreachable!("custom runtime is dispatched separately"),
     }
@@ -3774,6 +4061,16 @@ pub(crate) fn indicator_title(kind: &IndicatorKind, language: ChartLanguage) -> 
         IndicatorKind::Mfi { period } => period_only(t::MFI, period),
         IndicatorKind::Volume { .. } => fixed(t::VOLUME),
         IndicatorKind::VwapBands { .. } => fixed(t::VWAP_BANDS),
+        IndicatorKind::Twap { .. } => fixed(t::TWAP),
+        IndicatorKind::AdrLevels { period, .. } => period_only(t::ADR_LEVELS, period),
+        IndicatorKind::SqueezeMomentum {
+            bb_period,
+            kc_period,
+            ..
+        } => t::SQUEEZE_MOMENTUM.format(
+            language,
+            &[("bb_period", bb_period), ("kc_period", kc_period)],
+        ),
         IndicatorKind::Custom { type_id, .. } => type_id.clone(),
     }
 }
@@ -3817,13 +4114,15 @@ pub fn indicator_output_label(
         (
             IndicatorKind::SessionLevels { .. }
             | IndicatorKind::PreviousPeriodLevels { .. }
-            | IndicatorKind::OpeningRange { .. },
+            | IndicatorKind::OpeningRange { .. }
+            | IndicatorKind::AdrLevels { .. },
             0,
         ) => t::OUTPUT_HIGH,
         (
             IndicatorKind::SessionLevels { .. }
             | IndicatorKind::PreviousPeriodLevels { .. }
-            | IndicatorKind::OpeningRange { .. },
+            | IndicatorKind::OpeningRange { .. }
+            | IndicatorKind::AdrLevels { .. },
             1,
         ) => t::OUTPUT_LOW,
         (IndicatorKind::PreviousPeriodLevels { .. }, 2) => t::OUTPUT_CLOSE,
@@ -3855,6 +4154,8 @@ pub fn indicator_output_label(
         (IndicatorKind::StochasticRsi { .. }, 0) => t::OUTPUT_STOCH_RSI,
         (IndicatorKind::SuperTrend { .. }, 0) => t::OUTPUT_SUPERTREND,
         (IndicatorKind::RelativeVolume { .. }, 0) => t::OUTPUT_RELATIVE_VOLUME,
+        (IndicatorKind::SqueezeMomentum { .. }, 0) => t::OUTPUT_MOMENTUM,
+        (IndicatorKind::SqueezeMomentum { .. }, 1) => t::OUTPUT_SQUEEZE,
         _ => return indicator_output_name(kind, output_index).to_string(),
     };
     phrase.text(language).to_string()
@@ -3928,6 +4229,9 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::VwapBands { .. } => {
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }
+        IndicatorKind::Twap { .. } => "TWAP",
+        IndicatorKind::SqueezeMomentum { .. } => ["Momentum", "Squeeze"][output_index],
+        IndicatorKind::AdrLevels { .. } => ["high", "low"][output_index],
         IndicatorKind::Custom { .. } => "Custom",
     }
 }

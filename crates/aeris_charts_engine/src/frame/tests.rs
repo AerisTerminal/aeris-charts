@@ -24422,3 +24422,177 @@ fn p3_supertrend_parabolic_sar_ichimoku_cmf_rvol_vwap_terminal_upgrades() {
     assert!(!sar_after.line_visible && sar_after.point_markers);
     assert_eq!(chart.series_entry(cmf).unwrap().baseline, Some(0.0));
 }
+
+#[test]
+fn p4_squeeze_momentum_twap_adr_levels_and_custom_session_zones() {
+    let mut chart = ChartEngine::new(900.0, 600.0, 1.0);
+    // 120 hourly bars across 5 UTC days starting 2026-01-15 00:00 UTC (EST = UTC-5, IST = UTC+5:30).
+    let start_utc = 1_768_435_200.0;
+    let n = 120usize;
+    let mut times = Vec::with_capacity(n);
+    let mut opens = Vec::with_capacity(n);
+    let mut highs = Vec::with_capacity(n);
+    let mut lows = Vec::with_capacity(n);
+    let mut closes = Vec::with_capacity(n);
+    for i in 0..n {
+        times.push(start_utc + i as f64 * 3600.0);
+        if i < 60 {
+            // Tight close cluster with wide wicks -> Squeeze ON (BB inside KC).
+            let c = 100.0 + if i % 2 == 0 { 0.05 } else { -0.05 };
+            opens.push(c);
+            highs.push(c + 3.0);
+            lows.push(c - 3.0);
+            closes.push(c);
+        } else {
+            // Strong breakout -> Squeeze OFF + positive momentum.
+            let c = 100.0 + (i - 59) as f64 * 2.5;
+            opens.push(c - 0.5);
+            highs.push(c + 1.0);
+            lows.push(c - 1.0);
+            closes.push(c);
+        }
+    }
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+
+    // 1. Squeeze Momentum: separate pane, histogram + zero-line crosses + dashed 0.0 guide.
+    let sqz = chart.add_squeeze_momentum(0, 5, 2.0, 5, 1.5);
+    assert_eq!(sqz.len(), 2);
+    assert_eq!(
+        chart.series_entry(sqz[0]).unwrap().kind,
+        SeriesKind::Histogram
+    );
+    assert_eq!(
+        chart.series_entry(sqz[1]).unwrap().point_marker_shape,
+        crate::PointMarkerShape::Cross
+    );
+    assert!(!chart.series_entry(sqz[1]).unwrap().line_visible);
+    let sqz_pane = chart.series_entry(sqz[0]).unwrap().pane_index;
+    assert_ne!(sqz_pane, 0);
+    assert_eq!(chart.series_entry(sqz[1]).unwrap().pane_index, sqz_pane);
+
+    // 2. TWAP: overlay line with UTC session break segments.
+    let twap_id = chart
+        .add_twap(0, aeris_charts_indicators::VwapReset::Session)
+        .unwrap();
+    assert_eq!(chart.series_entry(twap_id).unwrap().pane_index, 0);
+    assert_eq!(
+        chart.series_entry(twap_id).unwrap().line_break_mode,
+        crate::LineBreakMode::OnSegmentBreak
+    );
+    assert!(chart.series_segment_break_times(twap_id).len() >= 4);
+
+    // 3. ADR Levels: disconnected per-session levels + ADR H / ADR L right-edge tags.
+    let adr = chart.add_adr_levels(0, 2, crate::StudyCalendarPolicy::Utc);
+    assert_eq!(adr.len(), 2);
+    assert_eq!(
+        chart.series_entry(adr[0]).unwrap().level_tag.as_deref(),
+        Some("ADR H")
+    );
+    assert_eq!(
+        chart.series_entry(adr[1]).unwrap().level_tag.as_deref(),
+        Some("ADR L")
+    );
+
+    // 4. Customizable Sessions / Killzones: custom times + range box + IANA timezone switch.
+    let mut zones = crate::SessionZonesConfig::default_killzones();
+    zones.sessions[0].show_range_box = true;
+    zones.sessions[2].start_minute = crate::parse_hhmm("09:00").unwrap();
+    zones.sessions[2].end_minute = crate::parse_hhmm("12:00").unwrap();
+    chart.set_session_zones(zones.clone()).unwrap();
+
+    chart.time_scale.set_width(900.0);
+    chart.fit_content();
+    let frame_ny = chart.build_frame();
+    let market = chart.market_colors();
+
+    // Squeeze Momentum pane emits histogram rects, red (squeeze ON) & green (squeeze OFF) crosses,
+    // and dashed zero guide.
+    assert!(
+        frame_ny.panes[sqz_pane].main.iter().any(|p| matches!(
+            p,
+            Prim::HLine {
+                style: LineStyle::Dashed,
+                ..
+            }
+        )),
+        "Squeeze Momentum must emit dashed 0.0 guide"
+    );
+    let red_cross = frame_ny.panes[sqz_pane]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::VLine { color, .. } if *color == market.down.solid()));
+    let green_cross = frame_ny.panes[sqz_pane]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::VLine { color, .. } if *color == market.up.solid()));
+    assert!(
+        red_cross && green_cross,
+        "Squeeze Momentum must emit both red (squeeze ON) and green (squeeze OFF) zero-line crosses"
+    );
+
+    // ADR right-edge tags appear in pane 0.
+    assert!(
+        frame_ny.panes[0]
+            .main
+            .iter()
+            .any(|p| matches!(p, Prim::Text { text, .. } if text == "ADR H"))
+            && frame_ny.panes[0]
+                .main
+                .iter()
+                .any(|p| matches!(p, Prim::Text { text, .. } if text == "ADR L")),
+        "ADR Levels must emit ADR H and ADR L tags"
+    );
+
+    // Session zones emit underlay bands, High/Low range box RectFrame, and session labels.
+    let asia_border = Color::rgba(0xab, 0x47, 0xbc, 165);
+    let ny_asia_xs: Vec<i32> = frame_ny.panes[0]
+        .under
+        .iter()
+        .filter_map(|p| match p {
+            Prim::RectFrame { rect, color, .. } if *color == asia_border => Some(rect.x),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !ny_asia_xs.is_empty(),
+        "Session zone with show_range_box must emit Prim::RectFrame in pane 0 underlay"
+    );
+    assert!(
+        frame_ny.panes[0]
+            .under
+            .iter()
+            .any(|p| matches!(p, Prim::Text { text, .. } if text == "Asia")),
+        "Session zones must emit session name labels in underlay"
+    );
+
+    // Switching timezone to Asia/Kolkata shifts the session window positions on the exact same bars!
+    let mut ist_zones = zones.clone();
+    ist_zones.time_zone = "Asia/Kolkata".to_string();
+    chart.set_session_zones(ist_zones.clone()).unwrap();
+    let frame_ist = chart.build_frame();
+    let ist_asia_xs: Vec<i32> = frame_ist.panes[0]
+        .under
+        .iter()
+        .filter_map(|p| match p {
+            Prim::RectFrame { rect, color, .. } if *color == asia_border => Some(rect.x),
+            _ => None,
+        })
+        .collect();
+    assert!(!ist_asia_xs.is_empty());
+    assert_ne!(
+        ny_asia_xs, ist_asia_xs,
+        "Changing session zones timezone from America/New_York to Asia/Kolkata must shift bands"
+    );
+
+    // V3 persistence round-trip preserves custom session_zones + new P4 indicators.
+    let saved = chart.export_state_json().unwrap();
+    let mut restored = ChartEngine::new(900.0, 600.0, 1.0);
+    restored
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    restored.import_state_json(&saved).unwrap();
+    assert_eq!(restored.session_zones(), Some(&ist_zones));
+    assert_eq!(restored.indicator_bindings().len(), 3);
+}

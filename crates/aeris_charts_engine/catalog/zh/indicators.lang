@@ -65,3 +65,9 @@ output_percent_lower = 百分比下轨
 output_stoch_rsi = 随机 RSI
 output_supertrend = SuperTrend
 output_relative_volume = 相对成交量
+
+adr_levels = ADR {period}
+twap = TWAP
+squeeze_momentum = 挤压动量 {bb_period} {kc_period}
+output_momentum = 动量
+output_squeeze = 挤压

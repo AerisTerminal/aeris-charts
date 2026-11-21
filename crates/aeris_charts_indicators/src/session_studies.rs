@@ -1,5 +1,7 @@
 //! Pure session and calendar level calculations on borrowed OHLC columns.
 
+use std::collections::VecDeque;
+
 use crate::{IndicatorInput, SessionSpan, month_key};
 
 /// Calendar UTC days, or ordered disjoint host intervals (start inclusive, end exclusive).
@@ -25,6 +27,9 @@ pub enum SessionStudy {
     PreviousPeriodLevels(PreviousPeriod),
     /// Running high and low until the elapsed wall-clock duration expires, then fixed.
     OpeningRange { duration_seconds: i64 },
+    /// Average Daily Range projected levels (`session_low + ADR`, `session_high - ADR`)
+    /// from the rolling mean of the previous `period` completed sessions' ranges.
+    AdrLevels { period: usize },
 }
 
 /// Columns aligned with the borrowed input's shared OHLC/time prefix. `close` is
@@ -121,15 +126,21 @@ impl HostCursor {
     }
 }
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 struct Runtime {
     host: HostCursor,
     active_key: Option<i64>,
     aggregate: Option<Aggregate>,
     previous: Option<Aggregate>,
+    adr_ranges: VecDeque<f64>,
+    adr_sum: f64,
 }
 
 impl Runtime {
+    fn capacity_bytes(&self) -> usize {
+        self.adr_ranges.capacity() * std::mem::size_of::<f64>()
+    }
+
     fn row(
         &mut self,
         input: IndicatorInput<'_>,
@@ -163,6 +174,18 @@ impl Runtime {
                 // A wholly blank period has no levels to publish. Keep the
                 // last observed period until another contributes valid bars.
                 if let Some(aggregate) = self.aggregate.take() {
+                    if let SessionStudy::AdrLevels { period } = kind
+                        && period > 0
+                    {
+                        let range = (aggregate.high - aggregate.low).max(0.0);
+                        self.adr_ranges.push_back(range);
+                        self.adr_sum += range;
+                        while self.adr_ranges.len() > period {
+                            if let Some(old) = self.adr_ranges.pop_front() {
+                                self.adr_sum -= old;
+                            }
+                        }
+                    }
                     self.previous = Some(aggregate);
                 }
             }
@@ -205,13 +228,27 @@ impl Runtime {
                 .previous
                 .map(|value| value.levels(true))
                 .unwrap_or_default(),
+            SessionStudy::AdrLevels { period } => {
+                if period == 0 || self.adr_ranges.len() < period {
+                    return SessionStudyPoint::default();
+                }
+                let Some(current) = self.aggregate else {
+                    return SessionStudyPoint::default();
+                };
+                let adr = (self.adr_sum / period as f64).max(0.0);
+                SessionStudyPoint {
+                    high: Some(current.low + adr),
+                    low: Some(current.high - adr),
+                    close: None,
+                }
+            }
         }
     }
 }
 
 const CHECKPOINT_INTERVAL: usize = 1024;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Checkpoint {
     row: usize,
     runtime: Runtime,
@@ -252,6 +289,13 @@ impl SessionStudyState {
     pub fn capacity_bytes(&self) -> usize {
         self.outputs.capacity() * std::mem::size_of::<SessionStudyPoint>()
             + self.checkpoints.capacity() * std::mem::size_of::<Checkpoint>()
+            + self
+                .checkpoints
+                .iter()
+                .map(|entry| entry.runtime.capacity_bytes())
+                .sum::<usize>()
+            + self.tail.capacity_bytes()
+            + self.before_tail.capacity_bytes()
     }
 
     /// Replace/replay from the earliest changed source row. Input columns must
@@ -278,16 +322,16 @@ impl SessionStudyState {
         let (start, mut runtime) = if from == 0 {
             (0, Runtime::default())
         } else if from == self.outputs.len() {
-            (from, self.tail)
+            (from, self.tail.clone())
         } else if from + 1 == self.outputs.len() {
-            (from, self.before_tail)
+            (from, self.before_tail.clone())
         } else {
             let checkpoint = self.checkpoints.partition_point(|entry| entry.row <= from);
             if checkpoint == 0 {
                 (0, Runtime::default())
             } else {
-                let entry = self.checkpoints[checkpoint - 1];
-                (entry.row, entry.runtime)
+                let entry = &self.checkpoints[checkpoint - 1];
+                (entry.row, entry.runtime.clone())
             }
         };
         self.outputs.truncate(start);
@@ -303,14 +347,14 @@ impl SessionStudyState {
         }
         for row in start..n {
             if row + 1 == n {
-                self.before_tail = runtime;
+                self.before_tail = runtime.clone();
             }
             self.outputs
                 .push(runtime.row(input, source, self.kind, row));
             if (row + 1) % CHECKPOINT_INTERVAL == 0 {
                 self.checkpoints.push(Checkpoint {
                     row: row + 1,
-                    runtime,
+                    runtime: runtime.clone(),
                 });
             }
         }

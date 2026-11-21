@@ -120,6 +120,23 @@ pub struct ChartTimeZone {
     inner: Tz,
 }
 
+/// Any valid IANA timezone resolved from `chrono-tz` (supports all ~600 tzdb identifiers,
+/// including `"UTC"`, `"Etc/UTC"`, `"Asia/Astana"`, and every entry in [`TRADINGVIEW_TIME_ZONES`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IanaTimeZone(Tz);
+
+impl IanaTimeZone {
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        ChartTimeZone::parse_any_iana(value).map(Self)
+    }
+
+    #[must_use]
+    pub fn local_parts(self, utc_seconds: i64) -> Option<LocalTimeParts> {
+        ChartTimeZone::local_parts_for_tz(self.0, utc_seconds)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalTimeParts {
     pub year: i32,
@@ -186,6 +203,34 @@ impl ChartTimeZone {
             id
         };
         canonical.parse::<Tz>().ok().map(|inner| Self { id, inner })
+    }
+
+    /// Parse any valid IANA timezone identifier (including every entry in
+    /// [`TRADINGVIEW_TIME_ZONES`], `"UTC"`, `"Asia/Astana"`, and the full IANA tzdb).
+    #[must_use]
+    pub fn parse_any_iana(value: &str) -> Option<Tz> {
+        let trimmed = value.trim();
+        let canonical = match trimmed {
+            "UTC" => "Etc/UTC",
+            "Asia/Astana" => "Asia/Almaty",
+            other => other,
+        };
+        canonical.parse::<Tz>().ok()
+    }
+
+    /// Convert a UTC Unix-seconds instant into local civil time parts for any IANA `Tz`.
+    #[must_use]
+    pub fn local_parts_for_tz(tz: Tz, utc_seconds: i64) -> Option<LocalTimeParts> {
+        let local = tz.timestamp_opt(utc_seconds, 0).single()?;
+        Some(LocalTimeParts {
+            year: local.year(),
+            month: local.month(),
+            day: local.day(),
+            hour: local.hour(),
+            minute: local.minute(),
+            second: local.second(),
+            offset_seconds: local.offset().fix().local_minus_utc(),
+        })
     }
 
     #[must_use]

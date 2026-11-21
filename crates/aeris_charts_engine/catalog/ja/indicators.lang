@@ -65,3 +65,9 @@ output_percent_lower = % 下限
 output_stoch_rsi = ストキャスティクス RSI
 output_supertrend = スーパートレンド
 output_relative_volume = 相対出来高
+
+adr_levels = ADR {period}
+twap = TWAP
+squeeze_momentum = スクイーズモメンタム {bb_period} {kc_period}
+output_momentum = モメンタム
+output_squeeze = スクイーズ

@@ -50,6 +50,7 @@ fn incremental_utc_append_tip_and_checkpoint_repairs_match_full() {
         SessionStudy::OpeningRange {
             duration_seconds: 12 * 3_600,
         },
+        SessionStudy::AdrLevels { period: 3 },
     ] {
         let mut state = SessionStudyState::new(kind);
         for (previous, end) in [
@@ -147,6 +148,7 @@ fn incremental_host_cursor_replays_across_merged_spans_and_gaps() {
         SessionStudy::OpeningRange {
             duration_seconds: 7 * DAY,
         },
+        SessionStudy::AdrLevels { period: 2 },
     ] {
         let mut state = SessionStudyState::new(kind);
         for (from, end) in [(0, 1024), (1024, 2048), (2048, times.len())] {
@@ -200,6 +202,31 @@ fn utc_day_levels_and_previous_day_wait_for_next_observed_period() {
             point(12., 8., Some(10.)),
             point(17., 7., Some(15.)),
             point(17., 7., Some(15.)),
+        ]
+    );
+}
+
+#[test]
+fn adr_levels_project_rolling_average_daily_range_from_session_extremes() {
+    // Day 0 range = 12 - 8 = 4; Day 1 range = 20 - 10 = 10 -> 2-day ADR = 7.
+    // Day 2: bar 0 has high=16, low=12 -> ADR High = 12 + 7 = 19, ADR Low = 16 - 7 = 9.
+    // Day 2: bar 1 expands high=18, low=11 -> ADR High = 11 + 7 = 18, ADR Low = 18 - 7 = 11.
+    let times = [0, 86_400, 2 * 86_400, 2 * 86_400 + 3_600];
+    let highs = [12., 20., 16., 18.];
+    let lows = [8., 10., 12., 11.];
+    let closes = [10., 15., 14., 17.];
+    let bars = input(&times, &highs, &lows, &closes);
+    assert_eq!(
+        session_study(
+            bars,
+            SessionSource::Utc,
+            SessionStudy::AdrLevels { period: 2 }
+        ),
+        [
+            SessionStudyPoint::default(),
+            SessionStudyPoint::default(),
+            point(19., 9., None),
+            point(18., 11., None),
         ]
     );
 }
@@ -671,6 +698,7 @@ fn whitespace_prefixes_and_tip_corrections_recompute_without_lookahead() {
             SessionStudy::SessionLevels => assert_eq!(new[4], point(30., 7., None)),
             SessionStudy::PreviousPeriodLevels(_) => assert_eq!(new[4], full[4]),
             SessionStudy::OpeningRange { .. } => assert_eq!(new[4], point(30., 7., None)),
+            SessionStudy::AdrLevels { .. } => {}
         }
     }
 }

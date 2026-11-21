@@ -1242,6 +1242,184 @@ pub struct VwapBandsOptions {
     pub percent: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SqueezeMomentumPoint {
+    pub momentum: Option<f64>,
+    pub squeeze_on: Option<bool>,
+}
+
+/// Minimum contiguous bar count required to evaluate Squeeze Momentum at a row.
+fn squeeze_window_width(bb_period: usize, kc_period: usize) -> usize {
+    bb_period
+        .max(kc_period.saturating_mul(2).saturating_sub(1))
+        .max(kc_period.saturating_add(1))
+}
+
+#[derive(Clone, Copy)]
+struct SqueezeParams {
+    bb_period: usize,
+    bb_mult: f64,
+    kc_period: usize,
+    kc_mult: f64,
+}
+
+/// Evaluate TTM Squeeze Momentum at `row` using Bollinger Bands (population stdev) vs Keltner
+/// Channels (SMA close ± SMA true range × `kc_mult`) and OLS linear-regression momentum.
+fn squeeze_momentum_at(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    row: usize,
+    params: SqueezeParams,
+) -> (f64, u8) {
+    let SqueezeParams {
+        bb_period,
+        bb_mult,
+        kc_period,
+        kc_mult,
+    } = params;
+    let width = squeeze_window_width(bb_period, kc_period);
+    if bb_period == 0 || kc_period == 0 || row + 1 < width {
+        return (f64::NAN, 0);
+    }
+    let window_start = row + 1 - width;
+    if !(window_start..=row).all(|index| valid_bar(highs[index], lows[index], closes[index])) {
+        return (f64::NAN, 0);
+    }
+
+    // Bollinger Bands over the trailing `bb_period` closes.
+    let bb_start = row + 1 - bb_period;
+    let bb_slice = &closes[bb_start..=row];
+    let bb_mean = bb_slice.iter().sum::<f64>() / bb_period as f64;
+    let bb_var = bb_slice
+        .iter()
+        .map(|value| (value - bb_mean).powi(2))
+        .sum::<f64>()
+        / bb_period as f64;
+    let bb_spread = bb_var.sqrt() * bb_mult.max(0.0);
+    let upper_bb = bb_mean + bb_spread;
+    let lower_bb = bb_mean - bb_spread;
+
+    // Keltner Channel over the trailing `kc_period` bars using SMA(close) and SMA(TR).
+    let kc_start = row + 1 - kc_period;
+    let kc_mean = closes[kc_start..=row].iter().sum::<f64>() / kc_period as f64;
+    let mut tr_sum = 0.0;
+    for index in kc_start..=row {
+        let prev_close = closes[index - 1];
+        let tr = (highs[index] - lows[index])
+            .max((highs[index] - prev_close).abs())
+            .max((lows[index] - prev_close).abs());
+        tr_sum += tr;
+    }
+    let kc_spread = (tr_sum / kc_period as f64) * kc_mult.max(0.0);
+    let upper_kc = kc_mean + kc_spread;
+    let lower_kc = kc_mean - kc_spread;
+    let squeeze_on = lower_bb > lower_kc && upper_bb < upper_kc;
+
+    // Momentum = OLS linear regression endpoint over the trailing `kc_period` delta values, where
+    // delta[j] = close[j] - avg(avg(highest(high, kc), lowest(low, kc)), sma(close, kc)).
+    let m = kc_period;
+    let m_f = m as f64;
+    let first_j = row + 1 - m;
+    let mut close_sum = closes[first_j + 1 - m..=first_j].iter().sum::<f64>();
+    let mut sum_y = 0.0;
+    let mut cov_xy = 0.0;
+    let mean_x = (m - 1) as f64 * 0.5;
+    for offset in 0..m {
+        let j = first_j + offset;
+        let sub_start = j + 1 - m;
+        if offset > 0 {
+            close_sum += closes[j] - closes[sub_start - 1];
+        }
+        let mut hh = f64::NEG_INFINITY;
+        let mut ll = f64::INFINITY;
+        for index in sub_start..=j {
+            hh = hh.max(highs[index]);
+            ll = ll.min(lows[index]);
+        }
+        let mid_hl = (hh + ll) * 0.5;
+        let sma_c = close_sum / m_f;
+        let delta = closes[j] - (mid_hl + sma_c) * 0.5;
+        sum_y += delta;
+        cov_xy += (offset as f64 - mean_x) * delta;
+    }
+    let momentum = if m == 1 {
+        sum_y
+    } else {
+        let mean_y = sum_y / m_f;
+        let var_x = m_f * (m_f * m_f - 1.0) / 12.0;
+        mean_y + (cov_xy / var_x) * mean_x
+    };
+    let flag = if squeeze_on { 1 } else { 2 };
+    (momentum, flag)
+}
+
+/// Squeeze Momentum (TTM Squeeze): linear-regression momentum histogram paired with a Bollinger
+/// inside Keltner volatility-compression state.
+pub fn squeeze_momentum(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    bb_period: usize,
+    bb_mult: f64,
+    kc_period: usize,
+    kc_mult: f64,
+) -> Vec<SqueezeMomentumPoint> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![SqueezeMomentumPoint::default(); n];
+    if bb_period == 0 || kc_period == 0 {
+        return out;
+    }
+    let width = squeeze_window_width(bb_period, kc_period);
+    let params = SqueezeParams {
+        bb_period,
+        bb_mult,
+        kc_period,
+        kc_mult,
+    };
+    for (row, slot) in out.iter_mut().enumerate().skip(width.saturating_sub(1)) {
+        let (momentum, flag) = squeeze_momentum_at(highs, lows, closes, row, params);
+        *slot = SqueezeMomentumPoint {
+            momentum: Some(momentum),
+            squeeze_on: match flag {
+                1 => Some(true),
+                2 => Some(false),
+                _ => None,
+            },
+        };
+    }
+    out
+}
+
+/// Time-Weighted Average Price (equal-weighted mean of typical price `(H+L+C)/3`), resetting at
+/// each UTC session, week, or month boundary.
+pub fn twap(
+    times: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    reset: VwapReset,
+) -> Vec<Option<f64>> {
+    let n = times
+        .len()
+        .min(highs.len())
+        .min(lows.len())
+        .min(closes.len());
+    let mut out = vec![None; n];
+    let mut state = TwapState::default();
+    for row in 0..n {
+        out[row] = twap_step(
+            &mut state,
+            times[row],
+            highs[row],
+            lows[row],
+            closes[row],
+            reset,
+        );
+    }
+    out
+}
+
 /// Session/weekly/monthly VWAP with population standard-deviation and percentage bands.
 pub fn vwap_bands(
     times: &[i64],
@@ -2167,6 +2345,40 @@ struct VwapBandsState {
     initialized: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TwapState {
+    period: i64,
+    sum_tp: f64,
+    count: u64,
+    initialized: bool,
+}
+
+fn twap_step(
+    state: &mut TwapState,
+    time_unix_seconds: i64,
+    high: f64,
+    low: f64,
+    close: f64,
+    reset: VwapReset,
+) -> Option<f64> {
+    if !valid_bar(high, low, close) {
+        return None;
+    }
+    let period = vwap_period_key(time_unix_seconds, reset);
+    if !state.initialized || state.period != period {
+        *state = TwapState {
+            period,
+            sum_tp: 0.0,
+            count: 0,
+            initialized: true,
+        };
+    }
+    let typical = (high + low + close) / 3.0;
+    state.sum_tp += typical;
+    state.count += 1;
+    Some(state.sum_tp / state.count as f64)
+}
+
 #[derive(Clone, Copy)]
 struct VwapBandsSample {
     time_unix_seconds: i64,
@@ -2665,6 +2877,19 @@ enum IncrementalKind {
         percent: f64,
         state: RecursiveHistory<VwapBandsState>,
     },
+    SqueezeMomentum {
+        bb_period: usize,
+        bb_mult: f64,
+        kc_period: usize,
+        kc_mult: f64,
+        /// Per-row squeeze flag aligned with `outputs[1]`: `1` = squeeze ON (red), `2` = OFF
+        /// (green), `0` = blank/gap.
+        squeeze_flags: Vec<u8>,
+    },
+    Twap {
+        reset: VwapReset,
+        state: RecursiveHistory<TwapState>,
+    },
 }
 
 /// Incremental formula state. Output columns are short-lived transfer buffers: a full rebuild
@@ -2912,6 +3137,45 @@ impl IncrementalState {
         )
     }
 
+    pub fn squeeze_momentum(
+        bb_period: usize,
+        bb_mult: f64,
+        kc_period: usize,
+        kc_mult: f64,
+    ) -> Self {
+        Self::new(
+            IncrementalKind::SqueezeMomentum {
+                bb_period,
+                bb_mult,
+                kc_period,
+                kc_mult,
+                squeeze_flags: Vec::new(),
+            },
+            2,
+        )
+    }
+
+    pub fn twap(reset: VwapReset) -> Self {
+        Self::new(
+            IncrementalKind::Twap {
+                reset,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
+    /// Squeeze-state flags (`1` = squeeze ON, `2` = squeeze OFF, `0` = blank) aligned to
+    /// output 1 of [`IncrementalState::squeeze_momentum`].
+    pub fn squeeze_flags(&self) -> Option<&[u8]> {
+        match &self.kind {
+            IncrementalKind::SqueezeMomentum { squeeze_flags, .. } => {
+                Some(squeeze_flags.as_slice())
+            }
+            _ => None,
+        }
+    }
+
     pub fn output_count(&self) -> usize {
         self.output_count
     }
@@ -2947,6 +3211,12 @@ impl IncrementalState {
                 output.shrink_to(MAX_RETAINED_ROWS);
             }
         }
+        if let IncrementalKind::SqueezeMomentum { squeeze_flags, .. } = &mut self.kind {
+            squeeze_flags.clear();
+            if squeeze_flags.capacity() > MAX_RETAINED_ROWS {
+                squeeze_flags.shrink_to(MAX_RETAINED_ROWS);
+            }
+        }
     }
 
     pub fn runtime_bytes(&self) -> usize {
@@ -2965,6 +3235,7 @@ impl IncrementalState {
             IncrementalKind::SuperTrend { state, .. } => state.bytes(),
             IncrementalKind::Ichimoku { .. } => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
+            IncrementalKind::Twap { state, .. } => state.bytes(),
             IncrementalKind::Obv { state } => state.bytes(),
             IncrementalKind::RelativeVolume { .. } => 0,
             IncrementalKind::Cmf { .. } => 0,
@@ -2979,7 +3250,8 @@ impl IncrementalState {
             | IncrementalKind::Bollinger { .. }
             | IncrementalKind::Vwma { .. }
             | IncrementalKind::Cci { .. }
-            | IncrementalKind::Donchian { .. } => 0,
+            | IncrementalKind::Donchian { .. }
+            | IncrementalKind::SqueezeMomentum { .. } => 0,
             IncrementalKind::StochasticRsi { state, .. } => {
                 state.bytes_with(|saved| saved.window.capacity() * std::mem::size_of::<f64>())
             }
@@ -2988,10 +3260,15 @@ impl IncrementalState {
     }
 
     pub fn transfer_capacity_bytes(&self) -> usize {
-        self.outputs[..self.output_count]
+        let output_bytes: usize = self.outputs[..self.output_count]
             .iter()
             .map(|output| output.capacity() * std::mem::size_of::<f64>())
-            .sum()
+            .sum();
+        let extra = match &self.kind {
+            IncrementalKind::SqueezeMomentum { squeeze_flags, .. } => squeeze_flags.capacity(),
+            _ => 0,
+        };
+        output_bytes + extra
     }
 
     pub fn last_work_rows(&self) -> usize {
@@ -3686,6 +3963,61 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
+            IncrementalKind::SqueezeMomentum {
+                bb_period,
+                bb_mult,
+                kc_period,
+                kc_mult,
+                squeeze_flags,
+            } => {
+                let start = self.output_from[0];
+                let width = squeeze_window_width(*bb_period, *kc_period);
+                self.last_work_rows = window_work_rows(n, start, width);
+                squeeze_flags.clear();
+                let rows = n.saturating_sub(start);
+                if squeeze_flags.capacity() < rows {
+                    squeeze_flags.reserve(rows);
+                }
+                let params = SqueezeParams {
+                    bb_period: *bb_period,
+                    bb_mult: *bb_mult,
+                    kc_period: *kc_period,
+                    kc_mult: *kc_mult,
+                };
+                for row in start..n {
+                    let (momentum, flag) =
+                        squeeze_momentum_at(input.high, input.low, input.close, row, params);
+                    self.outputs[0].push(momentum);
+                    self.outputs[1].push(if flag != 0 { 0.0 } else { f64::NAN });
+                    squeeze_flags.push(flag);
+                }
+            }
+            IncrementalKind::Twap { reset, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = twap_step(
+                        &mut accumulator,
+                        input.times[row],
+                        input.high[row],
+                        input.low[row],
+                        input.close[row],
+                        *reset,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.unwrap_or(f64::NAN));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
         }
     }
 }
@@ -3773,7 +4105,16 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
         ],
         IncrementalKind::Volume { period, .. } => [0, period.saturating_sub(1), 0, 0, 0],
+        IncrementalKind::SqueezeMomentum {
+            bb_period,
+            kc_period,
+            ..
+        } => {
+            let start = squeeze_window_width(*bb_period, *kc_period).saturating_sub(1);
+            [start, start, 0, 0, 0]
+        }
         IncrementalKind::Vwap { .. }
+        | IncrementalKind::Twap { .. }
         | IncrementalKind::Obv { .. }
         | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
     }
@@ -4782,6 +5123,65 @@ mod tests {
         assert!((values[3].unwrap() - (100.0 - 100.0 / (1.0 + 36.0 / 44.0))).abs() < 1e-12);
     }
 
+    #[test]
+    fn twap_averages_typical_price_and_resets_per_period() {
+        let times = [0, 3_600, 7_200, 86_400, 90_000];
+        let highs = [12.0, 22.0, 32.0, 42.0, 52.0];
+        let lows = [8.0, 18.0, 28.0, 38.0, 48.0];
+        let closes = [10.0, 20.0, 30.0, 40.0, 50.0];
+        let values = twap(&times, &highs, &lows, &closes, VwapReset::Session);
+        assert_eq!(
+            values,
+            vec![Some(10.0), Some(15.0), Some(20.0), Some(40.0), Some(45.0)]
+        );
+    }
+
+    #[test]
+    fn squeeze_momentum_detects_compression_and_directional_momentum() {
+        // 30 bars: first 18 tight range (high volatility earlier would keep KC wider than BB ->
+        // squeeze ON), then breakout upward -> positive momentum and squeeze OFF.
+        let mut highs = Vec::with_capacity(30);
+        let mut lows = Vec::with_capacity(30);
+        let mut closes = Vec::with_capacity(30);
+        for i in 0..30 {
+            if i < 18 {
+                let c = 100.0 + if i % 2 == 0 { 0.05 } else { -0.05 };
+                // Wide wicks inflate KC true range while closes stay super tight (BB narrow).
+                highs.push(c + 3.0);
+                lows.push(c - 3.0);
+                closes.push(c);
+            } else {
+                let step = (i - 17) as f64;
+                let c = 100.0 + step * 4.0;
+                highs.push(c + 0.5);
+                lows.push(c - 0.5);
+                closes.push(c);
+            }
+        }
+        let points = squeeze_momentum(&highs, &lows, &closes, 5, 2.0, 5, 1.5);
+        assert!(points[..8].iter().all(|p| p.momentum.is_none()));
+        assert_eq!(points[15].squeeze_on, Some(true));
+        assert_eq!(points[29].squeeze_on, Some(false));
+        assert!(points[29].momentum.unwrap() > 0.0);
+
+        let times: Vec<i64> = (0..30).map(|i| i * 60).collect();
+        let mut state = IncrementalState::squeeze_momentum(5, 2.0, 5, 1.5);
+        state.rebuild_from(
+            IndicatorInput {
+                times: &times,
+                open: &closes,
+                high: &highs,
+                low: &lows,
+                close: &closes,
+                volume: &[],
+            },
+            0,
+        );
+        let flags = state.squeeze_flags().expect("squeeze flags");
+        assert_eq!(flags[15 - state.output_from(1)], 1);
+        assert_eq!(flags[29 - state.output_from(1)], 2);
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TestKind {
         Sma,
@@ -4803,6 +5203,8 @@ mod tests {
         Atr,
         Vwap,
         VwapBands,
+        Twap,
+        SqueezeMomentum,
         Obv,
         RelativeVolume,
         Cmf,
@@ -4923,6 +5325,23 @@ mod tests {
                     points.iter().map(|point| point.percent_lower).collect(),
                 ]
             }
+            TestKind::Twap => vec![twap(
+                input.times,
+                input.high,
+                input.low,
+                input.close,
+                VwapReset::Session,
+            )],
+            TestKind::SqueezeMomentum => {
+                let points = squeeze_momentum(input.high, input.low, input.close, 5, 2.0, 5, 1.5);
+                vec![
+                    points.iter().map(|point| point.momentum).collect(),
+                    points
+                        .iter()
+                        .map(|point| point.squeeze_on.map(|_| 0.0))
+                        .collect(),
+                ]
+            }
             TestKind::Obv => vec![obv(input.close, input.volume)],
             // Volume-only formulas receive source-aligned volume with whitespace masked.
             TestKind::RelativeVolume => vec![relative_volume(
@@ -5017,7 +5436,8 @@ mod tests {
                     | TestKind::SuperTrend
                     | TestKind::Keltner
                     | TestKind::Vwap
-                    | TestKind::VwapBands => range && input.close[row].is_finite(),
+                    | TestKind::VwapBands
+                    | TestKind::Twap => range && input.close[row].is_finite(),
                     _ => input.close[row].is_finite(),
                 }
             })
@@ -5116,6 +5536,7 @@ mod tests {
                 TestKind::VwapBands,
                 IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
             ),
+            (TestKind::Twap, IncrementalState::twap(VwapReset::Session)),
         ]);
     }
 
@@ -5534,7 +5955,7 @@ mod tests {
         // A compact (gap rows deleted) run is independent of whitespace handling.
         // Fixed seeds and small bounded series keep the complete catalog inexpensive.
         let kinds = all_test_states();
-        assert_eq!(kinds.len(), 24, "update the oracle when a kind is added");
+        assert_eq!(kinds.len(), 26, "update the oracle when a kind is added");
         for seed in [0x4b53_5421_u64, 0x8acd_2026] {
             let mut random = seed;
             let mut next = || {
@@ -5731,6 +6152,7 @@ mod tests {
             }
             TestKind::RelativeVolume => period + 1,
             TestKind::Stochastic if output == 1 => period + second - 1,
+            TestKind::SqueezeMomentum => squeeze_window_width(period, second),
             TestKind::PivotPoints => return None,
             TestKind::Sma
             | TestKind::Vwma
@@ -5878,6 +6300,19 @@ mod tests {
             }
             TestKind::Cmf => single!(cmf(h, l, c, v, p), IncrementalState::cmf(p)),
             TestKind::Mfi => single!(mfi(h, l, c, v, p), IncrementalState::mfi(p)),
+            TestKind::SqueezeMomentum => {
+                let points = squeeze_momentum(h, l, c, p, 2.0, q, 1.5);
+                (
+                    vec![
+                        points.iter().map(|point| point.momentum).collect(),
+                        points
+                            .iter()
+                            .map(|point| point.squeeze_on.map(|_| 0.0))
+                            .collect(),
+                    ],
+                    IncrementalState::squeeze_momentum(p, 2.0, q, 1.5),
+                )
+            }
             _ => {
                 let state = all_test_states()
                     .into_iter()
@@ -6307,6 +6742,11 @@ mod tests {
             (
                 TestKind::VwapBands,
                 IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
+            ),
+            (TestKind::Twap, IncrementalState::twap(VwapReset::Session)),
+            (
+                TestKind::SqueezeMomentum,
+                IncrementalState::squeeze_momentum(5, 2.0, 5, 1.5),
             ),
             (TestKind::Obv, IncrementalState::obv()),
             (
