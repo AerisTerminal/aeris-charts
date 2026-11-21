@@ -1231,7 +1231,7 @@ fn group_builder_batches_candle_blocks_and_schedules_markers_after_candles() {
     let mut chart = fixture();
     let frame = chart.build_frame();
     let mut saw_tri_over_quad = false;
-    for pane in &frame.panes {
+    for (pane_index, pane) in frame.panes.iter().enumerate() {
         let mut group = DrawGroup::default();
         prims_to_group(
             &pane.under,
@@ -1256,12 +1256,19 @@ fn group_builder_batches_candle_blocks_and_schedules_markers_after_candles() {
         );
         assert_runs_tile_buffers(&group);
 
-        // Perf contract: the candle/bar/histogram blocks (hundreds of quads) stay a handful
-        // of draw calls — run-length batching must not degrade into per-prim draws.
-        assert!(
-            group.quads.len() > 100,
-            "fixture should exercise a realistic quad count"
-        );
+        // Perf contract: the candle/bar/histogram blocks on the main pane (hundreds of quads)
+        // stay a handful of draw calls — run-length batching must not degrade into per-prim draws.
+        if pane_index == 0 {
+            assert!(
+                group.quads.len() > 100,
+                "fixture should exercise a realistic quad count on the candle pane"
+            );
+        } else {
+            assert!(
+                !group.quads.is_empty(),
+                "oscillator pane should emit reference/channel quads"
+            );
+        }
         let quad_runs = group
             .runs
             .iter()

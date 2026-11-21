@@ -23,24 +23,26 @@
   --surface-backdrop: #e5e5e5;
 
   /* Borders */
-  --border: #0a0a0a33;
-  --border-secondary: #0a0a0a33;
-  --border-subtle: #0a0a0a12;
+  --border: #cecece;
+  --border-secondary: #cecece;
+  --border-subtle: #eeeeee;
   --border-width: 1px;
 
   /* Text */
   --text-default: #0a0a0a;
-  --text-secondary: #0a0a0a94;
-  --text-muted: #0a0a0a40;
+  --text-secondary: #717171;
+  --text-muted: #c2c2c2;
   --text-positive: #0b9981;
   --text-negative: #f23645;
   --text-danger: var(--danger);
   --text-warning: #ff6900;
 
   /* Interaction states — hover / selected fill, pressed fill, disabled fill. */
-  --hover-bg: #0a0a0a14;
-  --active-bg: #0a0a0a1f;
-  --disabled-bg: #0a0a0a0d;
+  --hover-bg: #ececec;
+  --active-bg: #e1e1e1;
+  --hover-bg-secondary: #e7e7e7;
+  --active-bg-secondary: #dcdcdc;
+  --disabled-bg: #f3f3f3;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
@@ -72,11 +74,11 @@
   --warning-foreground: #ffffff;
 
   /* Buttons — neutral default button */
-  --button-fill: #0a0a0af2;
-  --button-fill-hover: #0a0a0ada;
-  --button-fill-active: #0a0a0ac2;
-  --button-fill-foreground: #fafafaf2;
-  --button-fill-subtle: #0a0a0a14;
+  --button-fill: #161616;
+  --button-fill-hover: #2e2e2e;
+  --button-fill-active: #454545;
+  --button-fill-foreground: #eeeeee;
+  --button-fill-subtle: #ececec;
 
   /* Trade — dedicated buy / sell buttons. Hover and press darken the fill; no shadows. */
   --buy: var(--primary);
@@ -114,7 +116,7 @@
   /* Radius */
   --radius-small: 4px;
   --radius-compact: 6px;
-  --radius-default: 8px;
+  --radius-default: 6px;
   --radius-medium: 14px;
   --radius-large: 999px;
 
@@ -132,28 +134,30 @@
 
   /* Surfaces */
   --surface: #000000;
-  --surface-secondary: #171717;
+  --surface-secondary: #232324;
   --surface-backdrop: #262626;
 
   /* Borders */
-  --border: #2c2c2c;
+  --border: #3c3c3c;
   --border-secondary: #404040;
-  --border-subtle: #fafafa12;
+  --border-subtle: #121212;
   --border-width: 1px;
 
   /* Text */
   --text-default: #c1c1c1;
-  --text-secondary: #fafafa8c;
-  --text-muted: #fafafa59;
+  --text-secondary: #898989;
+  --text-muted: #575757;
   --text-positive: #0b9981;
   --text-negative: #f23645;
   --text-danger: #ffa2a2;
   --text-warning: #ffb86a;
 
   /* Interaction states */
-  --hover-bg: #fafafa1f;
-  --active-bg: #fafafa26;
-  --disabled-bg: #fafafa0d;
+  --hover-bg: #1e1e1e;
+  --active-bg: #252525;
+  --hover-bg-secondary: #3d3d3e;
+  --active-bg-secondary: #434344;
+  --disabled-bg: #0d0d0d;
 
   /* Status — gains / losses, success / failure. Shared with the main platform. */
   --positive: #089981;
@@ -185,11 +189,11 @@
   --warning-foreground: #ffffff;
 
   /* Buttons — neutral default button */
-  --button-fill: #fafafad9;
-  --button-fill-hover: #fafafac3;
-  --button-fill-active: #fafafaad;
-  --button-fill-foreground: #0a0a0ad9;
-  --button-fill-subtle: #fafafa14;
+  --button-fill: #d5d5d5;
+  --button-fill-hover: #bfbfbf;
+  --button-fill-active: #aaaaaa;
+  --button-fill-foreground: #282828;
+  --button-fill-subtle: #141414;
 
   /* Trade — dedicated buy / sell buttons. Hover and press brighten the fill; no shadows. */
   --buy: var(--primary);

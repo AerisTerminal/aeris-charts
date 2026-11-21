@@ -166,9 +166,8 @@ fn main() {
         output.push_str(&format!("pub const {name}_ALPHA: u8 = 0x{alpha:02x};\n"));
     }
     // Crosshair labels are generated aliases so every backend and host stays attached to the
-    // surface tokens: both themes use the dark secondary surface, which also keeps light labels
-    // legible over the white chart.
-    for (prefix, surface) in [("LIGHT", "DARK_MUTED"), ("DARK", "DARK_MUTED")] {
+    // surface tokens: dark uses `--surface-secondary` and light uses pure black (`#000000`).
+    for (prefix, surface) in [("LIGHT", "DARK_SURFACE"), ("DARK", "DARK_MUTED")] {
         output.push_str(&format!(
             "pub const {prefix}_CROSSHAIR_LABEL_CSS: &str = {surface}_CSS;\n"
         ));

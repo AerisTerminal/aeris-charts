@@ -434,12 +434,12 @@ test("transparent rounded tooltip keeps its outlined interior clear", async ({ b
     }
     expect(top, `${geometry.backend} must paint the tooltip border`).not.toBe(null);
     // Rows 0-1 are the 1px border at DPR 2. Everything from row 2 down to the text must be the
-    // plain #171717 surface: there is no inner highlight edge, and a border that floods the
+    // plain #232324 surface: there is no inner highlight edge, and a border that floods the
     // interior would lighten it.
     for (let dy = 2; dy < 10; dy += 1) {
       for (let dx = 8; dx < 48; dx += 1) {
         const [r, g, b] = pixel(top.x + dx, top.y + dy);
-        expect(Math.max(Math.abs(r - 23), Math.abs(g - 23), Math.abs(b - 23)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
+        expect(Math.max(Math.abs(r - 35), Math.abs(g - 35), Math.abs(b - 36)), `${geometry.backend} outline leaked into tooltip at ${dx},${dy}`).toBeLessThanOrEqual(3);
       }
     }
   }

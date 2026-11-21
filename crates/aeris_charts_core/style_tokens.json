@@ -4,7 +4,7 @@
   "radius": {
     "small": 4,
     "compact": 6,
-    "default": 8,
+    "default": 6,
     "medium": 14,
     "large": 999
   },
@@ -36,10 +36,10 @@
     "book_ask": "#ff2f5e",
     "book_fill_alpha": 102,
     "book_fill_text": "#000000",
-    "popover_border": "#cacaca",
-    "popover_muted_foreground": "#6f6f6f",
-    "crosshair_line": "#0a0a0a",
-    "crosshair_line_alpha": 38
+    "popover_border": "#cecece",
+    "popover_muted_foreground": "#717171",
+    "crosshair_line": "#cecece",
+    "crosshair_line_alpha": 255
   },
   "dark": {
     "surface": "#000000",
@@ -49,12 +49,12 @@
     "primary_hover": "#0058b1",
     "danger": "#f7525f",
     "warning": "#ff6900",
-    "muted": "#171717",
+    "muted": "#232324",
     "raised": "#141414",
     "muted_foreground": "#898989",
     "accent": "#1e1e1e",
     "active": "#252525",
-    "border": "#2c2c2c",
+    "border": "#3c3c3c",
     "muted_border": "#404040",
     "ring": "#303030",
     "bullish": "#0b9981",
@@ -70,9 +70,9 @@
     "book_fill_alpha": 89,
     "book_fill_text": "#ffffff",
     "popover_border": "#404040",
-    "popover_muted_foreground": "#949494",
-    "crosshair_line": "#fafafa",
-    "crosshair_line_alpha": 45
+    "popover_muted_foreground": "#8a8a8a",
+    "crosshair_line": "#3c3c3c",
+    "crosshair_line_alpha": 255
   },
   "market": {
     "up": "#0b9981",

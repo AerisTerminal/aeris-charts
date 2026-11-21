@@ -298,9 +298,9 @@ mode, and apply `theme_options("dark")` to the chart. Host chrome and chart labe
 system UI font stack. Chart font remains an explicit layout option so a host webfont cannot shift
 financial labels until the host sets it.
 Chart defaults use the same semantic roles directly: foreground for axes and value text. Crosshair
-labels sit on the dark secondary surface in both themes. Crosshair lines are dashed by default and keep each theme's `crosshair_line` alpha: translucent
-`#fafafa2d` in the dark theme (which lands on the dark `--border` `#2c2c2c` over the black dark surface) and
-`#0a0a0a26` in the light theme.
+labels sit on `--surface-secondary` (`#232324`) in the dark theme and pure black (`#000000`) in the
+light theme. Crosshair lines are dashed by default and use each theme's `--border` token (`#3c3c3c`
+in dark, `#cecece` in light).
 
 ## Repository layout
 

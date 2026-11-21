@@ -92,15 +92,15 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(light.css).toEqual({
     surface: "#ffffff",
     text_default: "#0a0a0a",
-    text_secondary: "#0a0a0a94",
-    text_muted: "#0a0a0a40",
+    text_secondary: "#717171",
+    text_muted: "#c2c2c2",
     primary: "#006edd",
     primary_hover_matches: true,
     primary_disabled_matches: true,
     primary_disabled_foreground_matches: true,
     primary_subtle_matches: true,
     primary_foreground: "#ffffff",
-    button_fill: "#0a0a0af2",
+    button_fill: "#161616",
   });
   expect(light.palette).toMatchObject({
     background: "#ffffff",
@@ -118,8 +118,8 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     text: "#0a0a0a",
     muted_text: "#717171",
     border: "#cecece",
-    crosshair: "#0a0a0a26",
-    crosshair_label: "#171717",
+    crosshair: "#cecece",
+    crosshair_label: "#000000",
     bullish: "#0b9981",
     bearish: "#f23645",
   });
@@ -128,15 +128,15 @@ test("design tokens and chart theme projections match the supplied light/dark pa
   expect(dark.css).toEqual({
     surface: "#000000",
     text_default: "#c1c1c1",
-    text_secondary: "#fafafa8c",
-    text_muted: "#fafafa59",
+    text_secondary: "#898989",
+    text_muted: "#575757",
     primary: "#006edd",
     primary_hover_matches: true,
     primary_disabled_matches: true,
     primary_disabled_foreground_matches: true,
     primary_subtle_matches: true,
     primary_foreground: "#ffffff",
-    button_fill: "#fafafad9",
+    button_fill: "#d5d5d5",
   });
   expect(dark.palette).toMatchObject({
     background: "#000000",
@@ -145,7 +145,7 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     primary: "#006edd",
     primary_foreground: "#ffffff",
     primary_hover: "#0058b1",
-    border: "#2c2c2c",
+    border: "#3c3c3c",
     bullish: "#0b9981",
     bearish: "#f23645",
   });
@@ -153,9 +153,9 @@ test("design tokens and chart theme projections match the supplied light/dark pa
     background: "#000000",
     text: "#c1c1c1",
     muted_text: "#898989",
-    border: "#2c2c2c",
-    crosshair: "#fafafa2d",
-    crosshair_label: "#171717",
+    border: "#3c3c3c",
+    crosshair: "#3c3c3c",
+    crosshair_label: "#232324",
     bullish: "#0b9981",
     bearish: "#f23645",
   });

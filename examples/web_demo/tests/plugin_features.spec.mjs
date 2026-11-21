@@ -709,10 +709,10 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     { label: "Low", value: target.expected.low },
     { label: "Volume", value: target.expected.volume },
   ]);
-  // The platform tooltip: dark `--surface-secondary` (#171717) under dark default text (#c1c1c1).
-  expect(content.background).toBe("rgb(23, 23, 23)");
+  // The platform tooltip: dark `--surface-secondary` (#232324) under dark default text (#c1c1c1).
+  expect(content.background).toBe("rgb(35, 35, 36)");
   expect(content.color).toBe("rgb(193, 193, 193)");
-  expect(content.borderRadius).toBe("8px");
+  expect(content.borderRadius).toBe("6px");
   expect(content.shadow).toBe("none");
   // `top_offset` places the box 20 px below the pane top, snapped to the device-pixel grid so
   // its border and text render crisp on every side (a half-pixel position blurs them).
@@ -933,9 +933,9 @@ test("brushable area keeps ordinary Area data/axes while pane drag is reserved f
   }));
   // The custom background is dark, so the tooltip uses the dark platform tooltip tokens rather
   // than the host's layout text and scale-border colors.
-  expect(count_near(tooltip_clip, [23, 23, 23], 1), "tooltip surface").toBeGreaterThan(100);
+  expect(count_near(tooltip_clip, [35, 35, 36], 1), "tooltip surface").toBeGreaterThan(100);
   expect(count_near(tooltip_clip, [193, 193, 193], 12), "tooltip default text").toBeGreaterThan(5);
-  expect(count_near(tooltip_clip, [148, 148, 148], 12), "tooltip secondary text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [138, 138, 138], 12), "tooltip secondary text").toBeGreaterThan(5);
   expect(count_near(tooltip_clip, [64, 64, 64], 0), "tooltip border").toBeGreaterThan(10);
   expect(count_near(tooltip_clip, [241, 226, 211], 12), "no layout text color").toBe(0);
   expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".aeris_charts-delta-tooltip").length)).toBe(0);

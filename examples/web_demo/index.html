@@ -2166,8 +2166,8 @@ function sync_active_toolbar() {
 
 // Grid controls drive both families (vert + horz) at once; the engine stores them separately,
 // so a package consumer can style each family independently. Style set: 0 solid, 1 dotted
-// (renders the reference's dense dots), 2 dashed (renders large) — the reference's short dash
-// pattern is intentionally absent.
+// (renders sparse), 2 dashed (renders large) — the reference's normal dot/dash patterns are
+// intentionally absent.
 function apply_grid_style() {
   const color = document.getElementById("grid_color").value;
   const style = Number(document.getElementById("grid_style").value);

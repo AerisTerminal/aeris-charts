@@ -26,14 +26,14 @@ pub enum LineStyle {
 
 impl LineStyle {
     /// Dash pattern in bitmap px for a given line width:
-    /// `Dotted` is the reference's dense dotted `[w, w]` and `Dashed` its LARGE dashed one —
-    /// the reference's short `[2w, 2w]` dash and `SparseDotted` variant do not exist in this
-    /// engine.
+    /// `Dotted` is the SPARSE pattern and `Dashed` the LARGE one — the reference's normal
+    /// dotted `[w, w]` and dashed `[2w, 2w]` patterns do not exist in this engine (dots too
+    /// close / dashes too short), and neither do its `LargeDashed`/`SparseDotted` variants.
     pub fn dash_pattern(&self, line_width: f32) -> Vec<f32> {
         let w = line_width;
         match self {
             LineStyle::Solid => vec![],
-            LineStyle::Dotted => vec![w, w],
+            LineStyle::Dotted => vec![w, 4.0 * w],
             LineStyle::Dashed => vec![6.0 * w, 6.0 * w],
         }
     }
@@ -416,9 +416,9 @@ mod tests {
     }
 
     #[test]
-    fn dotted_lines_use_one_width_dots_and_gaps() {
-        assert_eq!(LineStyle::Dotted.dash_pattern(1.0), vec![1.0, 1.0]);
-        assert_eq!(LineStyle::Dotted.dash_pattern(2.0), vec![2.0, 2.0]);
+    fn dotted_lines_use_sparse_dot_and_gap_pattern() {
+        assert_eq!(LineStyle::Dotted.dash_pattern(1.0), vec![1.0, 4.0]);
+        assert_eq!(LineStyle::Dotted.dash_pattern(2.0), vec![2.0, 8.0]);
         assert_eq!(LineStyle::Dashed.dash_pattern(1.0), vec![6.0, 6.0]);
         assert!(LineStyle::Solid.dash_pattern(1.0).is_empty());
     }

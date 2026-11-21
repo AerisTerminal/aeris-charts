@@ -26,37 +26,35 @@ mod tests {
         assert_eq!(BORDER_WIDTH, 1.0);
         assert_eq!(RADIUS_SMALL, 4.0);
         assert_eq!(RADIUS_COMPACT, 6.0);
-        assert_eq!(RADIUS_DEFAULT, 8.0);
+        assert_eq!(RADIUS_DEFAULT, 6.0);
         assert_eq!(RADIUS_MEDIUM, 14.0);
         assert_eq!(RADIUS_LARGE, 999.0);
         assert_eq!(LIGHT_SURFACE_CSS, "#ffffff");
         assert_eq!(LIGHT_FOREGROUND_CSS, "#0a0a0a");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
         assert_eq!(LIGHT_RAISED_CSS, "#f0f0f0");
-        // `--text-secondary` (#0a0a0a94) over white.
+        // `--text-secondary` is opaque in the light theme.
         assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#717171");
         assert_eq!(LIGHT_PRIMARY_CSS, "#006edd");
         assert_eq!(LIGHT_PRIMARY_FOREGROUND_CSS, "#ffffff");
         assert_eq!(LIGHT_PRIMARY_HOVER_CSS, "#338be4");
         assert_eq!(LIGHT_DANGER_CSS, "#f7525f");
-        // `--hover-bg` (#0a0a0a14) and `--active-bg` (#0a0a0a1f) over white.
+        // `--hover-bg` and `--active-bg` are opaque in both themes.
         assert_eq!(LIGHT_ACCENT_CSS, "#ececec");
         assert_eq!(LIGHT_ACTIVE_CSS, "#e1e1e1");
-        // `--hover-bg` (#fafafa1f) and `--active-bg` (#fafafa26) over the dark surface.
         assert_eq!(DARK_ACCENT_CSS, "#1e1e1e");
         assert_eq!(DARK_ACTIVE_CSS, "#252525");
-        // `--border` (#0a0a0a33) over white.
+        // `--border` and `--border-secondary` are opaque in both themes.
         assert_eq!(LIGHT_BORDER_CSS, "#cecece");
-        // `--border-secondary` (#0a0a0a33) over white.
         assert_eq!(LIGHT_MUTED_BORDER_CSS, LIGHT_BORDER_CSS);
         assert_eq!(LIGHT_RING_CSS, "#e0e0e0");
         assert_eq!(DARK_SURFACE_CSS, "#000000");
         assert_eq!(DARK_FOREGROUND_CSS, "#c1c1c1");
         // `--surface-secondary` is opaque in the dark theme.
-        assert_eq!(DARK_MUTED_CSS, "#171717");
-        // The raised tile tone (#fafafa14) over the dark surface.
+        assert_eq!(DARK_MUTED_CSS, "#232324");
+        // The raised tile tone over the dark surface.
         assert_eq!(DARK_RAISED_CSS, "#141414");
-        // `--text-secondary` (#fafafa8c) over the dark surface.
+        // `--text-secondary` is opaque in the dark theme.
         assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#898989");
         assert_eq!(DARK_PRIMARY_CSS, "#006edd");
         assert_eq!(DARK_PRIMARY_FOREGROUND_CSS, "#ffffff");
@@ -68,22 +66,21 @@ mod tests {
         assert_eq!(DARK_WARNING_CSS, LIGHT_WARNING_CSS);
         assert_eq!(DEFAULT_WARNING_RGB, (0xff, 0x69, 0x00));
         // The dark `--border` and `--border-secondary` are opaque.
-        assert_eq!(DARK_BORDER_CSS, "#2c2c2c");
+        assert_eq!(DARK_BORDER_CSS, "#3c3c3c");
         assert_eq!(DARK_MUTED_BORDER_CSS, "#404040");
         // Axis tick text is the primary text token in both themes.
         assert_eq!(LIGHT_AXIS_TEXT_CSS, LIGHT_FOREGROUND_CSS);
         assert_eq!(DARK_AXIS_TEXT_CSS, DARK_FOREGROUND_CSS);
-        // The light crosshair keeps its translucent line, alpha kept like the dark line.
-        assert_eq!(LIGHT_CROSSHAIR_LINE_CSS, "#0a0a0a26");
-        assert_eq!(LIGHT_CROSSHAIR_LINE_RGB, (0x0a, 0x0a, 0x0a));
-        assert_eq!(LIGHT_CROSSHAIR_LINE_ALPHA, 0x26);
+        // Crosshair lines follow each theme's `--border` token; crosshair labels use pure black
+        // in light mode and `--surface-secondary` in dark mode.
+        assert_eq!(LIGHT_CROSSHAIR_LINE_CSS, LIGHT_BORDER_CSS);
+        assert_eq!(LIGHT_CROSSHAIR_LINE_RGB, LIGHT_BORDER_RGB);
+        assert_eq!(LIGHT_CROSSHAIR_LINE_ALPHA, 0xff);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_CROSSHAIR_LINE_CSS);
-        assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
-        // Translucent so the line stays see-through over series geometry, at the alpha that lands
-        // on the dark `--border` tone (#2c2c2c) over the dark surface.
-        assert_eq!(DARK_CROSSHAIR_LINE_CSS, "#fafafa2d");
-        assert_eq!(DARK_CROSSHAIR_LINE_RGB, (0xfa, 0xfa, 0xfa));
-        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0x2d);
+        assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, DARK_SURFACE_CSS);
+        assert_eq!(DARK_CROSSHAIR_LINE_CSS, DARK_BORDER_CSS);
+        assert_eq!(DARK_CROSSHAIR_LINE_RGB, DARK_BORDER_RGB);
+        assert_eq!(DARK_CROSSHAIR_LINE_ALPHA, 0xff);
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(DEFAULT_CROSSHAIR_CSS, DARK_CROSSHAIR_LINE_CSS);
@@ -212,9 +209,9 @@ mod tests {
                     surface,
                     TEXT,
                 ));
-                pairs.push(("secondary text", muted, surface, TEXT));
                 pairs.push(("focus and selection ring", primary, surface, NON_TEXT));
             }
+            pairs.push(("secondary text on chart surface", muted, surfaces[0], TEXT));
             pairs.push(("tooltip secondary text", popover_muted, popover, TEXT));
             pairs.push(("primary-foreground text", on_primary, primary, TEXT));
             for (role, fg, bg, threshold) in pairs {
@@ -228,17 +225,14 @@ mod tests {
     }
 
     /// Tooltip tokens match the platform tooltip: the `--surface-secondary` fill (the `muted`
-    /// token), a `--border-secondary` edge, `--text-default` text and `--text-secondary`
-    /// secondary text, each translucent token composited over that fill.
+    /// token), a `--border-secondary` edge, `--text-default` text and secondary tooltip text.
     #[test]
     fn popover_tokens_project_the_platform_tooltip() {
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");
-        // `--border-secondary` (#0a0a0a33) and `--text-secondary` (#0a0a0a94) over #fafafa.
-        assert_eq!(LIGHT_POPOVER_BORDER_CSS, "#cacaca");
-        assert_eq!(LIGHT_POPOVER_MUTED_FOREGROUND_CSS, "#6f6f6f");
-        assert_eq!(DARK_MUTED_CSS, "#171717");
-        // The dark `--border-secondary` is opaque; `--text-secondary` (#fafafa8c) over #171717.
+        assert_eq!(LIGHT_POPOVER_BORDER_CSS, LIGHT_MUTED_BORDER_CSS);
+        assert_eq!(LIGHT_POPOVER_MUTED_FOREGROUND_CSS, "#717171");
+        assert_eq!(DARK_MUTED_CSS, "#232324");
         assert_eq!(DARK_POPOVER_BORDER_CSS, DARK_MUTED_BORDER_CSS);
-        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#949494");
+        assert_eq!(DARK_POPOVER_MUTED_FOREGROUND_CSS, "#8a8a8a");
     }
 }

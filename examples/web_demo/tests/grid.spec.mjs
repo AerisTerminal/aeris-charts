@@ -160,11 +160,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(0, 0, 0)",
     chart: "#000000",
     axis_text: "#c1c1c1",
-    axis_border: "#2c2c2c",
-    grid: "#2c2c2c",
-    border_control: "#2c2c2c",
-    crosshair_control: "#fafafa",
-    crosshair_label_control: "#171717",
+    axis_border: "#3c3c3c",
+    grid: "#3c3c3c",
+    border_control: "#3c3c3c",
+    crosshair_control: "#3c3c3c",
+    crosshair_label_control: "#232324",
     bullish: "#0b9981",
     bearish: "#f23645",
   });
@@ -182,8 +182,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     axis_border: "#cecece",
     grid: "#cecece",
     border_control: "#cecece",
-    crosshair_control: "#0a0a0a",
-    crosshair_label_control: "#171717",
+    crosshair_control: "#cecece",
+    crosshair_label_control: "#000000",
     bullish: "#0b9981",
     bearish: "#f23645",
   });
@@ -223,12 +223,12 @@ test("portable design tokens and disabled controls match the brand contract", as
   const dark = await tokens();
   expect(Object.values(dark).every(Boolean)).toBe(true);
   expect(dark).toMatchObject({
-    surface: "#000000", "surface-secondary": "#171717", "surface-backdrop": "#262626", border: "#2c2c2c",
-    "border-secondary": "#404040", "hover-bg": "#fafafa1f", "active-bg": "#fafafa26",
-    "border-width": "1px", "text-default": "#c1c1c1", "text-secondary": "#fafafa8c", "text-muted": "#fafafa59",
+    surface: "#000000", "surface-secondary": "#232324", "surface-backdrop": "#262626", border: "#3c3c3c",
+    "border-secondary": "#404040", "hover-bg": "#1e1e1e", "active-bg": "#252525",
+    "border-width": "1px", "text-default": "#c1c1c1", "text-secondary": "#898989", "text-muted": "#575757",
     "sell-active": "#fb838c", "book-fill-text": "#ffffff", "warning-hover": "#ff7b1f", "warning-foreground": "#ffffff", "text-positive": "#0b9981", "text-negative": "#f23645", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#0b9981", bearish: "#f23645",
-    "button-fill": "#fafafad9", "radius-compact": "6px", "radius-medium": "14px",
+    "button-fill": "#d5d5d5", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#193c37", "negative-subtle": "#532b2e", "danger-hover": "#f96a75",
     "danger-disabled": "#6b3135", "danger-disabled-foreground": "#d0646c",
   });
@@ -238,13 +238,13 @@ test("portable design tokens and disabled controls match the brand contract", as
   const light = await tokens();
   expect(Object.values(light).every(Boolean)).toBe(true);
   expect(light).toMatchObject({
-    surface: "#ffffff", "surface-backdrop": "#e5e5e5", border: "#0a0a0a33", "text-default": "#0a0a0a", "text-secondary": "#0a0a0a94",
-    "text-muted": "#0a0a0a40", "text-positive": "#0b9981", "text-negative": "#f23645", primary: "#006edd",
+    surface: "#ffffff", "surface-backdrop": "#e5e5e5", border: "#cecece", "text-default": "#0a0a0a", "text-secondary": "#717171",
+    "text-muted": "#c2c2c2", "text-positive": "#0b9981", "text-negative": "#f23645", primary: "#006edd",
     "primary-hover": "color-mix(in srgb, #006edd 80%, transparent)", positive: "#089981", negative: "#f7525f", bullish: "#0b9981", bearish: "#f23645",
-    "button-fill": "#0a0a0af2", "radius-compact": "6px", "radius-medium": "14px",
+    "button-fill": "#161616", "radius-compact": "6px", "radius-medium": "14px",
     "positive-subtle": "#dcf5f0", "negative-subtle": "#ffe2e2", "danger-hover": "#e5404d",
     "border-width": "1px", "warning-hover": "#e05c00", "warning-foreground": "#ffffff",
-    "border-secondary": "#0a0a0a33", "hover-bg": "#0a0a0a14", "active-bg": "#0a0a0a1f",
+    "border-secondary": "#cecece", "hover-bg": "#ececec", "active-bg": "#e1e1e1",
     "sell-active": "#c9303c", "book-fill-text": "#000000",
   });
   const stale = await page.evaluate((names) => {
