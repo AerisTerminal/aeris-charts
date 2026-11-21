@@ -2502,6 +2502,7 @@ class series_impl implements series_api {
       source: this.chart.series_handle(raw.source),
       source_input: raw.source_input,
       volume_source: raw.volume_source === null ? null : this.chart.series_handle(raw.volume_source),
+      mtf_interval_seconds: raw.mtf_interval_seconds ?? null,
       style: raw.style,
       output_name: raw.output_name,
       output_label: raw.output_label,
@@ -7020,6 +7021,31 @@ export class chart_impl implements chart_api {
   }
   supported_time_zones(): string[] {
     return JSON.parse(this.wasm.supported_time_zones_json()) as string[];
+  }
+  add_mtf_indicator(
+    source: series_api,
+    interval_seconds: number,
+    kind: indicator_kind,
+    period = 14,
+    deviation = 2,
+    volume_source?: series_api | null,
+    options?: Partial<series_options>,
+  ): series_api[] {
+    if (!Number.isInteger(interval_seconds) || interval_seconds < 1 || interval_seconds > 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "MTF interval_seconds must be a positive u32 integer");
+    }
+    const ids = this.wasm.add_mtf_indicator(
+      source.id,
+      interval_seconds,
+      kind,
+      Math.max(1, Math.floor(period)),
+      deviation,
+      volume_source?.id ?? -1,
+    );
+    if (ids.length === 0) {
+      throw new AerisChartsError("invalid_options", `invalid MTF indicator configuration for ${kind}`);
+    }
+    return Array.from(ids, (id) => this.indicator_series(id, options));
   }
 
   register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void {

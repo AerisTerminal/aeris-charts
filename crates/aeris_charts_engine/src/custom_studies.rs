@@ -506,6 +506,7 @@ impl ChartEngine {
             kind,
             outputs: ids.clone(),
             volume_source: volume,
+            mtf_interval_seconds: None,
             annotations: None,
             structure: None,
             session: None,

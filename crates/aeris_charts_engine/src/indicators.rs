@@ -363,6 +363,8 @@ pub struct IndicatorBindingInfo {
     pub source_input: IndicatorInputSource,
     /// Parallel volume column source for VWAP; `None` means unit weights.
     pub volume_source: Option<SeriesId>,
+    /// Higher-timeframe bucket interval in seconds when bound as a non-repainting MTF indicator.
+    pub mtf_interval_seconds: Option<u32>,
     /// Output identities in the indicator's documented order.
     pub outputs: Vec<SeriesId>,
     /// Per-output presentation snapshots in the same order as `outputs`.
@@ -376,6 +378,8 @@ pub(crate) struct IndicatorBinding {
     pub(crate) outputs: Vec<SeriesId>,
     /// Parallel volume column source (VWAP); `None` = unit weights.
     pub(crate) volume_source: Option<SeriesId>,
+    /// Optional higher-timeframe resampling interval in seconds (non-repainting stepped projection).
+    pub(crate) mtf_interval_seconds: Option<u32>,
     /// Structural-study geometry is binding-owned, never a synthetic output series.
     pub(crate) annotations: Option<StudyAnnotations>,
     /// Incremental OHLC scanner for structure studies; its history is not persisted.
@@ -619,6 +623,8 @@ pub struct IndicatorInfo {
     pub source: SeriesId,
     pub source_input: IndicatorInputSource,
     pub volume_source: Option<SeriesId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtf_interval_seconds: Option<u32>,
     /// Current engine-owned presentation state for this output.
     pub style: IndicatorOutputStyle,
     pub output_name: Cow<'static, str>,
@@ -1356,6 +1362,7 @@ impl ChartEngine {
                 source: binding.source,
                 source_input: binding.source_input,
                 volume_source: binding.volume_source,
+                mtf_interval_seconds: binding.mtf_interval_seconds,
                 outputs: binding.outputs.clone(),
                 styles: binding
                     .outputs
@@ -1978,6 +1985,7 @@ impl ChartEngine {
                         source: binding.source,
                         source_input: binding.source_input,
                         volume_source: binding.volume_source,
+                        mtf_interval_seconds: binding.mtf_interval_seconds,
                         style: self
                             .series_entry(binding.outputs[output_index])
                             .map(indicator_output_style)
@@ -2261,12 +2269,74 @@ impl ChartEngine {
         kind: IndicatorKind,
         volume_source: Option<SeriesId>,
     ) -> Vec<SeriesId> {
+        self.add_indicator_kind_internal(source, source_input, kind, volume_source, None)
+    }
+
+    /// Add a Multi-Timeframe (MTF) indicator computed on UTC-aligned `interval_seconds` resampled
+    /// bars and projected onto the source timeline as a non-repainting stepped series (completed
+    /// higher-timeframe bars only — strictly zero lookahead).
+    pub fn add_mtf_indicator(
+        &mut self,
+        source: SeriesId,
+        interval_seconds: u32,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+    ) -> Vec<SeriesId> {
+        self.add_mtf_indicator_with_input(
+            source,
+            IndicatorInputSource::Close,
+            interval_seconds,
+            kind,
+            volume_source,
+        )
+    }
+
+    /// Add a Multi-Timeframe (MTF) indicator with an explicit scalar source input.
+    pub fn add_mtf_indicator_with_input(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        interval_seconds: u32,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+    ) -> Vec<SeriesId> {
+        if interval_seconds == 0
+            || matches!(
+                kind,
+                IndicatorKind::Custom { .. } | IndicatorKind::SwingPoints { .. }
+            )
+        {
+            return Vec::new();
+        }
+        self.add_indicator_kind_internal(
+            source,
+            source_input,
+            kind,
+            volume_source,
+            Some(interval_seconds),
+        )
+    }
+
+    fn add_indicator_kind_internal(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+        mtf_interval_seconds: Option<u32>,
+    ) -> Vec<SeriesId> {
         // OHLC structural rules consume the complete candle. A scalar source override
         // must not be accepted and then silently ignored by their scanner.
         if structure_output_count(&kind).is_some() && source_input != IndicatorInputSource::Close {
             return Vec::new();
         }
-        let ids = self.add_indicator(source, source_input, kind.clone(), volume_source);
+        let ids = self.add_indicator(
+            source,
+            source_input,
+            kind.clone(),
+            volume_source,
+            mtf_interval_seconds,
+        );
         match kind {
             IndicatorKind::Macd { .. } => {
                 if let Some(&histogram) = ids.get(2) {
@@ -2825,6 +2895,7 @@ impl ChartEngine {
         source_input: IndicatorInputSource,
         kind: IndicatorKind,
         volume_source: Option<SeriesId>,
+        mtf_interval_seconds: Option<u32>,
     ) -> Vec<SeriesId> {
         if !structure_kind_is_valid(&kind)
             || self.series_entry(source).is_none()
@@ -2967,7 +3038,18 @@ impl ChartEngine {
                 s.title_visible = self.indicator_chrome.name_labels_visible;
                 s.last_value_visible = self.indicator_chrome.value_labels_visible;
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
-                s.title = indicator_output_title(&kind, output_index, self.language);
+                s.title = if let Some(interval) = mtf_interval_seconds {
+                    format!(
+                        "{} ({})",
+                        indicator_output_title(&kind, output_index, self.language),
+                        format_mtf_badge(interval)
+                    )
+                } else {
+                    indicator_output_title(&kind, output_index, self.language)
+                };
+                if mtf_interval_seconds.is_some() {
+                    s.line_type = LineType::WithSteps;
+                }
                 s.line_width = Some(indicator_default_line_width(&kind, output_index));
                 s.line_style = indicator_default_line_style(&kind, output_index);
                 let (tone, default_color) =
@@ -3049,6 +3131,7 @@ impl ChartEngine {
             kind,
             outputs: ids.clone(),
             volume_source,
+            mtf_interval_seconds,
             annotations: None,
             structure,
             session,
@@ -3378,6 +3461,259 @@ impl ChartEngine {
         changes
     }
 
+    fn rebuild_mtf_indicator(
+        &mut self,
+        index: usize,
+        interval_seconds: u32,
+        outputs: [Option<SeriesId>; aeris_charts_indicators::MAX_OUTPUTS],
+    ) -> [Option<(SeriesId, IndicatorChange)>; aeris_charts_indicators::MAX_OUTPUTS] {
+        let mut changes = [None; aeris_charts_indicators::MAX_OUTPUTS];
+        let source = self.indicators[index].source;
+        let source_input = self.indicators[index].source_input;
+        let volume_source = self.indicators[index].volume_source;
+        let kind = self.indicators[index].kind.clone();
+        let calendar = self.indicators[index].calendar;
+        let source_generation = self.data.series_generation(source).unwrap_or(0);
+        let volume_generation = volume_source.and_then(|id| self.data.series_generation(id));
+        let Some((ltf_times, ltf_values)) = self.data.series_data(source) else {
+            return changes;
+        };
+        let ltf_len = ltf_times.len();
+        let interval = i64::from(interval_seconds.max(1));
+        let missing_volume = if matches!(
+            &kind,
+            IndicatorKind::Obv
+                | IndicatorKind::RelativeVolume { .. }
+                | IndicatorKind::Cmf { .. }
+                | IndicatorKind::Mfi { .. }
+                | IndicatorKind::Volume { .. }
+        ) {
+            0.0
+        } else {
+            1.0
+        };
+        let volume_data = volume_source
+            .and_then(|id| self.data.series_data(id))
+            .map(|(t, v)| (t, v[3]));
+
+        // 1. Aggregate LTF rows into UTC-aligned HTF buckets.
+        let mut htf_times: Vec<i64> = Vec::new();
+        let mut htf_ends: Vec<i64> = Vec::new();
+        let mut htf_open: Vec<f64> = Vec::new();
+        let mut htf_high: Vec<f64> = Vec::new();
+        let mut htf_low: Vec<f64> = Vec::new();
+        let mut htf_close: Vec<f64> = Vec::new();
+        let mut htf_vol: Vec<f64> = Vec::new();
+        let mut vol_row = 0usize;
+        for row in 0..ltf_len {
+            let t = ltf_times[row];
+            let (o, h, l, c) = (
+                ltf_values[0][row],
+                ltf_values[1][row],
+                ltf_values[2][row],
+                ltf_values[3][row],
+            );
+            if !o.is_finite() || !h.is_finite() || !l.is_finite() || !c.is_finite() {
+                continue;
+            }
+            let bar_vol = if let Some((vt, vv)) = volume_data {
+                while vol_row < vt.len() && vt[vol_row] < t {
+                    vol_row += 1;
+                }
+                if vt.get(vol_row) == Some(&t) {
+                    vv.get(vol_row)
+                        .copied()
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(missing_volume)
+                        .max(0.0)
+                } else {
+                    missing_volume
+                }
+            } else {
+                missing_volume
+            };
+            let bucket_start = t.div_euclid(interval) * interval;
+            if htf_times.last() == Some(&bucket_start) {
+                let last = htf_times.len() - 1;
+                htf_high[last] = htf_high[last].max(h);
+                htf_low[last] = htf_low[last].min(l);
+                htf_close[last] = c;
+                htf_vol[last] += bar_vol;
+            } else {
+                htf_times.push(bucket_start);
+                htf_ends.push(bucket_start.saturating_add(interval));
+                htf_open.push(o);
+                htf_high.push(h);
+                htf_low.push(l);
+                htf_close.push(c);
+                htf_vol.push(bar_vol);
+            }
+        }
+        let htf_len = htf_times.len();
+
+        // 2. Compute HTF indicator columns.
+        let htf_selected: Vec<f64> = match derived_price(source_input) {
+            Some(f) => (0..htf_len)
+                .map(|i| f([htf_open[i], htf_high[i], htf_low[i], htf_close[i]]))
+                .collect(),
+            None => match source_input {
+                IndicatorInputSource::Open => htf_open.clone(),
+                IndicatorInputSource::High => htf_high.clone(),
+                IndicatorInputSource::Low => htf_low.clone(),
+                _ => htf_close.clone(),
+            },
+        };
+        let htf_input = aeris_charts_indicators::IndicatorInput {
+            times: &htf_times,
+            open: &htf_open,
+            high: &htf_high,
+            low: &htf_low,
+            close: &htf_selected,
+            volume: if volume_source.is_some() {
+                &htf_vol
+            } else {
+                &[]
+            },
+        };
+        let output_count = outputs.iter().filter(|o| o.is_some()).count();
+        let mut htf_cols: Vec<Vec<f64>> = vec![vec![f64::NAN; htf_len]; output_count];
+        let mut htf_squeeze_flags: Option<Vec<u8>> = None;
+        if let Some(study) = session_study_kind(&kind) {
+            let points =
+                aeris_charts_indicators::session_study(htf_input, SessionSource::Utc, study);
+            for (i, p) in points.iter().enumerate() {
+                if output_count > 0 {
+                    htf_cols[0][i] = p.high.unwrap_or(f64::NAN);
+                }
+                if output_count > 1 {
+                    htf_cols[1][i] = p.low.unwrap_or(f64::NAN);
+                }
+                if output_count > 2 {
+                    htf_cols[2][i] = if matches!(study, SessionStudy::OpeningRange { .. }) {
+                        p.high
+                            .zip(p.low)
+                            .map_or(f64::NAN, |(high, low)| (high + low) * 0.5)
+                    } else {
+                        p.close.unwrap_or(f64::NAN)
+                    };
+                }
+            }
+        } else {
+            let mut state = incremental_state(&kind);
+            state.rebuild_from(htf_input, 0);
+            for (slot, col) in htf_cols.iter_mut().enumerate() {
+                let start = state.output_from(slot);
+                for (offset, &value) in state.output(slot).iter().enumerate() {
+                    if let Some(dst) = col.get_mut(start + offset) {
+                        *dst = value;
+                    }
+                }
+            }
+            if let Some(flags) = state.squeeze_flags() {
+                let mut aligned = vec![0u8; htf_len];
+                let start = state.output_from(1);
+                for (offset, &flag) in flags.iter().enumerate() {
+                    if let Some(dst) = aligned.get_mut(start + offset) {
+                        *dst = flag;
+                    }
+                }
+                htf_squeeze_flags = Some(aligned);
+            }
+        }
+
+        // 3. Project ONLY completed HTF bars onto LTF rows (zero lookahead / non-repainting).
+        let mut completed_for_ltf: Vec<Option<usize>> = Vec::with_capacity(ltf_len);
+        let mut htf_cursor = 0usize;
+        for &t in ltf_times {
+            while htf_cursor < htf_ends.len() && htf_ends[htf_cursor] <= t {
+                htf_cursor += 1;
+            }
+            completed_for_ltf.push(htf_cursor.checked_sub(1));
+        }
+        {
+            let binding = &mut self.indicators[index];
+            update_segment_break_times(
+                &mut binding.segment_break_times,
+                &binding.kind,
+                calendar,
+                &self.study_calendar_spans,
+                ltf_times,
+                0,
+                true,
+            );
+            binding.source_generation = source_generation;
+            binding.volume_generation = volume_generation;
+        }
+
+        let market = self.market_colors();
+        let ltf_closes = self
+            .data
+            .series_data(source)
+            .map(|(_, v)| v[3].to_vec())
+            .unwrap_or_default();
+        for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
+            let previous_generation = self.data.series_generation(output).unwrap_or(0);
+            let mut projected: Vec<f64> = completed_for_ltf
+                .iter()
+                .map(|completed| {
+                    completed
+                        .and_then(|c| htf_cols[output_index].get(c).copied())
+                        .unwrap_or(f64::NAN)
+                })
+                .collect();
+            let first = projected
+                .iter()
+                .position(|value| !value.is_nan())
+                .unwrap_or(projected.len());
+            projected.drain(..first);
+            let colors = if (output_index == 2 && matches!(kind, IndicatorKind::Macd { .. }))
+                || (output_index == 0 && matches!(kind, IndicatorKind::SqueezeMomentum { .. }))
+            {
+                Some(momentum_histogram_colors(&projected, market))
+            } else if output_index == 1 && matches!(kind, IndicatorKind::SqueezeMomentum { .. }) {
+                htf_squeeze_flags.as_ref().map(|flags| {
+                    let projected_flags: Vec<u8> = completed_for_ltf[first..]
+                        .iter()
+                        .map(|completed| completed.and_then(|c| flags.get(c).copied()).unwrap_or(0))
+                        .collect();
+                    squeeze_flag_colors(&projected_flags, market)
+                })
+            } else if output_index == 0 && matches!(kind, IndicatorKind::RelativeVolume { .. }) {
+                Some(rvol_histogram_colors(&projected, market))
+            } else if output_index == 0
+                && matches!(
+                    kind,
+                    IndicatorKind::SuperTrend { .. } | IndicatorKind::ParabolicSar
+                )
+            {
+                Some(directional_vs_close_colors(
+                    &projected,
+                    ltf_closes.get(first..).unwrap_or(&[]),
+                    market,
+                ))
+            } else {
+                None
+            };
+            self.data
+                .set_single_data_aligned(output, source, first, projected);
+            if let Some(colors) = colors {
+                self.data
+                    .set_point_colors(output, [Some(colors), None, None]);
+            }
+            if self.data.series_generation(output).unwrap_or(0) != previous_generation {
+                changes[output_index] = Some((
+                    output,
+                    IndicatorChange {
+                        from: 0,
+                        previous_generation,
+                        full_replace: true,
+                    },
+                ));
+            }
+        }
+        changes
+    }
+
     pub(crate) fn rebuild_indicator(
         &mut self,
         index: usize,
@@ -3395,6 +3731,9 @@ impl ChartEngine {
         let source_input = self.indicators[index].source_input;
         let volume_source = self.indicators[index].volume_source;
         let source_generation = self.data.series_generation(source).unwrap_or(0);
+        if let Some(interval_seconds) = self.indicators[index].mtf_interval_seconds {
+            return self.rebuild_mtf_indicator(index, interval_seconds, outputs);
+        }
         if self.indicators[index].structure.is_some() {
             return self.rebuild_structure_indicator(index, from, full_replace, outputs);
         }
@@ -3972,6 +4311,21 @@ fn momentum_histogram_color(
         market.down.solid()
     };
     color.0
+}
+
+/// Compact human-readable timeframe badge for MTF indicator titles (e.g. `15m`, `1H`, `4H`, `1D`).
+pub(crate) fn format_mtf_badge(interval_seconds: u32) -> String {
+    if interval_seconds >= 604_800 && interval_seconds.is_multiple_of(604_800) {
+        format!("{}W", interval_seconds / 604_800)
+    } else if interval_seconds >= 86_400 && interval_seconds.is_multiple_of(86_400) {
+        format!("{}D", interval_seconds / 86_400)
+    } else if interval_seconds >= 3_600 && interval_seconds.is_multiple_of(3_600) {
+        format!("{}H", interval_seconds / 3_600)
+    } else if interval_seconds >= 60 && interval_seconds.is_multiple_of(60) {
+        format!("{}m", interval_seconds / 60)
+    } else {
+        format!("{interval_seconds}s")
+    }
 }
 
 /// An indicator parameter in its compact title form (`2`, `1.5`).

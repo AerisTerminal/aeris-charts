@@ -2805,6 +2805,25 @@ impl AerisChart {
         self.inner.borrow_mut().clear_session_zones()
     }
 
+    pub fn add_mtf_indicator(
+        &mut self,
+        source_id: u32,
+        interval_seconds: u32,
+        kind: &str,
+        period: u32,
+        deviation: f64,
+        volume_source: i32,
+    ) -> Vec<u32> {
+        self.inner.borrow_mut().add_mtf_indicator(
+            source_id,
+            interval_seconds,
+            kind,
+            period,
+            deviation,
+            volume_source,
+        )
+    }
+
     pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
         self.inner
             .borrow_mut()

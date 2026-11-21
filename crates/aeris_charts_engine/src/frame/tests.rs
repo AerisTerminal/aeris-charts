@@ -24596,3 +24596,97 @@ fn p4_squeeze_momentum_twap_adr_levels_and_custom_session_zones() {
     assert_eq!(restored.session_zones(), Some(&ist_zones));
     assert_eq!(restored.indicator_bindings().len(), 3);
 }
+
+#[test]
+fn p5_mtf_indicator_is_non_repainting_stepped_and_persists_in_v3() {
+    let mut chart = ChartEngine::new(900.0, 500.0, 1.0);
+    // 16 x 15-minute bars spanning 4 full 1-hour buckets (00:00..04:00 UTC).
+    // Bucket 0 [00:00..01:00): closes [10, 12, 11, 20] -> 1H close = 20
+    // Bucket 1 [01:00..02:00): closes [22, 24, 23, 40] -> 1H close = 40 -> SMA(2) = 30
+    // Bucket 2 [02:00..03:00): closes [42, 44, 43, 60] -> 1H close = 60 -> SMA(2) = 50
+    // Bucket 3 [03:00..04:00): closes [62, 64, 63, 80] -> forming bucket (end = 04:00)
+    let start = 1_768_435_200.0; // 2026-01-15 00:00:00 UTC
+    let closes = [
+        10.0, 12.0, 11.0, 20.0, // hour 0
+        22.0, 24.0, 23.0, 40.0, // hour 1
+        42.0, 44.0, 43.0, 60.0, // hour 2
+        62.0, 64.0, 63.0, 80.0, // hour 3 (forming)
+    ];
+    let times: Vec<f64> = (0..closes.len())
+        .map(|i| start + i as f64 * 900.0)
+        .collect();
+    let highs: Vec<f64> = closes.iter().map(|c| c + 1.0).collect();
+    let lows: Vec<f64> = closes.iter().map(|c| c - 1.0).collect();
+    chart
+        .set_series_data(0, &times, &closes, &highs, &lows, &closes)
+        .unwrap();
+
+    let mtf = chart.add_mtf_indicator(0, 3600, crate::IndicatorKind::Sma { period: 2 }, None);
+    assert_eq!(mtf.len(), 1);
+    let mtf_id = mtf[0];
+    let entry = chart.series_entry(mtf_id).unwrap();
+    assert_eq!(entry.line_type, LineType::WithSteps);
+    assert_eq!(entry.title, "SMA 2 (1H)");
+    assert_eq!(
+        chart.indicator_info(mtf_id).unwrap().mtf_interval_seconds,
+        Some(3600)
+    );
+
+    // Non-repainting zero-lookahead check:
+    // - Hours 0 & 1 have <2 completed HTF bars, so first emitted MTF bar is at 02:00 (row 8).
+    // - Across 02:00..02:45 (rows 8..11), value is flat 30.0 (from completed hours 0 & 1).
+    // - Across 03:00..03:45 (rows 12..15), value is flat 50.0 (from completed hours 1 & 2).
+    // - Forming hour 3's close (80.0) NEVER leaks into rows 12..15!
+    let (out_times, out_vals) = chart.data.series_data(mtf_id).unwrap();
+    assert_eq!(out_times.len(), 8);
+    assert_eq!(out_times[0], start as i64 + 8 * 900);
+    assert_eq!(&out_vals[3][0..4], &[30.0, 30.0, 30.0, 30.0]);
+    assert_eq!(&out_vals[3][4..8], &[50.0, 50.0, 50.0, 50.0]);
+
+    // Updating the live forming bar (row 15, inside hour 3) MUST NOT repaint any existing bar!
+    assert!(chart.update_series_bar(0, times[15], [500.0, 505.0, 495.0, 500.0]));
+    let (_, after_tick) = chart.data.series_data(mtf_id).unwrap();
+    assert_eq!(
+        &after_tick[3][0..8],
+        &[30.0, 30.0, 30.0, 30.0, 50.0, 50.0, 50.0, 50.0]
+    );
+
+    // Appending 04:00 completes hour 3 (close 500.0), so SMA(2) of [60, 500] = 280.0 appears ONLY at 04:00!
+    assert!(chart.update_series_bar(0, start + 16.0 * 900.0, [500.0, 505.0, 495.0, 500.0]));
+    let (_, after_close) = chart.data.series_data(mtf_id).unwrap();
+    assert_eq!(after_close[3].len(), 9);
+    assert_eq!(&after_close[3][4..8], &[50.0, 50.0, 50.0, 50.0]);
+    assert_eq!(after_close[3][8], 280.0);
+
+    // V3 persistence round-trip preserves MTF interval and exact non-repainting values.
+    let saved = chart.export_state_json().unwrap();
+    let mut restored = ChartEngine::new(900.0, 500.0, 1.0);
+    let mut all_times = times.clone();
+    all_times.push(start + 16.0 * 900.0);
+    let mut all_closes = closes.to_vec();
+    all_closes[15] = 500.0;
+    all_closes.push(500.0);
+    let all_highs: Vec<f64> = all_closes.iter().map(|c| c + 1.0).collect();
+    let all_lows: Vec<f64> = all_closes.iter().map(|c| c - 1.0).collect();
+    restored
+        .set_series_data(
+            0,
+            &all_times,
+            &all_closes,
+            &all_highs,
+            &all_lows,
+            &all_closes,
+        )
+        .unwrap();
+    restored.import_state_json(&saved).unwrap();
+    let restored_mtf = restored.indicator_bindings()[0].outputs[0];
+    assert_eq!(
+        restored
+            .indicator_info(restored_mtf)
+            .unwrap()
+            .mtf_interval_seconds,
+        Some(3600)
+    );
+    let (_, restored_vals) = restored.data.series_data(restored_mtf).unwrap();
+    assert_eq!(restored_vals[3], after_close[3]);
+}

@@ -2043,6 +2043,8 @@ export interface indicator_info {
   source_input: indicator_input_source;
   /** VWAP's bound volume series, otherwise `null`. */
   volume_source: series_api | null;
+  /** Higher-timeframe bucket interval in seconds for non-repainting MTF indicators, otherwise `null`/omitted. */
+  mtf_interval_seconds?: number | null;
   /** Current engine-owned presentation state for this output. */
   style: indicator_output_style;
   /** Stable display name for this output, preserving binding output order. */
@@ -4865,6 +4867,16 @@ export interface chart_api {
   clear_session_zones(): boolean;
   /** Built-in TradingView-parity IANA timezone identifiers (any valid IANA timezone is also accepted by `set_session_zones`). */
   supported_time_zones(): string[];
+  /** Add a Multi-Timeframe (MTF) indicator computed on UTC-aligned `interval_seconds` bars and projected as non-repainting steps (zero lookahead). */
+  add_mtf_indicator(
+    source: series_api,
+    interval_seconds: number,
+    kind: indicator_kind,
+    period?: number,
+    deviation?: number,
+    volume_source?: series_api | null,
+    options?: Partial<series_options>,
+  ): series_api[];
   /** Add an SMA using an explicit OHLC/aggregate input from the source series. */
   add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */

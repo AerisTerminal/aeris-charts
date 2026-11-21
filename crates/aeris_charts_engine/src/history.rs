@@ -74,6 +74,7 @@ pub(crate) struct IndicatorSnapshot {
     source: SeriesId,
     source_input: IndicatorInputSource,
     volume_source: Option<SeriesId>,
+    mtf_interval_seconds: Option<u32>,
     styles: Vec<IndicatorOutputStyle>,
     pane: IndicatorPane,
     /// Index and stretch of the pane a separate-pane binding drew in, so it returns to the same
@@ -549,6 +550,7 @@ impl ChartEngine {
             source: binding.source,
             source_input: binding.source_input,
             volume_source: binding.volume_source,
+            mtf_interval_seconds: binding.mtf_interval_seconds,
             styles,
             pane,
             pane_slot,
@@ -673,6 +675,14 @@ impl ChartEngine {
                 &snapshot.dedicated_outputs,
             )
             .ok()?
+        } else if let Some(interval) = snapshot.mtf_interval_seconds {
+            self.add_mtf_indicator_with_input(
+                snapshot.source,
+                snapshot.source_input,
+                interval,
+                snapshot.kind.clone(),
+                snapshot.volume_source,
+            )
         } else {
             self.add_indicator_kind_with_input(
                 snapshot.source,

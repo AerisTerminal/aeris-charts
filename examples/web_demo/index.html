@@ -136,6 +136,13 @@
   #inspector .group[data-panel-hidden] { display: none !important; }
   #inspector .tool-category { flex-basis: 100%; margin-top: 8px; }
   #inspector .tool-category h3 { margin: 0 0 6px; color: var(--text-secondary); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  #inspector .indicator-category { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid var(--border); }
+  #inspector .indicator-category:first-child { padding-top: 0; border-top: 0; }
+  #inspector .indicator-category[hidden] { display: none; }
+  #inspector .indicator-category h3 { margin: 0 0 4px; color: var(--text-secondary); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  #inspector .session-zone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px; align-items: center; width: 100%; padding: 6px 0; border-top: 1px solid var(--border); }
+  #inspector .session-zone-row label { min-height: 28px; flex: initial; }
+  #inspector .session-zone-row input[type="text"] { width: 58px; min-height: 30px; padding: 4px 6px; text-align: center; font-size: 11px; }
   #inspector .tool-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
   #inspector .tool-buttons button[aria-pressed="true"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
   .icon_picker { display: grid; grid-template-columns: repeat(auto-fill, 32px); gap: 4px; flex: 1; min-width: 0; }
@@ -481,11 +488,26 @@
 
     <div class="group" id="overlays_group" data-panel="indicators" data-caption="Indicators">
       <h2>Indicators</h2>
-      <label>Find an indicator <input type="search" id="indicator_search" placeholder="Name or abbreviation"></label>
-      <span class="hint">15 built-in indicators · select to add, clear to remove</span>
+      <label>Find an indicator <input type="search" id="indicator_search" placeholder="Name, category, or abbreviation"></label>
+      <span class="hint">33 curated indicators · select to add, clear to remove</span>
       <div id="indicator_catalog" style="display:grid;gap:8px;width:100%"></div>
       <span id="indicator_empty" class="hint" hidden>No matching indicators</span>
       <span id="indicator_error" role="alert"></span>
+    </div>
+    <div class="group" id="session_zones_group" data-panel="indicators" data-caption="Sessions / Killzones">
+      <h2>Sessions / Killzones</h2>
+      <label><input type="checkbox" id="session_zones_toggle"> Show session killzones</label>
+      <label>Time zone
+        <select id="session_zones_tz"></select>
+      </label>
+      <label>Custom IANA
+        <input type="text" id="session_zones_custom_tz" placeholder="e.g. Asia/Kolkata" aria-label="Custom IANA time zone">
+      </label>
+      <button id="session_zones_apply_tz" type="button">Apply zone</button>
+      <button id="session_zones_reset" type="button">Defaults</button>
+      <span class="hint">Edit start/end times (HH:MM, supports overnight wrap) in any IANA time zone</span>
+      <div id="session_zones_rows" style="display:grid;width:100%"></div>
+      <span id="session_zones_error" role="alert"></span>
     </div>
     <div class="group" id="volume_group" data-panel="indicators" data-caption="Volume">
       <h2>Volume</h2>
@@ -2284,83 +2306,270 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
   }
 });
 
-// Every catalog entry invokes the package's built-in indicator API.
-const indicator_definitions = [
-  ["sma", "SMA · Simple moving average (20)", () => chart.add_sma(main, 20)],
-  ["ema", "EMA · Exponential moving average (20)", () => chart.add_ema(main, 20)],
-  ["volume", "Volume · Separate-pane histogram + MA (20)", (volume) => chart.add_volume(main, 20, volume)],
-  ["bollinger", "Bollinger Bands · 20 / 2", () => chart.add_bollinger(main, 20, 2)],
-  ["rsi", "RSI · Relative strength index (14)", () => chart.add_rsi(main, 14, { color: "#ab47bc", line_width: 2 })],
-  ["macd", "MACD · 12 / 26 / 9", () => chart.add_macd(main, 12, 26, 9)],
-  ["stochastic", "Stochastic · 14 / 3", () => chart.add_stochastic(main, 14, 3)],
-  ["atr", "ATR · Average true range (14)", () => chart.add_atr(main, 14)],
-  ["vwap", "VWAP · Session volume-weighted price", (volume) => chart.add_vwap(main, volume)],
-  ["volume_profile", "Volume Profile · Visible range / POC / 70%", (volume) => chart.add_volume_profile(main, volume)],
-  ["swing_points", "Swing Points · Confirmed pivot levels (5 / 5)", () => chart.add_swing_points(main)],
-  ["session_levels", "Session Levels · Running session high / low", () => chart.add_session_levels(main)],
-  ["previous_period_levels", "Previous Period Levels · Prior day high / low / close", () => chart.add_previous_period_levels(main)],
-  ["opening_range", "Opening Range · First 30 minutes high / low / mid", () => chart.add_opening_range(main, 1800)],
+// Every catalog entry invokes the package's built-in indicator API, organized by terminal category.
+const indicator_categories = [
+  {
+    name: "Moving Averages",
+    items: [
+      ["sma", "SMA · Simple moving average (20)", false, () => chart.add_sma(main, 20)],
+      ["ema", "EMA · Exponential moving average (20)", false, () => chart.add_ema(main, 20)],
+      ["vwma", "VWMA · Volume-weighted MA (20)", true, (volume) => chart.add_vwma(main, 20, volume)],
+    ],
+  },
+  {
+    name: "Trend & Cloud",
+    items: [
+      ["supertrend", "SuperTrend · ATR trend follower (10 / 3)", false, () => chart.add_supertrend(main, 10, 3)],
+      ["parabolic_sar", "Parabolic SAR · Stop and reverse dots", false, () => chart.add_parabolic_sar(main)],
+      ["ichimoku", "Ichimoku Cloud · 9 / 26 / 52", false, () => chart.add_ichimoku(main)],
+      ["adx_dmi", "ADX / DMI · Directional movement (14)", false, () => chart.add_adx_dmi(main, 14)],
+    ],
+  },
+  {
+    name: "Volatility & Channels",
+    items: [
+      ["bollinger", "Bollinger Bands · 20 / 2", false, () => chart.add_bollinger(main, 20, 2)],
+      ["keltner", "Keltner Channels · 20 / 2", false, () => chart.add_keltner(main, 20, 2)],
+      ["donchian", "Donchian Channels · 20", false, () => chart.add_donchian(main, 20)],
+      ["atr", "ATR · Average true range (14)", false, () => chart.add_atr(main, 14)],
+    ],
+  },
+  {
+    name: "Momentum & Oscillators",
+    items: [
+      ["rsi", "RSI · Relative strength index (14)", false, () => chart.add_rsi(main, 14, { color: "#ab47bc", line_width: 2 })],
+      ["macd", "MACD · 12 / 26 / 9", false, () => chart.add_macd(main, 12, 26, 9)],
+      ["stochastic", "Stochastic · 14 / 3", false, () => chart.add_stochastic(main, 14, 3)],
+      ["stochastic_rsi", "Stochastic RSI · 14 / 14", false, () => chart.add_stochastic_rsi(main, 14, 14)],
+      ["cci", "CCI · Commodity channel index (20)", false, () => chart.add_cci(main, 20)],
+      ["squeeze_momentum", "Squeeze Momentum · TTM Squeeze (20 / 2)", false, () => chart.add_squeeze_momentum(main)],
+    ],
+  },
+  {
+    name: "Volume & VWAP",
+    items: [
+      ["volume", "Volume · Separate-pane histogram + MA (20)", true, (volume) => chart.add_volume(main, 20, volume)],
+      ["relative_volume", "RVOL · Relative volume (20)", true, (volume) => chart.add_relative_volume(main, 20, volume)],
+      ["vwap", "VWAP · Session volume-weighted price", true, (volume) => chart.add_vwap(main, volume)],
+      ["vwap_bands", "VWAP Bands · Session ±1σ / ±1%", true, (volume) => chart.add_vwap_bands(main, "session", 1, 1, volume)],
+      ["twap", "TWAP · Time-weighted average price", false, () => chart.add_twap(main)],
+      ["obv", "OBV · On-balance volume", true, (volume) => chart.add_obv(main, volume)],
+      ["cmf", "CMF · Chaikin money flow (20)", true, (volume) => chart.add_cmf(main, 20, volume)],
+      ["mfi", "MFI · Money flow index (14)", true, (volume) => chart.add_mfi(main, 14, volume)],
+      ["volume_profile", "Volume Profile · Visible range / POC / 70%", true, (volume) => chart.add_volume_profile(main, volume)],
+    ],
+  },
+  {
+    name: "Sessions & Levels",
+    items: [
+      ["session_levels", "Session Levels · Running session high / low", false, () => chart.add_session_levels(main)],
+      ["previous_period_levels", "Previous Period Levels · Prior day high / low / close", false, () => chart.add_previous_period_levels(main)],
+      ["opening_range", "Opening Range · First 30 minutes high / low / mid", false, () => chart.add_opening_range(main, 1800)],
+      ["adr_levels", "ADR Levels · 14-day projected high / low", false, () => chart.add_adr_levels(main, 14)],
+      ["pivot_points", "Pivot Points · Standard P / R1–R2 / S1–S2", false, () => chart.add_pivot_points(main, "standard")],
+      ["swing_points", "Swing Points · Confirmed pivot levels (5 / 5)", false, () => chart.add_swing_points(main)],
+      ["mtf_ema_4h", "MTF EMA · 4H non-repainting stepped (20)", false, () => chart.add_mtf_indicator(main, 14400, "ema", 20)],
+    ],
+  },
 ];
 const indicator_catalog = document.getElementById("indicator_catalog");
 const indicator_handles = new Map();
-// Hidden volume copies feeding VWAP and Volume Profile; Live mode streams into them too.
+// Hidden volume copies feeding volume-dependent indicators; Live mode streams into them too.
 const indicator_volumes = new Set();
 window.__demo_indicators = indicator_handles;
-for (const [id, title, create] of indicator_definitions) {
-  const label = document.createElement("label");
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.id = `${id}_toggle`;
-  label.append(checkbox, document.createTextNode(title));
-  indicator_catalog.append(label);
-  checkbox.addEventListener("change", () => {
-    const error = document.getElementById("indicator_error");
-    error.textContent = "";
-    if (!checkbox.checked) {
-      indicator_handles.get(id)?.remove();
-      indicator_handles.delete(id);
-      if (id === "rsi") window.__rsi = null;
-      return;
-    }
-    let volume;
-    try {
-      if (id === "vwap" || id === "volume_profile" || id === "volume") {
-        volume = chart.add_series("histogram", { visible: false, title: "Synthetic demo volume" });
-        volume.set_data(current_volume_data());
-        indicator_volumes.add(volume);
+for (const category of indicator_categories) {
+  const section = document.createElement("div");
+  section.className = "indicator-category";
+  section.dataset.category = category.name.toLowerCase();
+  const heading = document.createElement("h3");
+  heading.textContent = category.name;
+  section.append(heading);
+  for (const [id, title, needs_volume, create] of category.items) {
+    const label = document.createElement("label");
+    label.dataset.searchText = `${category.name} ${title}`.toLowerCase();
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = `${id}_toggle`;
+    label.append(checkbox, document.createTextNode(title));
+    section.append(label);
+    checkbox.addEventListener("change", () => {
+      const error = document.getElementById("indicator_error");
+      error.textContent = "";
+      if (!checkbox.checked) {
+        indicator_handles.get(id)?.remove();
+        indicator_handles.delete(id);
+        if (id === "rsi") window.__rsi = null;
+        return;
       }
-      const result = create(volume);
-      const outputs = Array.isArray(result) ? result : [result];
-      indicator_handles.set(id, {
-        outputs,
-        remove() {
-          if (id === "volume_profile") result.remove();
-          else for (const output of outputs) chart.remove_series(output);
-          if (volume) {
-            indicator_volumes.delete(volume);
-            chart.remove_series(volume);
-          }
-        },
-      });
-      if (id === "rsi") window.__rsi = result;
-    } catch (cause) {
-      if (volume) {
-        indicator_volumes.delete(volume);
-        chart.remove_series(volume);
+      let volume;
+      try {
+        if (needs_volume) {
+          volume = chart.add_series("histogram", { visible: false, title: "Synthetic demo volume" });
+          volume.set_data(current_volume_data());
+          indicator_volumes.add(volume);
+        }
+        const result = create(volume);
+        const outputs = Array.isArray(result) ? result : [result];
+        indicator_handles.set(id, {
+          outputs,
+          remove() {
+            if (id === "volume_profile") result.remove();
+            else for (const output of outputs) chart.remove_series(output);
+            if (volume) {
+              indicator_volumes.delete(volume);
+              chart.remove_series(volume);
+            }
+          },
+        });
+        if (id === "rsi") window.__rsi = result;
+      } catch (cause) {
+        if (volume) {
+          indicator_volumes.delete(volume);
+          chart.remove_series(volume);
+        }
+        checkbox.checked = false;
+        error.textContent = cause.message;
       }
-      checkbox.checked = false;
-      error.textContent = cause.message;
-    }
-  });
+    });
+  }
+  indicator_catalog.append(section);
 }
 document.getElementById("indicator_search").addEventListener("input", (event) => {
   const query = event.target.value.trim().toLowerCase();
   let matches = 0;
-  for (const label of indicator_catalog.children) {
-    label.hidden = !label.textContent.toLowerCase().includes(query);
-    if (!label.hidden) matches++;
+  for (const section of indicator_catalog.children) {
+    let section_matches = 0;
+    for (const label of section.querySelectorAll("label")) {
+      const visible = label.dataset.searchText.includes(query);
+      label.hidden = !visible;
+      if (visible) section_matches++;
+    }
+    section.hidden = section_matches === 0;
+    matches += section_matches;
   }
   document.getElementById("indicator_empty").hidden = matches !== 0;
+});
+
+// ---- Customizable Sessions / Killzones (any IANA timezone + editable HH:MM ranges) ----
+const session_zones_toggle = document.getElementById("session_zones_toggle");
+const session_zones_tz = document.getElementById("session_zones_tz");
+const session_zones_custom_tz = document.getElementById("session_zones_custom_tz");
+const session_zones_rows = document.getElementById("session_zones_rows");
+const session_zones_error = document.getElementById("session_zones_error");
+const format_hhmm = (minute) => {
+  const m = Math.max(0, Math.min(1439, Math.floor(minute)));
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+};
+let session_zones_draft = chart.default_session_zones();
+
+for (const tz of chart.supported_time_zones()) {
+  session_zones_tz.add(new Option(tz, tz, false, tz === session_zones_draft.time_zone));
+}
+
+function apply_session_zones_draft() {
+  session_zones_error.textContent = "";
+  if (!session_zones_toggle.checked) {
+    chart.clear_session_zones();
+    return;
+  }
+  try {
+    chart.set_session_zones(session_zones_draft);
+    session_zones_draft = chart.session_zones() ?? session_zones_draft;
+  } catch (cause) {
+    session_zones_error.textContent = cause.message;
+  }
+}
+
+function render_session_zones_rows() {
+  session_zones_rows.replaceChildren(...session_zones_draft.sessions.map((zone, index) => {
+    const row = document.createElement("div");
+    row.className = "session-zone-row";
+    row.dataset.zoneId = zone.id;
+
+    const enable_label = document.createElement("label");
+    const enable_cb = document.createElement("input");
+    enable_cb.type = "checkbox";
+    enable_cb.checked = zone.enabled;
+    enable_cb.dataset.zoneEnabled = zone.id;
+    enable_cb.addEventListener("change", () => {
+      session_zones_draft.sessions[index] = { ...session_zones_draft.sessions[index], enabled: enable_cb.checked };
+      apply_session_zones_draft();
+    });
+    enable_label.append(enable_cb, document.createTextNode(zone.name));
+
+    const start_input = document.createElement("input");
+    start_input.type = "text";
+    start_input.value = zone.start ?? format_hhmm(zone.start_minute);
+    start_input.title = `${zone.name} start (HH:MM)`;
+    start_input.setAttribute("aria-label", `${zone.name} start time`);
+    start_input.dataset.zoneStart = zone.id;
+    start_input.addEventListener("change", () => {
+      const { start_minute: _ignored, ...rest } = session_zones_draft.sessions[index];
+      session_zones_draft.sessions[index] = { ...rest, start: start_input.value.trim() };
+      apply_session_zones_draft();
+    });
+
+    const end_input = document.createElement("input");
+    end_input.type = "text";
+    end_input.value = zone.end ?? format_hhmm(zone.end_minute);
+    end_input.title = `${zone.name} end (HH:MM)`;
+    end_input.setAttribute("aria-label", `${zone.name} end time`);
+    end_input.dataset.zoneEnd = zone.id;
+    end_input.addEventListener("change", () => {
+      const { end_minute: _ignored, ...rest } = session_zones_draft.sessions[index];
+      session_zones_draft.sessions[index] = { ...rest, end: end_input.value.trim() };
+      apply_session_zones_draft();
+    });
+
+    const box_label = document.createElement("label");
+    box_label.title = "Show session High/Low range box";
+    const box_cb = document.createElement("input");
+    box_cb.type = "checkbox";
+    box_cb.checked = zone.show_range_box;
+    box_cb.dataset.zoneRange = zone.id;
+    box_cb.addEventListener("change", () => {
+      session_zones_draft.sessions[index] = { ...session_zones_draft.sessions[index], show_range_box: box_cb.checked };
+      apply_session_zones_draft();
+    });
+    box_label.append(box_cb, document.createTextNode("Box"));
+
+    row.append(enable_label, start_input, end_input, box_label);
+    return row;
+  }));
+}
+
+render_session_zones_rows();
+session_zones_toggle.addEventListener("change", apply_session_zones_draft);
+session_zones_tz.addEventListener("change", () => {
+  session_zones_draft = { ...session_zones_draft, time_zone: session_zones_tz.value };
+  session_zones_custom_tz.value = "";
+  apply_session_zones_draft();
+});
+document.getElementById("session_zones_apply_tz").addEventListener("click", () => {
+  const custom = session_zones_custom_tz.value.trim();
+  if (!custom) return;
+  const previous = session_zones_draft.time_zone;
+  session_zones_draft = { ...session_zones_draft, time_zone: custom };
+  session_zones_error.textContent = "";
+  if (session_zones_toggle.checked) {
+    try {
+      chart.set_session_zones(session_zones_draft);
+      session_zones_draft = chart.session_zones() ?? session_zones_draft;
+      if ([...session_zones_tz.options].some((opt) => opt.value === custom)) session_zones_tz.value = custom;
+    } catch (cause) {
+      session_zones_draft = { ...session_zones_draft, time_zone: previous };
+      session_zones_error.textContent = cause.message;
+    }
+  } else if ([...session_zones_tz.options].some((opt) => opt.value === custom)) {
+    session_zones_tz.value = custom;
+  }
+});
+document.getElementById("session_zones_reset").addEventListener("click", () => {
+  session_zones_draft = chart.default_session_zones();
+  session_zones_tz.value = session_zones_draft.time_zone;
+  session_zones_custom_tz.value = "";
+  render_session_zones_rows();
+  apply_session_zones_draft();
 });
 
 // ---- Multi-chart (engine workspace): the main chart is the first cell; the toolbar acts on

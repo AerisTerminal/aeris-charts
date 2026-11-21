@@ -3575,14 +3575,18 @@ impl ChartEngine {
         let mut retitle: Vec<(SeriesId, String)> = Vec::new();
         for binding in &self.indicators {
             for (index, &id) in binding.outputs.iter().enumerate() {
+                let format_title = |lang: ChartLanguage| {
+                    let base = indicators::indicator_output_title(&binding.kind, index, lang);
+                    if let Some(interval) = binding.mtf_interval_seconds {
+                        format!("{base} ({})", indicators::format_mtf_badge(interval))
+                    } else {
+                        base
+                    }
+                };
                 if let Some(entry) = self.series_entry(id)
-                    && entry.title
-                        == indicators::indicator_output_title(&binding.kind, index, previous)
+                    && entry.title == format_title(previous)
                 {
-                    retitle.push((
-                        id,
-                        indicators::indicator_output_title(&binding.kind, index, language),
-                    ));
+                    retitle.push((id, format_title(language)));
                 }
             }
         }

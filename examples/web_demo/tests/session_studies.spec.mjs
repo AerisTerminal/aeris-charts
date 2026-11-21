@@ -162,3 +162,114 @@ test("all four study kinds inherit the source pane without creating oscillator p
   ]);
   expect(result.outputs.flat().every(({ pane }) => pane === result.sourcePane), JSON.stringify(result)).toBe(true);
 });
+
+test("customizable session killzones UI supports any IANA timezone, editable HH:MM times, and V3 persistence", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  await page.locator('#tool_rail [data-panel-target="indicators"]').click();
+
+  await page.locator("#session_zones_toggle").check();
+  await expect(page.locator("#session_zones_error")).toBeEmpty();
+  const initial = await page.evaluate(() => window.__chart.session_zones());
+  expect(initial).not.toBeNull();
+  expect(initial.time_zone).toBe("America/New_York");
+  expect(initial.sessions).toHaveLength(4);
+
+  // Apply an arbitrary IANA timezone (Asia/Kolkata) via the custom IANA input and edit session start/end times.
+  await page.locator("#session_zones_custom_tz").fill("Asia/Kolkata");
+  await page.locator("#session_zones_apply_tz").click();
+  await page.locator('[data-zone-start="asia"]').fill("09:15");
+  await page.locator('[data-zone-start="asia"]').press("Tab");
+  await page.locator('[data-zone-end="asia"]').fill("15:30");
+  await page.locator('[data-zone-end="asia"]').press("Tab");
+  await expect(page.locator("#session_zones_error")).toBeEmpty();
+
+  const updated = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const chart = window.__chart;
+    const before = chart.session_zones();
+    const state = chart.export_state();
+    const el = document.createElement("div");
+    el.style.width = "400px";
+    el.style.height = "300px";
+    document.body.append(el);
+    const fresh = await create_chart(el, { backend: "canvas2d" });
+    fresh.import_state(state);
+    const restored = fresh.session_zones();
+    fresh.remove();
+    el.remove();
+    return { before, restored };
+  });
+  expect(updated.before.time_zone).toBe("Asia/Kolkata");
+  expect(updated.before.sessions[0].start_minute).toBe(9 * 60 + 15);
+  expect(updated.before.sessions[0].end_minute).toBe(15 * 60 + 30);
+  expect(updated.restored.time_zone).toBe("Asia/Kolkata");
+  expect(updated.restored.sessions[0].start_minute).toBe(9 * 60 + 15);
+  expect(updated.restored.sessions[0].end_minute).toBe(15 * 60 + 30);
+
+  await page.locator("#session_zones_toggle").uncheck();
+  expect(await page.evaluate(() => window.__chart.session_zones())).toBeNull();
+});
+
+test("MTF indicators enforce zero-lookahead non-repainting steps and persist in V3 state", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/aeris_charts_financial.js");
+    const el1 = document.createElement("div");
+    el1.style.width = "400px";
+    el1.style.height = "300px";
+    document.body.append(el1);
+    const chart = await create_chart(el1, { backend: "canvas2d" });
+    const source = chart.add_series("candlestick");
+    const start = Date.UTC(2025, 0, 1, 0, 0, 0) / 1000;
+    // 12 hourly bars = 3 complete 4H buckets (closes 10, 20, 30) + 2 forming bars in bucket 4.
+    const bars = [];
+    for (let i = 0; i < 14; i += 1) {
+      const close = i < 4 ? 10 : i < 8 ? 20 : i < 12 ? 30 : 999;
+      bars.push({ time: start + i * 3600, open: close, high: close + 1, low: close - 1, close });
+    }
+    source.set_data(bars);
+    const [mtf] = chart.add_mtf_indicator(source, 14400, "sma", 2);
+    const infoBefore = mtf.indicator_info();
+    const valuesBefore = mtf.data().map(({ time, value }) => ({ offsetHours: (time - start) / 3600, value }));
+
+    // Mutate the forming bar in bucket 4; completed HTF values must NOT repaint.
+    source.update({ time: start + 13 * 3600, open: 999, high: 2000, low: 1, close: 1500 });
+    const valuesAfterTick = mtf.data().map(({ time, value }) => ({ offsetHours: (time - start) / 3600, value }));
+
+    const state = chart.export_state();
+    chart.remove();
+    el1.remove();
+
+    const el2 = document.createElement("div");
+    el2.style.width = "400px";
+    el2.style.height = "300px";
+    document.body.append(el2);
+    const fresh = await create_chart(el2, { backend: "canvas2d" });
+    fresh.import_state(state);
+    const restoredSource = fresh.series_order().find((series) => series.indicator_info() === null);
+    restoredSource?.set_data(bars);
+    const restored = fresh.series_order().find((series) => series.indicator_info()?.mtf_interval_seconds === 14400);
+    const restoredInfo = restored?.indicator_info() ?? null;
+    const restoredValues = restored ? restored.data().map(({ time, value }) => ({ offsetHours: (time - start) / 3600, value })) : [];
+    fresh.remove();
+    el2.remove();
+    return { infoBefore, valuesBefore, valuesAfterTick, restoredInfo, restoredValues };
+  });
+
+  expect(result.infoBefore.mtf_interval_seconds).toBe(14400);
+  // Bucket 1 [0..4h) closes at 4h (10), Bucket 2 [4..8h) closes at 8h (20) -> SMA(2) = 15 visible at 8h..11h.
+  // Bucket 3 [8..12h) closes at 12h (30) -> SMA(2) = 25 visible at 12h..13h. Bucket 4 is forming and never leaks!
+  expect(result.valuesBefore).toEqual([
+    { offsetHours: 8, value: 15 },
+    { offsetHours: 9, value: 15 },
+    { offsetHours: 10, value: 15 },
+    { offsetHours: 11, value: 15 },
+    { offsetHours: 12, value: 25 },
+    { offsetHours: 13, value: 25 },
+  ]);
+  expect(result.valuesAfterTick).toEqual(result.valuesBefore);
+  expect(result.restoredInfo?.mtf_interval_seconds).toBe(14400);
+  expect(result.restoredValues).toEqual(result.valuesBefore);
+});

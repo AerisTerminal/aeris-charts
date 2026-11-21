@@ -196,6 +196,8 @@ struct IndicatorV3 {
     source_input: IndicatorInputSource,
     #[serde(default)]
     volume_source: Option<IndicatorSourceV3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mtf_interval_seconds: Option<u32>,
     styles: Vec<IndicatorOutputStyle>,
     /// Custom output placement survives an import without its runtime definition.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -960,6 +962,7 @@ impl ChartEngine {
                     source,
                     source_input: binding.source_input,
                     volume_source,
+                    mtf_interval_seconds: binding.mtf_interval_seconds,
                     styles,
                     dedicated_outputs: if matches!(binding.kind, IndicatorKind::Custom { .. }) {
                         let source_pane = self.series_entry(binding.source).unwrap().pane_index;
@@ -2809,6 +2812,11 @@ impl ChartEngine {
                         volume_source.unwrap_or_default(),
                     )
                 });
+            if state.indicators[study].mtf_interval_seconds == Some(0) {
+                return Err(invalid(format!(
+                    "indicator {study} has invalid MTF interval 0"
+                )));
+            }
             let outputs = if matches!(kind, IndicatorKind::Custom { .. }) {
                 self.restore_custom_study_with_panes(
                     source,
@@ -2817,6 +2825,14 @@ impl ChartEngine {
                     volume_source,
                     &state.indicators[study].dedicated_outputs,
                 )?
+            } else if let Some(interval) = state.indicators[study].mtf_interval_seconds {
+                self.add_mtf_indicator_with_input(
+                    source,
+                    source_input,
+                    interval,
+                    kind,
+                    volume_source,
+                )
             } else {
                 self.add_indicator_kind_with_input(source, source_input, kind, volume_source)
             };
