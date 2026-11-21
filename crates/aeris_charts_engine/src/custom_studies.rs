@@ -517,6 +517,7 @@ impl ChartEngine {
             source_generation: 0,
             volume_generation: None,
             inputs: Default::default(),
+            segment_break_times: Vec::new(),
         });
         let changes = self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         self.indicator_changes.clear();

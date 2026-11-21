@@ -182,7 +182,7 @@ pub(crate) fn last_price_pulse_stage(animation_ms: f64) -> PulseStage {
     }
 }
 
-fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
+fn color_runs(colors: &[Color], break_on_change: bool) -> Vec<(usize, usize, Color)> {
     let n = colors.len();
     if n == 0 {
         return Vec::new();
@@ -192,6 +192,16 @@ fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
     }
     let mut out = Vec::new();
     let mut run_start = 0usize;
+    if break_on_change {
+        for i in 1..n {
+            if colors[i] != colors[run_start] {
+                out.push((run_start, i, colors[run_start]));
+                run_start = i;
+            }
+        }
+        out.push((run_start, n, colors[run_start]));
+        return out;
+    }
     for i in 1..n {
         if i == n - 1 || colors[i] != colors[run_start] {
             out.push((run_start, i + 1, colors[run_start]));
@@ -199,6 +209,148 @@ fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
         }
     }
     out
+}
+
+/// Partition an ordered list of visible output rows into contiguous index ranges whenever any
+/// timestamp in `break_times` (sorted UTC seconds) falls in `(prev_time, curr_time]`.
+fn split_segment_ranges(
+    rows: &[usize],
+    times: Option<&[i64]>,
+    break_times: &[i64],
+) -> Vec<(usize, usize)> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let Some(times) = times else {
+        return vec![(0, rows.len())];
+    };
+    if break_times.is_empty() || rows.len() < 2 {
+        return vec![(0, rows.len())];
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    let mut prev_t = times[rows[0]];
+    let mut break_ptr = break_times.partition_point(|&t| t <= prev_t);
+    for (i, &row) in rows.iter().enumerate().skip(1) {
+        let curr_t = times[row];
+        while break_ptr < break_times.len() && break_times[break_ptr] <= prev_t {
+            break_ptr += 1;
+        }
+        if break_times.get(break_ptr).is_some_and(|&t| t <= curr_t) {
+            ranges.push((start, i));
+            start = i;
+            while break_ptr < break_times.len() && break_times[break_ptr] <= curr_t {
+                break_ptr += 1;
+            }
+        }
+        prev_t = curr_t;
+    }
+    ranges.push((start, rows.len()));
+    ranges
+}
+
+#[derive(Clone, Copy)]
+struct BandPair {
+    upper_pt: [f32; 2],
+    lower_pt: [f32; 2],
+    upper_price: f64,
+    lower_price: f64,
+    time: Option<i64>,
+}
+
+fn push_band_fill_run(
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+    upper: &[[f32; 2]],
+    lower: &[[f32; 2]],
+    fill: Color,
+) {
+    if upper.len() < 2 || upper.len() != lower.len() {
+        return;
+    }
+    let upper_first = points.len() as u32;
+    points.extend_from_slice(upper);
+    let lower_first = points.len() as u32;
+    points.extend_from_slice(lower);
+    out.push(Prim::BandFill {
+        line_type: LineType::Simple,
+        upper_first,
+        lower_first,
+        point_count: upper.len() as u32,
+        fill,
+    });
+}
+
+fn emit_directional_band_fill(
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+    pairs: &[BandPair],
+    bullish: Color,
+    bearish: Color,
+) {
+    if pairs.len() < 2 {
+        return;
+    }
+    let mut cur_upper: Vec<[f32; 2]> = Vec::new();
+    let mut cur_lower: Vec<[f32; 2]> = Vec::new();
+    let mut cur_side: Option<bool> = None;
+
+    let flush = |out: &mut Vec<Prim>,
+                 points: &mut Vec<[f32; 2]>,
+                 u: &mut Vec<[f32; 2]>,
+                 l: &mut Vec<[f32; 2]>,
+                 side: &mut Option<bool>| {
+        if let Some(is_bull) = side.take() {
+            push_band_fill_run(out, points, u, l, if is_bull { bullish } else { bearish });
+        }
+        u.clear();
+        l.clear();
+    };
+
+    for seg in pairs.windows(2) {
+        let m0 = seg[0];
+        let m1 = seg[1];
+        let d0 = m0.upper_price - m0.lower_price;
+        let d1 = m1.upper_price - m1.lower_price;
+        let bull0 = d0 >= 0.0;
+        let bull1 = d1 >= 0.0;
+        if bull0 == bull1 || (d0 - d1).abs() <= 1e-12 {
+            if cur_side.is_some_and(|s| s != bull0) {
+                flush(out, points, &mut cur_upper, &mut cur_lower, &mut cur_side);
+            }
+            if cur_upper.is_empty() {
+                cur_upper.push(m0.upper_pt);
+                cur_lower.push(m0.lower_pt);
+                cur_side = Some(bull0);
+            }
+            cur_upper.push(m1.upper_pt);
+            cur_lower.push(m1.lower_pt);
+        } else {
+            let t = (d0 / (d0 - d1)).clamp(0.0, 1.0) as f32;
+            let cross = [
+                m0.upper_pt[0] + (m1.upper_pt[0] - m0.upper_pt[0]) * t,
+                m0.upper_pt[1] + (m1.upper_pt[1] - m0.upper_pt[1]) * t,
+            ];
+            if cur_side.is_some_and(|s| s != bull0) {
+                flush(out, points, &mut cur_upper, &mut cur_lower, &mut cur_side);
+            }
+            if cur_upper.is_empty() {
+                cur_upper.push(m0.upper_pt);
+                cur_lower.push(m0.lower_pt);
+                cur_side = Some(bull0);
+            }
+            cur_upper.push(cross);
+            cur_lower.push(cross);
+            flush(out, points, &mut cur_upper, &mut cur_lower, &mut cur_side);
+
+            cur_upper.push(cross);
+            cur_lower.push(cross);
+            cur_upper.push(m1.upper_pt);
+            cur_lower.push(m1.lower_pt);
+            cur_side = Some(bull1);
+        }
+    }
+    flush(out, points, &mut cur_upper, &mut cur_lower, &mut cur_side);
 }
 
 /// Up (`close >= open`) or down for the bar at `index`; `None` for a missing or whitespace row.
@@ -444,7 +596,8 @@ impl ChartEngine {
         let bottom = ((pane.top + pane.height) * vpr).round() as i32;
         let size = marker_envelope_size(self.time_scale.bar_spacing());
         let radius = (marker_shape_size(size, 1.0) * hpr * 0.5) as f32;
-        for row in plot.visible_rows(from, to) {
+        let offset = i64::from(rs.bar_offset);
+        for row in plot.visible_rows(from.saturating_sub(offset), to.saturating_sub(offset)) {
             if plot.is_whitespace_row(row) {
                 continue;
             }
@@ -453,10 +606,9 @@ impl ChartEngine {
             if !y.is_finite() {
                 continue;
             }
-            let x = (self
-                .time_scale
-                .index_to_coordinate(plot.index_at(row).expect("visible marker row index"))
-                * hpr)
+            let x = (self.time_scale.index_to_coordinate(
+                plot.index_at(row).expect("visible marker row index") + offset,
+            ) * hpr)
                 .round() as i32;
             let Some([cx, cy]) = study_price_marker_center(
                 x,
@@ -915,7 +1067,10 @@ impl ChartEngine {
                     .flatten()
                     .find_map(|source| bar_direction(self.data.plot(source), index))
             },
-            histogram_solid_color(series_stroke_color(series, market), market),
+            histogram_solid_color(
+                series_stroke_color(series, market, self.surface_theme()),
+                market,
+            ),
         ))
     }
 
@@ -1056,14 +1211,17 @@ impl ChartEngine {
     ) {
         let plot = self.data.plot(rs.id);
         let c = plot.column(PlotValueIndex::Close);
+        let offset = i64::from(rs.bar_offset);
+        let query_from = from.saturating_sub(offset);
+        let query_to = to.saturating_sub(offset);
         let mut work = conflation::DensityWork::default();
         let rows = visible_line_rows_with_work(
             plot,
-            from,
-            to,
+            query_from,
+            query_to,
             self.time_scale.bar_spacing(),
             hpr,
-            |index| self.time_scale.index_to_coordinate(index) * hpr,
+            |index| self.time_scale.index_to_coordinate(index + offset) * hpr,
             &mut work,
         );
         self.record_lod_work(
@@ -1073,12 +1231,12 @@ impl ChartEngine {
             work.candidates,
         );
         let mut row_points: Vec<[f32; 2]> = Vec::with_capacity(rows.len());
+        let mut row_logicals: Vec<i64> = Vec::with_capacity(rows.len());
         for &r in &rows {
+            let displaced = plot.index_at(r).expect("line row index") + offset;
+            row_logicals.push(displaced);
             row_points.push([
-                (self
-                    .time_scale
-                    .index_to_coordinate(plot.index_at(r).expect("line row index"))
-                    * hpr) as f32,
+                (self.time_scale.index_to_coordinate(displaced) * hpr) as f32,
                 (scale.price_to_coordinate(c[r], rs.base_value) * vpr) as f32,
             ]);
         }
@@ -1091,21 +1249,28 @@ impl ChartEngine {
         // Already the rendered stroke (see `series_stroke_color`).
         let color = rs.color;
         let point_colors = self.data.point_colors(rs.id);
-        // Band background fill: the band between this UPPER output and its LOWER
-        // companion, in the band color at the public reference's 0.2 background alpha, painted under
-        // the band strokes. Both outputs share bar times, so the rows (and x's) align
-        // point-for-point; a count mismatch skips the fill rather than drawing a wrong one.
-        if let Some(lower_id) = self.band_fill_companion(rs.id) {
-            let lower_plot = self.data.plot(lower_id);
+        let break_times = self.series_segment_break_times(rs.id);
+        let series_times = self.data.series_data(rs.id).map(|(times, _)| times);
+        // Generalized band & cloud fills (Bollinger, Keltner, Donchian, Opening Range, VWAP Bands,
+        // and directional crossover-split Ichimoku Kumo). Pairs rows by displaced logical index so
+        // bands with unequal warm-ups or bar displacement align point-for-point, and splits cleanly
+        // across session/period boundaries.
+        if let Some(spec) = self.band_fill_spec(rs.id)
+            && let Some(lower_series) = self
+                .series_entry(spec.companion)
+                .filter(|series| series.visible && !series.removed)
+        {
+            let lower_plot = self.data.plot(spec.companion);
             let lower_close = lower_plot.column(PlotValueIndex::Close);
+            let lower_offset = i64::from(lower_series.bar_offset);
             let mut work = conflation::DensityWork::default();
             let lower_rows = visible_line_rows_with_work(
                 lower_plot,
-                from,
-                to,
+                from.saturating_sub(lower_offset),
+                to.saturating_sub(lower_offset),
                 self.time_scale.bar_spacing(),
                 hpr,
-                |index| self.time_scale.index_to_coordinate(index) * hpr,
+                |index| self.time_scale.index_to_coordinate(index + lower_offset) * hpr,
                 &mut work,
             );
             self.record_lod_work(
@@ -1114,30 +1279,93 @@ impl ChartEngine {
                 work.raw_rows,
                 work.candidates,
             );
-            if lower_rows.len() == rows.len() && rows.len() >= 2 {
-                let upper_first = points.len() as u32;
-                points.extend_from_slice(&row_points);
-                let lower_first = points.len() as u32;
-                points.extend(lower_rows.iter().map(|&r| {
-                    [
-                        (self.time_scale.index_to_coordinate(
-                            lower_plot.index_at(r).expect("lower-band row index"),
-                        ) * hpr) as f32,
-                        (scale.price_to_coordinate(lower_close[r], rs.base_value) * vpr) as f32,
-                    ]
-                }));
-                out.push(Prim::BandFill {
-                    line_type: LineType::Simple,
-                    upper_first,
-                    lower_first,
-                    point_count: rows.len() as u32,
-                    fill: Color::rgba(
-                        color.r(),
-                        color.g(),
-                        color.b(),
-                        (color.a() as f64 * 0.2).round() as u8,
-                    ),
-                });
+            let mut matched: Vec<BandPair> = Vec::with_capacity(rows.len().min(lower_rows.len()));
+            let mut ui = 0usize;
+            let mut li = 0usize;
+            while ui < rows.len() && li < lower_rows.len() {
+                let u_logical = row_logicals[ui];
+                let l_row = lower_rows[li];
+                let l_logical =
+                    lower_plot.index_at(l_row).expect("lower-band row index") + lower_offset;
+                if u_logical == l_logical {
+                    let u_row = rows[ui];
+                    matched.push(BandPair {
+                        upper_pt: row_points[ui],
+                        lower_pt: [
+                            (self.time_scale.index_to_coordinate(l_logical) * hpr) as f32,
+                            (scale.price_to_coordinate(lower_close[l_row], rs.base_value) * vpr)
+                                as f32,
+                        ],
+                        upper_price: c[u_row],
+                        lower_price: lower_close[l_row],
+                        time: series_times.and_then(|times| times.get(u_row).copied()),
+                    });
+                    ui += 1;
+                    li += 1;
+                } else if u_logical < l_logical {
+                    ui += 1;
+                } else {
+                    li += 1;
+                }
+            }
+            if matched.len() >= 2 {
+                // Split matched pairs on any session/period segment breaks.
+                let mut sub_ranges: Vec<(usize, usize)> = Vec::new();
+                if break_times.is_empty() {
+                    sub_ranges.push((0, matched.len()));
+                } else {
+                    let mut start = 0usize;
+                    let mut prev_t = matched[0].time;
+                    let mut break_ptr = prev_t
+                        .map(|t| break_times.partition_point(|&bt| bt <= t))
+                        .unwrap_or(break_times.len());
+                    for (idx, pair) in matched.iter().enumerate().skip(1) {
+                        if let (Some(pt), Some(ct)) = (prev_t, pair.time) {
+                            while break_ptr < break_times.len() && break_times[break_ptr] <= pt {
+                                break_ptr += 1;
+                            }
+                            if break_times.get(break_ptr).is_some_and(|&bt| bt <= ct) {
+                                sub_ranges.push((start, idx));
+                                start = idx;
+                                while break_ptr < break_times.len() && break_times[break_ptr] <= ct
+                                {
+                                    break_ptr += 1;
+                                }
+                            }
+                        }
+                        prev_t = pair.time;
+                    }
+                    sub_ranges.push((start, matched.len()));
+                }
+                for (sub_start, sub_end) in sub_ranges {
+                    let slice = &matched[sub_start..sub_end];
+                    if slice.len() < 2 {
+                        continue;
+                    }
+                    match spec.mode {
+                        crate::indicators::BandFillMode::Uniform { alpha } => {
+                            let upper_pts: Vec<[f32; 2]> =
+                                slice.iter().map(|p| p.upper_pt).collect();
+                            let lower_pts: Vec<[f32; 2]> =
+                                slice.iter().map(|p| p.lower_pt).collect();
+                            push_band_fill_run(
+                                out,
+                                points,
+                                &upper_pts,
+                                &lower_pts,
+                                Color::rgba(
+                                    color.r(),
+                                    color.g(),
+                                    color.b(),
+                                    (color.a() as f64 * alpha).round() as u8,
+                                ),
+                            );
+                        }
+                        crate::indicators::BandFillMode::Directional { bullish, bearish } => {
+                            emit_directional_band_fill(out, points, slice, bullish, bearish);
+                        }
+                    }
+                }
             }
         }
         // reference data-item colors (series-bar-colorer.ts Line/Area arms — area reads `lineColor`,
@@ -1292,68 +1520,125 @@ impl ChartEngine {
                 }
             } else {
                 let width = (rs.line_width * vpr) as f32;
-                match &resolved {
-                    Some(colors) => {
-                        // Per-point colors: one stroke run per maximal equal-color span (the
-                        // walkLine split). With steps/curves each run expands independently, and a
-                        // dashed style restarts its pattern per run — reference keeps dash offset and
-                        // splits the step corner at the color change; those sub-segment details are
-                        // not modeled (documented deviation; Simple lines are exact).
-                        for (start, end, run_color) in color_runs(colors) {
-                            if rs.line_style == LineStyle::Solid {
-                                let run_first = points.len() as u32;
-                                points.extend_from_slice(&row_points[start..end]);
+                let segments = if rs.line_break_mode == LineBreakMode::OnSegmentBreak
+                    && !break_times.is_empty()
+                {
+                    split_segment_ranges(&rows, series_times, break_times)
+                } else {
+                    vec![(0, row_points.len())]
+                };
+                let break_on_flip = rs.line_break_mode == LineBreakMode::OnColorChange;
+                let single_segment_all =
+                    segments.len() == 1 && segments[0] == (0, row_points.len()) && !break_on_flip;
+                for (seg_start, seg_end) in segments {
+                    let seg_points = &row_points[seg_start..seg_end];
+                    if seg_points.is_empty() {
+                        continue;
+                    }
+                    if seg_points.len() == 1 && rs.line_break_mode == LineBreakMode::OnSegmentBreak
+                    {
+                        let half = (self.time_scale.bar_spacing() * 0.4 * hpr).max(1.0) as f32;
+                        let p = seg_points[0];
+                        let seg_color = resolved.as_ref().map_or(color, |colors| colors[seg_start]);
+                        push_line_stroke(
+                            out,
+                            points,
+                            &[[p[0] - half, p[1]], [p[0] + half, p[1]]],
+                            width,
+                            rs.line_style,
+                            LineType::Simple,
+                            seg_color,
+                        );
+                        continue;
+                    }
+                    match &resolved {
+                        Some(colors) => {
+                            for (start, end, run_color) in
+                                color_runs(&colors[seg_start..seg_end], break_on_flip)
+                            {
+                                let run_pts = &seg_points[start..end];
+                                if run_pts.len() == 1 && break_on_flip {
+                                    out.push(Prim::Circle {
+                                        cx: run_pts[0][0],
+                                        cy: run_pts[0][1],
+                                        radius: (width * 0.5).max(1.5),
+                                        fill: run_color,
+                                        stroke_width: 0.0,
+                                        stroke: run_color,
+                                    });
+                                } else if rs.line_style == LineStyle::Solid {
+                                    let run_first = points.len() as u32;
+                                    points.extend_from_slice(run_pts);
+                                    out.push(Prim::Polyline {
+                                        first_point: run_first,
+                                        point_count: run_pts.len() as u32,
+                                        width,
+                                        style: LineStyle::Solid,
+                                        line_type: rs.line_type,
+                                        color: run_color,
+                                    });
+                                } else {
+                                    push_line_stroke(
+                                        out,
+                                        points,
+                                        run_pts,
+                                        width,
+                                        rs.line_style,
+                                        rs.line_type,
+                                        run_color,
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            if single_segment_all && rs.line_style == LineStyle::Solid {
                                 out.push(Prim::Polyline {
-                                    first_point: run_first,
-                                    point_count: (end - start) as u32,
+                                    first_point: first,
+                                    point_count: count,
                                     width,
                                     style: LineStyle::Solid,
                                     line_type: rs.line_type,
-                                    color: run_color,
+                                    color,
+                                });
+                            } else if rs.line_style == LineStyle::Solid {
+                                let run_first = points.len() as u32;
+                                points.extend_from_slice(seg_points);
+                                out.push(Prim::Polyline {
+                                    first_point: run_first,
+                                    point_count: seg_points.len() as u32,
+                                    width,
+                                    style: LineStyle::Solid,
+                                    line_type: rs.line_type,
+                                    color,
                                 });
                             } else {
                                 push_line_stroke(
                                     out,
                                     points,
-                                    &row_points[start..end],
+                                    seg_points,
                                     width,
                                     rs.line_style,
                                     rs.line_type,
-                                    run_color,
+                                    color,
                                 );
                             }
-                        }
-                    }
-                    None => {
-                        if rs.line_style == LineStyle::Solid {
-                            out.push(Prim::Polyline {
-                                first_point: first,
-                                point_count: count,
-                                width,
-                                style: LineStyle::Solid,
-                                line_type: rs.line_type,
-                                color,
-                            });
-                        } else {
-                            push_line_stroke(
-                                out,
-                                points,
-                                &row_points,
-                                width,
-                                rs.line_style,
-                                rs.line_type,
-                                color,
-                            );
                         }
                     }
                 }
             }
         }
         if rs.point_markers {
-            // reference `pointMarkersRadius` default (line-pane-view.ts): `lineWidth / 2 + 2`. reference
-            // draws the markers unconditionally once enabled (draw-series-point-markers.ts),
-            // each in its point's own resolved color.
-            let radius = rs.point_markers_radius.unwrap_or(rs.line_width / 2.0 + 2.0);
+            // reference `pointMarkersRadius` default (line-pane-view.ts): `lineWidth / 2 + 2`.
+            // Dots-only studies (`!line_visible`) clamp their radius against bar spacing so dense
+            // views stay crisp instead of merging into a solid bar.
+            let base_radius = rs.point_markers_radius.unwrap_or(rs.line_width / 2.0 + 2.0);
+            let radius = if rs.line_visible {
+                base_radius
+            } else {
+                base_radius.min((self.time_scale.bar_spacing() * 0.35).max(1.2))
+            };
+            let arm = (radius * vpr).round().max(1.0) as i32;
+            let cross_w = vpr.round().max(1.0) as i32;
             for (i, p) in row_points.iter().enumerate() {
                 let marker_color = area_brush
                     .and_then(|brush| {
@@ -1361,14 +1646,38 @@ impl ChartEngine {
                             .map(|logical| area_brush_style_for(brush, logical).line_color)
                     })
                     .unwrap_or_else(|| resolved.as_ref().map_or(color, |colors| colors[i]));
-                out.push(Prim::Circle {
-                    cx: p[0],
-                    cy: p[1],
-                    radius: (radius * vpr) as f32,
-                    fill: marker_color,
-                    stroke_width: 0.0,
-                    stroke: marker_color,
-                });
+                match rs.point_marker_shape {
+                    PointMarkerShape::Circle => {
+                        out.push(Prim::Circle {
+                            cx: p[0],
+                            cy: p[1],
+                            radius: (radius * vpr) as f32,
+                            fill: marker_color,
+                            stroke_width: 0.0,
+                            stroke: marker_color,
+                        });
+                    }
+                    PointMarkerShape::Cross => {
+                        let cx = p[0].round() as i32;
+                        let cy = p[1].round() as i32;
+                        out.push(Prim::HLine {
+                            y: cy,
+                            x0: cx - arm,
+                            x1: cx + arm,
+                            width: cross_w,
+                            style: LineStyle::Solid,
+                            color: marker_color,
+                        });
+                        out.push(Prim::VLine {
+                            x: cx,
+                            y0: cy - arm,
+                            y1: cy + arm,
+                            width: cross_w,
+                            style: LineStyle::Solid,
+                            color: marker_color,
+                        });
+                    }
+                }
             }
         }
     }
@@ -1945,7 +2254,8 @@ impl ChartEngine {
         // The pulse takes the series' own resolved stroke color, like the reference's
         // `lastValueData.color`, so a recolored line or area pulses in its own color.
         let market = self.market_colors();
-        let stroke_color = || series_stroke_color(series, market);
+        let theme = self.surface_theme();
+        let stroke_color = || series_stroke_color(series, market, theme);
         let base = match series_kind {
             SeriesKind::Line | SeriesKind::Area => stroke_color(),
             SeriesKind::Histogram => market.volume_up(),
@@ -2123,6 +2433,116 @@ impl ChartEngine {
                 }
                 push_anchor(out, cx, cy, fill);
             }
+        }
+    }
+
+    /// Paint compact inline right-edge level tags (e.g. `P`, `R1`, `S1`, `PDH`, `PDL`, `ORH`)
+    /// for visible level-study outputs in `pane_index`, with vertical collision avoidance.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_series_level_tags_frame(
+        &self,
+        pane_index: usize,
+        from: i64,
+        to: i64,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        if !self.indicator_chrome.name_labels_visible || self.pane_w <= 24.0 {
+            return;
+        }
+        let Some(pane) = self.panes.get(pane_index) else {
+            return;
+        };
+        let min_y = pane.top + 8.0;
+        let max_y = pane.top + pane.height - 8.0;
+        if max_y <= min_y {
+            return;
+        }
+        let market = self.market_colors();
+        let theme = self.surface_theme();
+        struct TagItem {
+            y_css: f64,
+            x_css: f64,
+            align: TextAlign,
+            text: String,
+            color: Color,
+        }
+        let mut items: Vec<TagItem> = Vec::new();
+        for series in &self.series {
+            if series.removed || !series.visible || series.pane_index != pane_index {
+                continue;
+            }
+            let Some(tag) = series.level_tag.as_deref().filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            let scale = pane_scale(pane, series_scale_target(series));
+            if scale.is_empty() {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            let plot = self.data.plot(series.id);
+            let offset = i64::from(series.bar_offset);
+            let Some(row) = plot.last_non_whitespace_row(to.saturating_sub(offset)) else {
+                continue;
+            };
+            let Some(logical) = plot.index_at(row) else {
+                continue;
+            };
+            let displaced = logical + offset;
+            if displaced < from {
+                continue;
+            }
+            let price = plot.value_at(row, PlotValueIndex::Close);
+            let y_css = scale.price_to_coordinate(price, base_value);
+            if !y_css.is_finite() || y_css < pane.top || y_css > pane.top + pane.height {
+                continue;
+            }
+            let last_x = self.time_scale.index_to_coordinate(displaced);
+            let (x_css, align, y_adjusted) = if last_x + 36.0 > self.pane_w {
+                ((self.pane_w - 6.0).max(4.0), TextAlign::Right, y_css - 7.0)
+            } else {
+                ((last_x + 6.0).max(4.0), TextAlign::Left, y_css)
+            };
+            items.push(TagItem {
+                y_css: y_adjusted.clamp(min_y, max_y),
+                x_css,
+                align,
+                text: tag.to_string(),
+                color: series_stroke_color(series, market, theme),
+            });
+        }
+        if items.is_empty() {
+            return;
+        }
+        items.sort_by(|a, b| a.y_css.total_cmp(&b.y_css));
+        const MIN_GAP: f64 = 12.0;
+        for i in 1..items.len() {
+            if items[i].y_css < items[i - 1].y_css + MIN_GAP {
+                items[i].y_css = (items[i - 1].y_css + MIN_GAP).min(max_y);
+            }
+        }
+        for i in (0..items.len().saturating_sub(1)).rev() {
+            if items[i].y_css > items[i + 1].y_css - MIN_GAP {
+                items[i].y_css = (items[i + 1].y_css - MIN_GAP).max(min_y);
+            }
+        }
+        let family = self.options.get().layout.font_family.clone();
+        let size = (10.5 * vpr) as f32;
+        for item in items {
+            out.push(Prim::Text {
+                x: (item.x_css * hpr) as f32,
+                y: (item.y_css * vpr) as f32,
+                text: item.text,
+                color: item.color,
+                size,
+                family: family.clone(),
+                align: item.align,
+                weight: 600,
+                italic: false,
+            });
         }
     }
 }

@@ -129,36 +129,39 @@ impl ChartEngine {
                 continue;
             };
             let visible = outputs.iter().any(|series| series.visible);
-            let values =
-                if visible {
-                    outputs
-                        .iter()
-                        .filter(|series| series.visible)
-                        .filter_map(|series| {
-                            let output = self.indicator_info(series.id)?;
-                            let value = snapshot_value(&snapshots, series.id)?;
-                            // Volume columns read by their color alone.
-                            let unlabeled = output.kind == "volume";
-                            Some(FinancialLegendValue {
-                                text: if output.output_count > 1 && !unlabeled {
-                                    format!("{} {value}", output.output_label)
-                                } else {
-                                    value
-                                },
-                                color: Some(
-                                    histogram_value_color(self, &snapshots, series.id)
-                                        .unwrap_or_else(|| {
-                                            series.line_color.clone().unwrap_or_else(|| {
-                                                crate::DEFAULT_LINE_COLOR.to_css()
-                                            })
-                                        }),
+            let values = if visible {
+                outputs
+                    .iter()
+                    .filter(|series| series.visible)
+                    .filter_map(|series| {
+                        let output = self.indicator_info(series.id)?;
+                        let value = snapshot_value(&snapshots, series.id)?;
+                        // Volume columns read by their color alone.
+                        let unlabeled = output.kind == "volume";
+                        Some(FinancialLegendValue {
+                            text: if output.output_count > 1 && !unlabeled {
+                                format!("{} {value}", output.output_label)
+                            } else {
+                                value
+                            },
+                            color: Some(
+                                histogram_value_color(self, &snapshots, series.id).unwrap_or_else(
+                                    || {
+                                        crate::frame::series_stroke_color(
+                                            series,
+                                            self.market_colors(),
+                                            self.surface_theme(),
+                                        )
+                                        .to_css()
+                                    },
                                 ),
-                            })
+                            ),
                         })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             rows.push(FinancialLegendRow {
                 identity: FinancialLegendIdentity::Indicator(info.binding_id),
                 first_series_id: first.id,
@@ -214,7 +217,12 @@ impl ChartEngine {
                                 .as_ref()
                                 .map_or(value.clone(), |label| format!("{label} {value}")),
                             color: Some(series.line_color.clone().unwrap_or_else(|| {
-                                crate::frame::series_stroke_color(series, market).to_css()
+                                crate::frame::series_stroke_color(
+                                    series,
+                                    market,
+                                    self.surface_theme(),
+                                )
+                                .to_css()
                             })),
                         })
                     })

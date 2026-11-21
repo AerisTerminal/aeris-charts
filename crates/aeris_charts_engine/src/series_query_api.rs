@@ -106,7 +106,13 @@ impl ChartEngine {
         self.series
             .iter()
             .find(|series| series.id == id && !series.removed && series.kind == SeriesKind::Area)
-            .map(|series| crate::frame::area_brush_defaults(series, self.market_colors()))
+            .map(|series| {
+                crate::frame::area_brush_defaults(
+                    series,
+                    self.market_colors(),
+                    self.surface_theme(),
+                )
+            })
     }
 
     pub fn clear_area_brush_state(&mut self, id: SeriesId) -> bool {
@@ -392,7 +398,8 @@ impl ChartEngine {
                 .clone()
                 // The color this series actually strokes (an unset Area reports its Area hue).
                 .unwrap_or_else(|| {
-                    crate::frame::series_stroke_color(s, self.market_colors()).to_css()
+                    crate::frame::series_stroke_color(s, self.market_colors(), self.surface_theme())
+                        .to_css()
                 })
                 .into(),
         );

@@ -6,8 +6,9 @@
 use crate::SeriesThresholdRegion;
 use crate::drawings::DrawingKind;
 use crate::{
-    ChartEngine, PANE_SEPARATOR, PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesKind,
-    SeriesPriceFormat,
+    ChartEngine, LineBreakMode, MAX_SERIES_REFERENCE_LINES, PANE_SEPARATOR, PointMarkerShape,
+    PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesDefaultColor, SeriesKind,
+    SeriesPriceFormat, SeriesReferenceLine,
 };
 use aeris_charts_core::format::percentage_formatter::PercentageFormatter;
 use aeris_charts_core::format::price_formatter::PriceFormatter;
@@ -901,9 +902,13 @@ struct ResolvedSeries {
     area_top: Color,
     area_bottom: Color,
     threshold_region: Option<SeriesThresholdRegion>,
+    reference_lines: [Option<SeriesReferenceLine>; MAX_SERIES_REFERENCE_LINES],
     invert_filled_area: bool,
     point_markers: bool,
     point_markers_radius: Option<f64>,
+    point_marker_shape: PointMarkerShape,
+    line_break_mode: LineBreakMode,
+    bar_offset: i32,
     visible: bool,
     line_type: LineType,
     open_visible: bool,
@@ -947,15 +952,33 @@ fn css_color(value: &str, fallback: Color) -> Color {
 /// The stroke color a line-like series actually renders: its explicit color, else its market
 /// side's color, else for an Area the Area default hue. Fills, brush defaults, and
 /// `options().color` all resolve through it.
-pub(crate) fn series_stroke_color(series: &crate::SeriesEntry, market: MarketColors) -> Color {
+pub(crate) fn series_stroke_color(
+    series: &crate::SeriesEntry,
+    market: MarketColors,
+    theme: crate::ChartTheme,
+) -> Color {
     if series.line_color.is_some() {
         return verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR);
     }
-    match series.market_tone {
-        Some(crate::MarketTone::Up) => market.up,
-        Some(crate::MarketTone::Down) => market.down,
-        None if series.kind == SeriesKind::Area => market.up,
-        None => crate::DEFAULT_LINE_COLOR,
+    if let Some(tone) = series.market_tone {
+        return match tone {
+            crate::MarketTone::Up => market.up,
+            crate::MarketTone::Down => market.down,
+        };
+    }
+    if let Some(default_color) = series.default_line_color {
+        return match default_color {
+            SeriesDefaultColor::Fixed(color) => color,
+            SeriesDefaultColor::Themed { dark, light } => match theme {
+                crate::ChartTheme::Light => light,
+                crate::ChartTheme::Dark => dark,
+            },
+        };
+    }
+    if series.kind == SeriesKind::Area {
+        market.up
+    } else {
+        crate::DEFAULT_LINE_COLOR
     }
 }
 
@@ -964,8 +987,9 @@ pub(crate) fn series_stroke_color(series: &crate::SeriesEntry, market: MarketCol
 pub(crate) fn area_fill_colors(
     series: &crate::SeriesEntry,
     market: MarketColors,
+    theme: crate::ChartTheme,
 ) -> (Color, Color) {
-    let (strong, faint) = area_fill_gradient(series_stroke_color(series, market));
+    let (strong, faint) = area_fill_gradient(series_stroke_color(series, market, theme));
     (
         verbatim_color(&series.area_top_color, strong),
         verbatim_color(&series.area_bottom_color, faint),
@@ -990,6 +1014,7 @@ pub(crate) fn baseline_line_colors(
 pub(crate) fn area_brush_defaults(
     series: &crate::SeriesEntry,
     market: MarketColors,
+    theme: crate::ChartTheme,
 ) -> crate::AreaBrushDefaults {
     let line_width = series.line_width.unwrap_or(LINE_WIDTH);
     let style = |line_color: Color| {
@@ -1001,7 +1026,7 @@ pub(crate) fn area_brush_defaults(
             line_width,
         }
     };
-    let stroke = series_stroke_color(series, market);
+    let stroke = series_stroke_color(series, market, theme);
     let faded_alpha = ((u16::from(stroke.a()) * 51 + 127) / 255) as u8;
     crate::AreaBrushDefaults {
         outside: style(Color::rgba(stroke.r(), stroke.g(), stroke.b(), faded_alpha)),
@@ -1094,10 +1119,11 @@ impl ChartEngine {
             return Color(c);
         }
         match series.kind {
-            // A line_color still holding the default placeholder resolves to the kind default,
+            // A line_color still holding the default placeholder resolves to the semantic default,
             // exactly like the geometry builders.
-            SeriesKind::Line => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
-            SeriesKind::Area => series_stroke_color(series, self.market_colors()),
+            SeriesKind::Line | SeriesKind::Area => {
+                series_stroke_color(series, self.market_colors(), self.surface_theme())
+            }
             // The column the bar actually paints, so delta and up/down colors reach the chrome.
             SeriesKind::Histogram => plot
                 .index_at(row)
@@ -1786,6 +1812,7 @@ impl ChartEngine {
         // across panes (filtering per pane preserves each pane's relative order).
         let order = self.effective_series_order();
         let market = self.market_colors();
+        let surface_theme = self.surface_theme();
         for &id in &order {
             let Some(s) = self.series_entry(id) else {
                 continue;
@@ -1795,8 +1822,8 @@ impl ChartEngine {
                 .unwrap_or(0.0);
             let up = verbatim_color(&s.up_color, market.up);
             let down = verbatim_color(&s.down_color, market.down);
-            let color = series_stroke_color(s, market);
-            let (area_top, area_bottom) = area_fill_colors(s, market);
+            let color = series_stroke_color(s, market, surface_theme);
+            let (area_top, area_bottom) = area_fill_colors(s, market, surface_theme);
             let css = |value: &Option<String>| value.as_deref().and_then(Color::parse_css);
             let (top_line, bottom_line) = baseline_line_colors(s, market);
             let (top_strong, top_faint) = area_fill_gradient(top_line);
@@ -1821,9 +1848,13 @@ impl ChartEngine {
                 area_top,
                 area_bottom,
                 threshold_region: s.threshold_region,
+                reference_lines: s.reference_lines,
                 invert_filled_area: s.invert_filled_area,
                 point_markers: s.point_markers,
                 point_markers_radius: s.point_markers_radius,
+                point_marker_shape: s.point_marker_shape,
+                line_break_mode: s.line_break_mode,
+                bar_offset: s.bar_offset,
                 visible: s.visible,
                 line_type: s.line_type,
                 open_visible: s.open_visible,
@@ -2093,16 +2124,39 @@ impl ChartEngine {
                                     scale,
                                 )
                             }
-                            SeriesKind::Baseline => self.build_baseline_frame(
-                                *rs,
-                                from,
-                                to,
-                                hpr,
-                                vpr,
-                                &mut series_layer.layer.prims,
-                                &mut series_layer.layer.points,
-                                scale,
-                            ),
+                            SeriesKind::Baseline => {
+                                if let Some(region) = rs.threshold_region {
+                                    let y_upper =
+                                        (scale.price_to_coordinate(region.upper, rs.base_value)
+                                            * vpr) as f32;
+                                    let y_lower =
+                                        (scale.price_to_coordinate(region.lower, rs.base_value)
+                                            * vpr) as f32;
+                                    let top = y_upper.min(y_lower);
+                                    let height = (y_lower - y_upper).abs();
+                                    if height >= 1.0 {
+                                        series_layer.layer.prims.push(Prim::Rect {
+                                            rect: IRect {
+                                                x: 0,
+                                                y: top.round() as i32,
+                                                w: pane_w_px as i32,
+                                                h: height.round() as i32,
+                                            },
+                                            color: THRESHOLD_REGION_FILL_COLOR,
+                                        });
+                                    }
+                                }
+                                self.build_baseline_frame(
+                                    *rs,
+                                    from,
+                                    to,
+                                    hpr,
+                                    vpr,
+                                    &mut series_layer.layer.prims,
+                                    &mut series_layer.layer.points,
+                                    scale,
+                                )
+                            }
                             SeriesKind::Feature => self.build_feature_series_frame(
                                 *rs,
                                 from,
@@ -2255,22 +2309,47 @@ impl ChartEngine {
                         if rs.pane != Some(pi) || !rs.visible {
                             continue;
                         }
-                        let Some(region) = rs.threshold_region else {
-                            continue;
-                        };
                         let scale = pane_scale(pane, rs.scale_target);
-                        for price in [region.upper, region.lower] {
-                            let y = (scale.price_to_coordinate(price, rs.base_value) * vpr) as f32;
-                            cache.chrome.prims.push(Prim::HLine {
-                                y: y.round() as i32,
-                                x0: 0,
-                                x1: pane_w_px as i32,
-                                width: vpr.floor().max(1.0) as i32,
-                                style: LineStyle::Dotted,
-                                color: THRESHOLD_REGION_LINE_COLOR,
-                            });
+                        if scale.is_empty() {
+                            continue;
+                        }
+                        let line_w = vpr.floor().max(1.0) as i32;
+                        if let Some(region) = rs.threshold_region {
+                            for price in [region.upper, region.lower] {
+                                let y =
+                                    (scale.price_to_coordinate(price, rs.base_value) * vpr) as f32;
+                                cache.chrome.prims.push(Prim::HLine {
+                                    y: y.round() as i32,
+                                    x0: 0,
+                                    x1: pane_w_px as i32,
+                                    width: line_w,
+                                    style: LineStyle::Dotted,
+                                    color: THRESHOLD_REGION_LINE_COLOR,
+                                });
+                            }
+                        }
+                        for ref_line in rs.reference_lines.into_iter().flatten() {
+                            let y = scale.price_to_coordinate(ref_line.value, rs.base_value) * vpr;
+                            if y.is_finite() {
+                                cache.chrome.prims.push(Prim::HLine {
+                                    y: y.round() as i32,
+                                    x0: 0,
+                                    x1: pane_w_px as i32,
+                                    width: line_w,
+                                    style: ref_line.style,
+                                    color: ref_line.color.unwrap_or(THRESHOLD_REGION_LINE_COLOR),
+                                });
+                            }
                         }
                     }
+                    self.build_series_level_tags_frame(
+                        pi,
+                        from,
+                        to,
+                        hpr,
+                        vpr,
+                        &mut cache.chrome.prims,
+                    );
                     self.build_last_value_line_frame(
                         pi,
                         from,
@@ -2984,10 +3063,11 @@ impl ChartEngine {
             let Some(pane_index) = (s.pane_index < n).then_some(s.pane_index) else {
                 continue;
             };
+            let offset = i64::from(s.bar_offset);
             let raw_mm = self.data.min_max_on_range_cached(
                 s.id,
-                from,
-                to,
+                from.saturating_sub(offset),
+                to.saturating_sub(offset),
                 &[PlotValueIndex::Low, PlotValueIndex::High],
             );
             let (mut minimum, mut maximum) = if s.kind == SeriesKind::Candlestick && s.heikin_ashi {

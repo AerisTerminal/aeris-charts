@@ -485,14 +485,19 @@ impl ChartEngine {
     ) -> Vec<(f64, f64)> {
         let plot = self.data.plot(id);
         let close = plot.column(PlotValueIndex::Close);
+        let offset = self
+            .series_entry(id)
+            .map_or(0_i64, |series| i64::from(series.bar_offset));
+        let query_from = from.saturating_sub(offset);
+        let query_to = to.saturating_sub(offset);
         let mut work = crate::frame::conflation::DensityWork::default();
         let visible = crate::frame::conflation::visible_line_rows_with_work(
             plot,
-            from,
-            to,
+            query_from,
+            query_to,
             bar_spacing,
             hpr,
-            |index| self.time_scale.index_to_coordinate(index) * hpr,
+            |index| self.time_scale.index_to_coordinate(index + offset) * hpr,
             &mut work,
         );
         self.record_lod_work(
@@ -505,8 +510,9 @@ impl ChartEngine {
             .into_iter()
             .map(|row| {
                 (
-                    self.time_scale
-                        .index_to_coordinate(plot.index_at(row).expect("hit-test row index")),
+                    self.time_scale.index_to_coordinate(
+                        plot.index_at(row).expect("hit-test row index") + offset,
+                    ),
                     scale.price_to_coordinate(close[row], base_value),
                 )
             })
@@ -738,11 +744,18 @@ impl ChartEngine {
         {
             return Some((0.0, SeriesHitKind::Fill));
         }
-        let lower = self.band_fill_companion(series.id)?;
+        let spec = self.band_fill_spec(series.id)?;
         let upper_points =
             self.visible_line_points(series.id, scale, base_value, from, to, bar_spacing, hpr);
-        let lower_points =
-            self.visible_line_points(lower, scale, base_value, from, to, bar_spacing, hpr);
+        let lower_points = self.visible_line_points(
+            spec.companion,
+            scale,
+            base_value,
+            from,
+            to,
+            bar_spacing,
+            hpr,
+        );
         let upper = polyline_y_at(&upper_points, x)?;
         let lower = polyline_y_at(&lower_points, x)?;
         between(upper, lower).then_some((0.0, SeriesHitKind::Fill))

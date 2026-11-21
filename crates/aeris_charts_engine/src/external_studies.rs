@@ -941,6 +941,7 @@ mod tests {
             crate::frame::series_stroke_color(
                 chart.series_entry(id).unwrap(),
                 chart.market_colors(),
+                chart.surface_theme(),
             )
         };
         for theme in [ChartTheme::Dark, ChartTheme::Light] {

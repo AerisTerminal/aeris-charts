@@ -1060,6 +1060,48 @@ pub(crate) enum MarketTone {
     Down,
 }
 
+/// Theme-aware default stroke color for an engine-owned series output when no explicit
+/// user `line_color` is set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SeriesDefaultColor {
+    Fixed(Color),
+    Themed { dark: Color, light: Color },
+}
+
+/// Marker glyph drawn at each data point when `point_markers` is enabled.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PointMarkerShape {
+    #[default]
+    Circle,
+    Cross,
+}
+
+/// Policy controlling whether a line stroke stays continuous across per-point color flips or
+/// session/period resets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LineBreakMode {
+    #[default]
+    Continuous,
+    /// Break the stroke whenever consecutive visible points resolve to different colors
+    /// (e.g. SuperTrend bullish/bearish flip).
+    OnColorChange,
+    /// Break the stroke at binding-owned period/session boundaries (e.g. Pivot Points,
+    /// Session Levels, Previous Period Levels, Opening Range, and resetting VWAP bands).
+    OnSegmentBreak,
+}
+
+/// Maximum number of horizontal reference lines attached to one series (zero heap allocation).
+pub const MAX_SERIES_REFERENCE_LINES: usize = 4;
+
+/// A fixed-value horizontal reference line painted across the series' pane (e.g. zero line for
+/// MACD/CCI/CMF, 50 midline for RSI, 25 threshold for ADX, 1.0 baseline for RVOL).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeriesReferenceLine {
+    pub value: f64,
+    pub style: LineStyle,
+    pub color: Option<Color>,
+}
+
 pub struct SeriesEntry {
     pub id: SeriesId,
     pub kind: SeriesKind,
@@ -1094,6 +1136,8 @@ pub struct SeriesEntry {
     pub(crate) area_brush: Option<AreaBrushState>,
     /// Optional fixed-value channel painted behind this line/area series.
     pub threshold_region: Option<SeriesThresholdRegion>,
+    /// Bounded fixed-value horizontal reference lines painted across this series' pane.
+    pub(crate) reference_lines: [Option<SeriesReferenceLine>; MAX_SERIES_REFERENCE_LINES],
     pub histogram_updown: bool,
     /// Order-flow delta presentation of a histogram: each column takes its own sign's color
     /// (`up_color`/`down_color`, else the theme's bullish/bearish tokens), columns are half the
@@ -1102,6 +1146,18 @@ pub struct SeriesEntry {
     /// Engine-owned outputs that stand for one market side: with no explicit color the series
     /// paints the painted bullish or bearish color, so it follows theme switches.
     pub(crate) market_tone: Option<MarketTone>,
+    /// Semantic engine-owned default color when `line_color` is unset and `market_tone` is `None`.
+    pub(crate) default_line_color: Option<SeriesDefaultColor>,
+    /// Marker glyph shape when `point_markers` is true (`Circle` default, `Cross` for SAR/dots).
+    pub(crate) point_marker_shape: PointMarkerShape,
+    /// Stroke break behavior for directional flips or disconnected session/period segments.
+    pub(crate) line_break_mode: LineBreakMode,
+    /// Horizontal bar displacement in logical bar slots (positive projects right/future,
+    /// negative shifts left/past, e.g. Ichimoku +26 cloud / -26 Chikou).
+    pub bar_offset: i32,
+    /// Optional compact inline level tag painted at the right edge of the latest visible segment
+    /// (e.g. `"P"`, `"R1"`, `"S1"`, `"PDH"`, `"PDL"`, `"ORH"`).
+    pub(crate) level_tag: Option<String>,
     pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
     pub line_type: LineType,
@@ -1278,9 +1334,15 @@ impl SeriesEntry {
             area_bottom_color: None,
             area_brush: None,
             threshold_region: None,
+            reference_lines: [None; MAX_SERIES_REFERENCE_LINES],
             histogram_updown: false,
             delta_histogram: false,
             market_tone: None,
+            default_line_color: None,
+            point_marker_shape: PointMarkerShape::Circle,
+            line_break_mode: LineBreakMode::Continuous,
+            bar_offset: 0,
+            level_tag: None,
             price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
             line_type: LineType::Simple,
@@ -4820,6 +4882,88 @@ impl ChartEngine {
             return false;
         }
         series.threshold_region = region;
+        self.invalidate_frame_series(id);
+        true
+    }
+
+    /// Sets up to [`MAX_SERIES_REFERENCE_LINES`] fixed-value horizontal reference lines for a series.
+    pub fn set_series_reference_lines(
+        &mut self,
+        id: SeriesId,
+        lines: &[SeriesReferenceLine],
+    ) -> bool {
+        if lines.len() > MAX_SERIES_REFERENCE_LINES
+            || lines.iter().any(|line| !line.value.is_finite())
+        {
+            return false;
+        }
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        let mut next = [None; MAX_SERIES_REFERENCE_LINES];
+        for (slot, &line) in next.iter_mut().zip(lines.iter()) {
+            *slot = Some(line);
+        }
+        if series.reference_lines == next {
+            return false;
+        }
+        series.reference_lines = next;
+        self.invalidate_frame_all();
+        true
+    }
+
+    /// Sets the horizontal logical bar displacement for a series (clamped to `-1024..=1024`).
+    pub fn set_series_bar_offset(&mut self, id: SeriesId, offset: i32) -> bool {
+        let clamped = offset.clamp(-1024, 1024);
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        if series.bar_offset == clamped {
+            return false;
+        }
+        series.bar_offset = clamped;
+        self.invalidate_frame_all();
+        true
+    }
+
+    /// Sets the marker glyph shape (`Circle` or `Cross`) used when `point_markers` is enabled.
+    pub fn set_series_point_marker_shape(&mut self, id: SeriesId, shape: PointMarkerShape) -> bool {
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        if series.point_marker_shape == shape {
+            return false;
+        }
+        series.point_marker_shape = shape;
+        self.invalidate_frame_series(id);
+        true
+    }
+
+    /// Sets the stroke break policy (`Continuous`, `OnColorChange`, or `OnSegmentBreak`).
+    pub fn set_series_line_break_mode(&mut self, id: SeriesId, mode: LineBreakMode) -> bool {
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        if series.line_break_mode == mode {
+            return false;
+        }
+        series.line_break_mode = mode;
         self.invalidate_frame_series(id);
         true
     }

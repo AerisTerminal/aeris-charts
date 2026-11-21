@@ -23861,3 +23861,409 @@ fn far_off_pane_drawing_lines_are_clipped_to_the_pane() {
     }
     assert!(visible_lines > 0, "the retracement levels cross the pane");
 }
+
+#[test]
+fn v1_indicator_palettes_ma_cycle_and_theme_reset_preserve_semantics() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times: Vec<f64> = (0..40).map(|i| 1_700_000_000.0 + i as f64 * 60.0).collect();
+    let closes: Vec<f64> = (0..40)
+        .map(|i| 100.0 + (i as f64 * 0.25).sin() * 5.0 + i as f64 * 0.1)
+        .collect();
+    let highs: Vec<f64> = closes.iter().map(|c| c + 1.5).collect();
+    let lows: Vec<f64> = closes.iter().map(|c| c - 1.5).collect();
+    chart
+        .set_series_data(0, &times, &closes, &highs, &lows, &closes)
+        .unwrap();
+
+    let sma0 = chart.add_sma(0, 5).unwrap();
+    let sma1 = chart.add_sma(0, 10).unwrap();
+    let sma2 = chart.add_sma(0, 20).unwrap();
+    let macd = chart.add_macd(0, 6, 12, 4);
+    let adx = chart.add_adx_dmi(0, 5);
+    let bb = chart.add_bollinger(0, 5, 2.0);
+    let color_of = |c: &ChartEngine, id: SeriesId| {
+        series_stroke_color(
+            c.series_entry(id).unwrap(),
+            c.market_colors(),
+            c.surface_theme(),
+        )
+    };
+
+    // MA palette cycles through distinct hues while keeping slot 0 canonical blue.
+    assert_eq!(color_of(&chart, sma0), crate::DEFAULT_LINE_COLOR);
+    assert_ne!(color_of(&chart, sma0), color_of(&chart, sma1));
+    assert_ne!(color_of(&chart, sma1), color_of(&chart, sma2));
+
+    // Multi-output studies differentiate their outputs semantically.
+    assert_ne!(color_of(&chart, macd[0]), color_of(&chart, macd[1]));
+    let market = chart.market_colors();
+    assert_eq!(color_of(&chart, adx[0]), market.up);
+    assert_eq!(color_of(&chart, adx[1]), market.down);
+    assert_ne!(color_of(&chart, adx[2]), market.up);
+    assert_ne!(color_of(&chart, adx[2]), market.down);
+    assert_eq!(color_of(&chart, bb[0]), crate::DEFAULT_LINE_COLOR);
+    assert_ne!(color_of(&chart, bb[0]), color_of(&chart, bb[1]));
+
+    // Explicit user override wins, and reset_style_to_defaults restores the semantic default.
+    let dark_signal = color_of(&chart, macd[1]);
+    chart.series_entry_mut(macd[1]).unwrap().line_color = Some("#112233".into());
+    assert_eq!(color_of(&chart, macd[1]), Color::rgb(0x11, 0x22, 0x33));
+    chart.reset_style_to_defaults();
+    assert_eq!(color_of(&chart, macd[1]), dark_signal);
+
+    // Light theme adjusts themed defaults for crisp contrast.
+    chart.set_theme(crate::ChartTheme::Light);
+    let light_signal = color_of(&chart, macd[1]);
+    assert_ne!(light_signal, dark_signal);
+}
+
+#[test]
+fn v2_generalized_band_fills_cover_channels_and_crossover_split_kumo() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    // 120 bars with a strong uptrend followed by a sharp downtrend so Ichimoku Span A crosses Span B.
+    let n = 120;
+    let times: Vec<f64> = (0..n).map(|i| 1_700_000_000.0 + i as f64 * 60.0).collect();
+    let mut opens = Vec::with_capacity(n);
+    let mut highs = Vec::with_capacity(n);
+    let mut lows = Vec::with_capacity(n);
+    let mut closes = Vec::with_capacity(n);
+    for i in 0..n {
+        let base = if i < 65 {
+            100.0 + i as f64 * 1.5
+        } else {
+            197.5 - (i - 65) as f64 * 2.2
+        };
+        opens.push(base);
+        highs.push(base + 3.0);
+        lows.push(base - 3.0);
+        closes.push(base + 0.5);
+    }
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    // Keltner & Donchian both paint uniform band fills.
+    let keltner = chart.add_keltner(0, 10, 2.0);
+    let donchian = chart.add_donchian(0, 10);
+    assert!(chart.band_fill_spec(keltner[0]).is_some());
+    assert!(chart.band_fill_spec(donchian[0]).is_some());
+    let channel_frame = chart.build_frame();
+    let channel_fills = channel_frame.panes[0]
+        .main
+        .iter()
+        .filter(|prim| matches!(prim, Prim::BandFill { .. }))
+        .count();
+    assert!(
+        channel_fills >= 2,
+        "Keltner and Donchian must each emit a BandFill (got {channel_fills})"
+    );
+
+    // Ichimoku Kumo splits into both bullish and bearish directional BandFills at the crossover.
+    let ichi = chart.add_ichimoku(0);
+    let Some(crate::indicators::BandFillSpec {
+        mode: crate::indicators::BandFillMode::Directional { bullish, bearish },
+        ..
+    }) = chart.band_fill_spec(ichi[2])
+    else {
+        panic!("Ichimoku Span A must resolve a directional BandFillSpec");
+    };
+    let frame = chart.build_frame();
+    let has_bull = frame.panes[0]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::BandFill { fill, .. } if *fill == bullish));
+    let has_bear = frame.panes[0]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::BandFill { fill, .. } if *fill == bearish));
+    assert!(
+        has_bull && has_bear,
+        "Ichimoku Kumo must emit both bullish and bearish crossover-split fills"
+    );
+}
+
+#[test]
+fn v3_crosses_and_break_on_color_change_emit_clean_disjoint_geometry() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [60.0, 120.0, 180.0, 240.0, 300.0];
+    let vals = [100.0, 102.0, 95.0, 93.0, 104.0];
+    chart
+        .set_series_data(0, &times, &vals, &vals, &vals, &vals)
+        .unwrap();
+    let sar = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(sar, &times, &vals, &vals, &vals, &vals)
+        .unwrap();
+    {
+        let entry = chart.series_entry_mut(sar).unwrap();
+        entry.line_visible = false;
+        entry.point_markers = true;
+        entry.point_markers_radius = Some(3.0);
+        entry.price_line_visible = false;
+    }
+    assert!(chart.set_series_point_marker_shape(sar, crate::PointMarkerShape::Cross));
+
+    let st = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(st, &times, &vals, &vals, &vals, &vals)
+        .unwrap();
+    let green = Color::rgb(0x08, 0x99, 0x81).0;
+    let red = Color::rgb(0xf2, 0x36, 0x45).0;
+    // Two green bars, two red bars, then a single-bar green flip.
+    assert!(chart.set_series_point_colors(
+        st,
+        Some(vec![green, green, red, red, green]),
+        None,
+        None,
+    ));
+    assert!(chart.set_series_line_break_mode(st, crate::LineBreakMode::OnColorChange));
+
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let frame = chart.build_frame();
+
+    // Cross markers emit HLine + VLine pairs and zero connecting polylines for `sar`.
+    let sar_color = series_stroke_color(
+        chart.series_entry(sar).unwrap(),
+        chart.market_colors(),
+        chart.surface_theme(),
+    );
+    let cross_h = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::HLine { color, .. } if *color == sar_color))
+        .count();
+    let cross_v = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::VLine { color, .. } if *color == sar_color))
+        .count();
+    assert_eq!(cross_h, 5);
+    assert_eq!(cross_v, 5);
+
+    // OnColorChange splits [0..2] green polyline, [2..4] red polyline (no shared flip vertex!),
+    // and [4] single-bar flip cap circle.
+    let st_polylines: Vec<(u32, Color)> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Polyline {
+                point_count, color, ..
+            } if *color == Color(green) || *color == Color(red) => Some((*point_count, *color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(st_polylines, vec![(2, Color(green)), (2, Color(red))]);
+    let single_bar_cap = frame.panes[0]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::Circle { fill, .. } if *fill == Color(green)));
+    assert!(single_bar_cap, "single-bar trend flip emits a visible cap");
+}
+
+#[test]
+fn v4_segmented_level_studies_break_across_days_and_emit_right_edge_tags() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    // 3 UTC days × 4 bars per day so Pivot Points & Session Levels have multi-day segments.
+    let day = 86_400.0;
+    let mut times = Vec::new();
+    let mut opens = Vec::new();
+    let mut highs = Vec::new();
+    let mut lows = Vec::new();
+    let mut closes = Vec::new();
+    for d in 0..3 {
+        let base = 100.0 + d as f64 * 20.0;
+        for b in 0..4 {
+            times.push(1_700_006_400.0 + d as f64 * day + b as f64 * 3600.0);
+            opens.push(base);
+            highs.push(base + 5.0 + b as f64);
+            lows.push(base - 4.0);
+            closes.push(base + 2.0);
+        }
+    }
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    let pivots = chart.add_pivot_points(0, aeris_charts_indicators::PivotKind::Standard);
+    let session = chart.add_session_levels(0, crate::StudyCalendarPolicy::Utc);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let frame = chart.build_frame();
+    // Pivot line (slot 0) has values on day 1 and day 2 (2 separate UTC days) -> 2 disjoint polylines!
+    let pivot_color = series_stroke_color(
+        chart.series_entry(pivots[0]).unwrap(),
+        chart.market_colors(),
+        chart.surface_theme(),
+    );
+    let pivot_polylines = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::Polyline { color, .. } if *color == pivot_color))
+        .count();
+    assert_eq!(
+        pivot_polylines, 2,
+        "Pivot line must break across UTC day boundaries instead of drawing a diagonal bridge"
+    );
+
+    // Session High (slot 0) covers all 3 days -> 3 disjoint polylines (plus any same-colored S1/S2).
+    assert!(!chart.series_segment_break_times(session[0]).is_empty());
+
+    // Right-edge level tags ("P", "R1", "S1", "R2", "S2", "SH", "SL") are emitted in the pane.
+    let tags: Vec<&str> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    for expected in ["P", "R1", "S1", "R2", "S2", "SH", "SL"] {
+        assert!(
+            tags.contains(&expected),
+            "expected right-edge level tag {expected:?} in {tags:?}"
+        );
+    }
+}
+
+#[test]
+fn v5_horizontal_bar_offset_shifts_frame_and_hit_test() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times: Vec<f64> = (0..30).map(|i| 1_700_000_000.0 + i as f64 * 60.0).collect();
+    let vals: Vec<f64> = (0..30).map(|i| 100.0 + i as f64).collect();
+    chart
+        .set_series_data(0, &times, &vals, &vals, &vals, &vals)
+        .unwrap();
+    let shifted = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(shifted, &times, &vals, &vals, &vals, &vals)
+        .unwrap();
+    chart.series_entry_mut(shifted).unwrap().line_color = Some("#ff00ff".into());
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.set_visible_logical_range(0.0, 40.0);
+
+    let unshifted_frame = chart.build_frame();
+    let magenta = Color::rgb(0xff, 0x00, 0xff);
+    let first_x = |frame: &ChartFrame| -> f32 {
+        frame.panes[0]
+            .main
+            .iter()
+            .find_map(|p| match p {
+                Prim::Polyline {
+                    first_point, color, ..
+                } if *color == magenta => Some(frame.panes[0].points[*first_point as usize][0]),
+                _ => None,
+            })
+            .expect("shifted polyline present")
+    };
+    let x_before = first_x(&unshifted_frame);
+
+    assert!(chart.set_series_bar_offset(shifted, 5));
+    let shifted_frame = chart.build_frame();
+    let x_after = first_x(&shifted_frame);
+    let expected_delta = (5.0 * chart.time_scale.bar_spacing()) as f32;
+    assert!(
+        ((x_after - x_before) - expected_delta).abs() < 1.5,
+        "bar_offset +5 shifted x from {x_before} to {x_after}, expected +{expected_delta}"
+    );
+
+    // Hit test hits at the shifted logical index (row 10 -> logical 15) and misses at unshifted (10).
+    let scale = pane_scale(
+        &chart.panes[0],
+        series_scale_target(chart.series_entry(shifted).unwrap()),
+    );
+    let base = chart.series_base_value(shifted, 0).unwrap();
+    let y_row10 = scale.price_to_coordinate(vals[10], base);
+    let x_shifted = chart.time_scale.index_to_coordinate(15);
+    assert!(
+        chart
+            .hit_test_one_series(shifted, x_shifted, y_row10)
+            .is_some(),
+        "hit test must follow positive bar_offset"
+    );
+}
+
+#[test]
+fn v6_oscillator_reference_lines_and_mfi_threshold_emit_in_frame() {
+    let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+    let n = 40;
+    let times: Vec<f64> = (0..n).map(|i| 1_700_000_000.0 + i as f64 * 60.0).collect();
+    let closes: Vec<f64> = (0..n)
+        .map(|i| 100.0 + (i as f64 * 0.3).sin() * 6.0)
+        .collect();
+    let highs: Vec<f64> = closes.iter().map(|c| c + 2.0).collect();
+    let lows: Vec<f64> = closes.iter().map(|c| c - 2.0).collect();
+    let vols: Vec<f64> = (0..n).map(|i| 100.0 + (i % 7) as f64 * 25.0).collect();
+    chart
+        .set_series_data(0, &times, &closes, &highs, &lows, &closes)
+        .unwrap();
+    let vol = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(vol, &times, &vols, &vols, &vols, &vols)
+        .unwrap();
+
+    let rsi = chart.add_rsi(0, 5).unwrap();
+    let macd = chart.add_macd(0, 6, 12, 4);
+    let adx = chart.add_adx_dmi(0, 5);
+    let mfi = chart.add_mfi(0, vol, 5).unwrap();
+    let cmf = chart.add_cmf(0, vol, 5).unwrap();
+    let rvol = chart.add_relative_volume(0, vol, 5).unwrap();
+
+    assert_eq!(
+        chart.series_entry(rsi).unwrap().reference_lines[0].map(|l| l.value),
+        Some(50.0)
+    );
+    assert_eq!(
+        chart.series_entry(macd[0]).unwrap().reference_lines[0].map(|l| l.value),
+        Some(0.0)
+    );
+    assert_eq!(
+        chart.series_entry(adx[0]).unwrap().reference_lines[0].map(|l| l.value),
+        Some(25.0)
+    );
+    assert_eq!(
+        chart.series_entry(mfi).unwrap().threshold_region,
+        Some(SeriesThresholdRegion {
+            lower: 20.0,
+            upper: 80.0
+        })
+    );
+    assert_eq!(
+        chart.series_entry(cmf).unwrap().reference_lines[0].map(|l| l.value),
+        Some(0.0)
+    );
+    assert_eq!(
+        chart.series_entry(rvol).unwrap().reference_lines[0].map(|l| l.value),
+        Some(1.0)
+    );
+
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let frame = chart.build_frame();
+    for id in [rsi, macd[0], adx[0], cmf, rvol] {
+        let pane_idx = chart.series_entry(id).unwrap().pane_index;
+        let has_dashed = frame.panes[pane_idx].main.iter().any(|p| {
+            matches!(
+                p,
+                Prim::HLine {
+                    style: LineStyle::Dashed,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_dashed,
+            "series {id} pane must emit its dashed reference line"
+        );
+    }
+    let mfi_pane = chart.series_entry(mfi).unwrap().pane_index;
+    assert!(
+        frame.panes[mfi_pane].main.iter().any(
+            |p| matches!(p, Prim::Rect { color, .. } if *color == THRESHOLD_REGION_FILL_COLOR)
+        ),
+        "MFI pane must emit its 20/80 threshold band fill"
+    );
+}

@@ -360,6 +360,25 @@ pub(crate) struct IndicatorBinding {
     pub(crate) source_generation: u64,
     pub(crate) volume_generation: Option<u64>,
     pub(crate) inputs: BindingInputs,
+    /// Sorted UTC timestamps where a new period/session begins for segmented studies
+    /// (Pivot Points, Session Levels, Previous Period Levels, Opening Range, VWAP Bands).
+    pub(crate) segment_break_times: Vec<i64>,
+}
+
+/// Fill policy between an indicator output and its companion lower/opposite band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BandFillMode {
+    /// Uniform translucent fill using the upper output's resolved color at `alpha`.
+    Uniform { alpha: f64 },
+    /// Two-tone cloud fill (e.g. Ichimoku Kumo), splitting cleanly at exact crossover intersections.
+    Directional { bullish: Color, bearish: Color },
+}
+
+/// Shared engine descriptor for a band or cloud fill emitted underneath the strokes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BandFillSpec {
+    pub(crate) companion: SeriesId,
+    pub(crate) mode: BandFillMode,
 }
 
 /// A binding's derived price input (HL2 and the other averages) and its volume aligned to the
@@ -607,14 +626,382 @@ pub struct IndicatorParameters {
 }
 
 fn indicator_default_line_width(kind: &IndicatorKind, output_index: usize) -> f64 {
-    // The volume average is a thin guide over the columns, like EMA.
+    // The volume average and cloud/band guide edges are thin guides, like EMA.
     if matches!(kind, IndicatorKind::Volume { .. }) && output_index == 1 {
+        return 1.0;
+    }
+    if matches!(kind, IndicatorKind::Ichimoku) && matches!(output_index, 2 | 3) {
+        return 1.0;
+    }
+    if matches!(kind, IndicatorKind::VwapBands { .. }) && output_index > 0 {
         return 1.0;
     }
     if matches!(kind, IndicatorKind::Ema { .. }) {
         1.0
     } else {
         2.0
+    }
+}
+
+/// Deterministic MA palette cycle (slot 0 keeps canonical `DEFAULT_LINE_COLOR` so single-MA
+/// charts stay consistent; subsequent MAs step through distinct high-contrast hues).
+const MA_PALETTE: [SeriesDefaultColor; 6] = [
+    SeriesDefaultColor::Fixed(crate::DEFAULT_LINE_COLOR),
+    SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xff, 0x98, 0x00),
+        light: Color::rgb(0xe6, 0x51, 0x00),
+    },
+    SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xab, 0x47, 0xbc),
+        light: Color::rgb(0x8e, 0x24, 0xaa),
+    },
+    SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x00, 0xbc, 0xd4),
+        light: Color::rgb(0x00, 0x83, 0x8f),
+    },
+    SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xec, 0x40, 0x7a),
+        light: Color::rgb(0xc2, 0x18, 0x5b),
+    },
+    SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x66, 0xbb, 0x6a),
+        light: Color::rgb(0x2e, 0x7d, 0x32),
+    },
+];
+
+fn is_moving_average_kind(kind: &IndicatorKind) -> bool {
+    matches!(
+        kind,
+        IndicatorKind::Sma { .. } | IndicatorKind::Ema { .. } | IndicatorKind::Vwma { .. }
+    )
+}
+
+fn indicator_default_color(
+    kind: &IndicatorKind,
+    output_index: usize,
+    ma_cycle_index: usize,
+) -> (Option<MarketTone>, Option<SeriesDefaultColor>) {
+    const AMBER: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xff, 0x98, 0x00),
+        light: Color::rgb(0xe6, 0x51, 0x00),
+    };
+    const GOLD: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xff, 0xca, 0x28),
+        light: Color::rgb(0xd9, 0x77, 0x06),
+    };
+    const PURPLE: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xab, 0x47, 0xbc),
+        light: Color::rgb(0x8e, 0x24, 0xaa),
+    };
+    const CYAN: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x26, 0xc6, 0xda),
+        light: Color::rgb(0x00, 0x83, 0x8f),
+    };
+    const SKY: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x29, 0xb6, 0xf6),
+        light: Color::rgb(0x02, 0x77, 0xbd),
+    };
+    const TEAL: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x26, 0xa6, 0x9a),
+        light: Color::rgb(0x00, 0x79, 0x6b),
+    };
+    const CORAL: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0xff, 0x70, 0x43),
+        light: Color::rgb(0xd8, 0x43, 0x15),
+    };
+    const SLATE: SeriesDefaultColor = SeriesDefaultColor::Themed {
+        dark: Color::rgb(0x90, 0xa4, 0xae),
+        light: Color::rgb(0x54, 0x6e, 0x7a),
+    };
+    const ROYAL_BLUE: SeriesDefaultColor = SeriesDefaultColor::Fixed(Color::rgb(0x29, 0x62, 0xff));
+    const CRIMSON: SeriesDefaultColor = SeriesDefaultColor::Fixed(Color::rgb(0xef, 0x53, 0x50));
+    match kind {
+        IndicatorKind::Sma { .. } | IndicatorKind::Ema { .. } | IndicatorKind::Vwma { .. } => {
+            (None, Some(MA_PALETTE[ma_cycle_index % MA_PALETTE.len()]))
+        }
+        IndicatorKind::Bollinger { .. } => match output_index {
+            0 | 2 => (
+                None,
+                Some(SeriesDefaultColor::Fixed(crate::DEFAULT_LINE_COLOR)),
+            ),
+            1 => (None, Some(AMBER)),
+            _ => (None, None),
+        },
+        IndicatorKind::Keltner { .. } => match output_index {
+            0 | 2 => (None, Some(TEAL)),
+            1 => (None, Some(AMBER)),
+            _ => (None, None),
+        },
+        IndicatorKind::Donchian { .. } => match output_index {
+            0 | 2 => (None, Some(SKY)),
+            1 => (None, Some(SLATE)),
+            _ => (None, None),
+        },
+        IndicatorKind::Macd { .. } => match output_index {
+            0 => (None, Some(ROYAL_BLUE)),
+            1 => (None, Some(AMBER)),
+            _ => (None, None),
+        },
+        IndicatorKind::Stochastic { .. } => match output_index {
+            0 => (None, Some(ROYAL_BLUE)),
+            1 => (None, Some(AMBER)),
+            _ => (None, None),
+        },
+        IndicatorKind::StochasticRsi { .. } => (None, Some(ROYAL_BLUE)),
+        IndicatorKind::Rsi { .. } => (None, Some(PURPLE)),
+        IndicatorKind::Cci { .. } => (None, Some(CYAN)),
+        IndicatorKind::Atr { .. } => (None, Some(CORAL)),
+        IndicatorKind::AdxDmi { .. } => match output_index {
+            0 => (Some(MarketTone::Up), None),
+            1 => (Some(MarketTone::Down), None),
+            2 => (None, Some(GOLD)),
+            _ => (None, None),
+        },
+        IndicatorKind::Ichimoku => match output_index {
+            0 => (None, Some(ROYAL_BLUE)),
+            1 => (None, Some(CRIMSON)),
+            2 => (Some(MarketTone::Up), None),
+            3 => (Some(MarketTone::Down), None),
+            4 => (None, Some(PURPLE)),
+            _ => (None, None),
+        },
+        IndicatorKind::PivotPoints { .. } => match output_index {
+            0 => (None, Some(GOLD)),
+            1 | 3 => (Some(MarketTone::Down), None),
+            2 | 4 => (Some(MarketTone::Up), None),
+            _ => (None, None),
+        },
+        IndicatorKind::SessionLevels { .. } | IndicatorKind::SwingPoints { .. } => {
+            match output_index {
+                0 => (Some(MarketTone::Up), None),
+                1 => (Some(MarketTone::Down), None),
+                _ => (None, None),
+            }
+        }
+        IndicatorKind::PreviousPeriodLevels { .. } => match output_index {
+            0 => (Some(MarketTone::Up), None),
+            1 => (Some(MarketTone::Down), None),
+            2 => (None, Some(GOLD)),
+            _ => (None, None),
+        },
+        IndicatorKind::OpeningRange { .. } => match output_index {
+            0 | 1 => (None, Some(SKY)),
+            2 => (None, Some(SLATE)),
+            _ => (None, None),
+        },
+        IndicatorKind::Vwap => (None, Some(GOLD)),
+        IndicatorKind::VwapBands { .. } => match output_index {
+            0 => (None, Some(GOLD)),
+            1 | 2 => (None, Some(SKY)),
+            3 | 4 => (None, Some(TEAL)),
+            _ => (None, None),
+        },
+        IndicatorKind::Volume { .. } => match output_index {
+            1 => (None, Some(AMBER)),
+            _ => (None, None),
+        },
+        IndicatorKind::Obv => (None, Some(CYAN)),
+        IndicatorKind::RelativeVolume { .. } => (None, Some(SKY)),
+        IndicatorKind::Cmf { .. } => (Some(MarketTone::Up), None),
+        IndicatorKind::Mfi { .. } => (None, Some(PURPLE)),
+        IndicatorKind::SuperTrend { .. } => (Some(MarketTone::Up), None),
+        IndicatorKind::ParabolicSar => (None, Some(GOLD)),
+        IndicatorKind::Custom { .. } => (None, None),
+    }
+}
+
+fn indicator_default_line_style(kind: &IndicatorKind, output_index: usize) -> u8 {
+    match kind {
+        IndicatorKind::Donchian { .. } if output_index == 1 => 2, // Dashed midline
+        IndicatorKind::OpeningRange { .. } if output_index == 2 => 2, // Dashed OR mid
+        IndicatorKind::PreviousPeriodLevels { .. } if output_index == 2 => 2, // Dashed prior close
+        IndicatorKind::VwapBands { .. } if output_index >= 3 => 2, // Dashed % bands
+        _ => 0,
+    }
+}
+
+fn indicator_default_line_break_mode(kind: &IndicatorKind) -> LineBreakMode {
+    match kind {
+        IndicatorKind::PivotPoints { .. }
+        | IndicatorKind::SessionLevels { .. }
+        | IndicatorKind::PreviousPeriodLevels { .. }
+        | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::VwapBands { .. } => LineBreakMode::OnSegmentBreak,
+        _ => LineBreakMode::Continuous,
+    }
+}
+
+fn indicator_default_level_tag(kind: &IndicatorKind, output_index: usize) -> Option<String> {
+    let tag: &str = match kind {
+        IndicatorKind::PivotPoints { .. } => ["P", "R1", "S1", "R2", "S2"].get(output_index)?,
+        IndicatorKind::SessionLevels { .. } => ["SH", "SL"].get(output_index)?,
+        IndicatorKind::PreviousPeriodLevels { period, .. } => match period {
+            PreviousPeriod::Day => ["PDH", "PDL", "PDC"].get(output_index)?,
+            PreviousPeriod::Week => ["PWH", "PWL", "PWC"].get(output_index)?,
+            PreviousPeriod::Month => ["PMH", "PML", "PMC"].get(output_index)?,
+        },
+        IndicatorKind::OpeningRange { .. } => ["ORH", "ORL", "ORM"].get(output_index)?,
+        _ => return None,
+    };
+    Some(tag.to_string())
+}
+
+fn indicator_default_reference_lines(
+    kind: &IndicatorKind,
+    output_index: usize,
+) -> [Option<SeriesReferenceLine>; MAX_SERIES_REFERENCE_LINES] {
+    let mut lines = [None; MAX_SERIES_REFERENCE_LINES];
+    if output_index != 0 {
+        return lines;
+    }
+    let dashed = |value: f64| {
+        Some(SeriesReferenceLine {
+            value,
+            style: LineStyle::Dashed,
+            color: None,
+        })
+    };
+    match kind {
+        IndicatorKind::Rsi { .. } => {
+            lines[0] = dashed(50.0);
+        }
+        IndicatorKind::Macd { .. } | IndicatorKind::Cci { .. } | IndicatorKind::Cmf { .. } => {
+            lines[0] = dashed(0.0);
+        }
+        IndicatorKind::AdxDmi { .. } => {
+            lines[0] = dashed(25.0);
+        }
+        IndicatorKind::RelativeVolume { .. } => {
+            lines[0] = dashed(1.0);
+        }
+        _ => {}
+    }
+    lines
+}
+
+fn utc_month_key(time_seconds: i64) -> i64 {
+    let z = time_seconds.div_euclid(86_400) + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + i64::from(m <= 2);
+    year * 12 + (m - 1)
+}
+
+fn host_session_key(spans: &[aeris_charts_indicators::SessionSpan], time: i64) -> Option<i64> {
+    if spans.is_empty() {
+        return None;
+    }
+    let idx = spans.partition_point(|span| span.start <= time);
+    if idx == 0 {
+        return None;
+    }
+    let mut group_idx = idx - 1;
+    let span = spans[group_idx];
+    if time < span.start || time >= span.end || span.start >= span.end {
+        return None;
+    }
+    // Walk back across adjacent spans sharing the same session_id so merged pieces keep one key.
+    while group_idx > 0 {
+        let prev = spans[group_idx - 1];
+        if prev.end == spans[group_idx].start
+            && prev.session_id == span.session_id
+            && prev.start < prev.end
+        {
+            group_idx -= 1;
+        } else {
+            break;
+        }
+    }
+    Some(group_idx as i64)
+}
+
+fn segment_period_key(
+    kind: &IndicatorKind,
+    calendar: Option<StudyCalendarPolicy>,
+    host_spans: &[aeris_charts_indicators::SessionSpan],
+    time: i64,
+) -> Option<i64> {
+    let utc_day = |t: i64| t.div_euclid(86_400);
+    let utc_week = |t: i64| (utc_day(t) + 3).div_euclid(7);
+    match kind {
+        IndicatorKind::PivotPoints { .. } => Some(utc_day(time)),
+        IndicatorKind::SessionLevels { .. } | IndicatorKind::OpeningRange { .. } => {
+            if calendar == Some(StudyCalendarPolicy::Host) {
+                host_session_key(host_spans, time)
+            } else {
+                Some(utc_day(time))
+            }
+        }
+        IndicatorKind::PreviousPeriodLevels { period, .. } => match period {
+            PreviousPeriod::Day => {
+                if calendar == Some(StudyCalendarPolicy::Host) {
+                    host_session_key(host_spans, time)
+                } else {
+                    Some(utc_day(time))
+                }
+            }
+            PreviousPeriod::Week => Some(utc_week(time)),
+            PreviousPeriod::Month => Some(utc_month_key(time)),
+        },
+        IndicatorKind::VwapBands { reset, .. } => match reset {
+            VwapReset::Session => Some(utc_day(time)),
+            VwapReset::Weekly => Some(utc_week(time)),
+            VwapReset::Monthly => Some(utc_month_key(time)),
+        },
+        _ => None,
+    }
+}
+
+/// Incrementally refresh sorted UTC break timestamps from source row `from` onward.
+/// O(1) on ordinary tip appends and replacements.
+fn update_segment_break_times(
+    breaks: &mut Vec<i64>,
+    kind: &IndicatorKind,
+    calendar: Option<StudyCalendarPolicy>,
+    host_spans: &[aeris_charts_indicators::SessionSpan],
+    times: &[i64],
+    from: usize,
+    full_replace: bool,
+) {
+    if indicator_default_line_break_mode(kind) != LineBreakMode::OnSegmentBreak {
+        breaks.clear();
+        return;
+    }
+    if times.is_empty() {
+        breaks.clear();
+        return;
+    }
+    let start = if full_replace {
+        0
+    } else {
+        from.min(times.len())
+    };
+    if start == 0 {
+        breaks.clear();
+    } else if let Some(&cutoff) = times.get(start) {
+        let keep = breaks.partition_point(|&t| t < cutoff);
+        breaks.truncate(keep);
+    }
+    let mut prev_key = if start > 0 {
+        segment_period_key(kind, calendar, host_spans, times[start - 1])
+    } else {
+        None
+    };
+    let scan_start = start.max(1);
+    if start == 0 {
+        prev_key = segment_period_key(kind, calendar, host_spans, times[0]);
+    }
+    for &time in &times[scan_start..] {
+        let key = segment_period_key(kind, calendar, host_spans, time);
+        if prev_key.is_some() && key != prev_key {
+            breaks.push(time);
+        }
+        prev_key = key;
     }
 }
 
@@ -690,6 +1077,7 @@ impl ChartEngine {
                 };
                 series.countdown_visible = false;
                 series.line_width = Some(indicator_default_line_width(&kind, output_index));
+                series.line_style = indicator_default_line_style(&kind, output_index);
                 series.line_color = None;
                 if let Some(style) = custom_style {
                     series.visible = style.visible;
@@ -765,7 +1153,8 @@ impl ChartEngine {
                         .annotations
                         .as_ref()
                         .map_or(0, StudyAnnotations::capacity_bytes)
-                    + binding.inputs.capacity_bytes(),
+                    + binding.inputs.capacity_bytes()
+                    + binding.segment_break_times.capacity() * std::mem::size_of::<i64>(),
                 usage.1
                     + match &binding.runtime {
                         BindingRuntime::BuiltIn(runtime) => runtime.transfer_capacity_bytes(),
@@ -2068,20 +2457,78 @@ impl ChartEngine {
         Some((binding.source, annotations))
     }
 
-    /// The band-fill companion for an output series: when `id` is a band UPPER
-    /// (output slot 0), the LOWER series (slot 2) the fill closes toward, else `None`. The
-    /// frame builder paints the fill between them under the band strokes (the public reference's
-    /// background fill).
-    pub(crate) fn band_fill_companion(&self, id: SeriesId) -> Option<SeriesId> {
-        self.indicators.iter().find_map(|binding| {
-            if matches!(binding.kind, IndicatorKind::Bollinger { .. })
-                && binding.outputs.first() == Some(&id)
-            {
-                binding.outputs.get(2).copied()
-            } else {
-                None
-            }
-        })
+    /// Generalized band/cloud fill descriptor for an output series: returns the companion output
+    /// and fill policy (uniform translucent fill or directional crossover-split Kumo cloud), or
+    /// `None` when `id` does not anchor a band fill.
+    pub(crate) fn band_fill_spec(&self, id: SeriesId) -> Option<BandFillSpec> {
+        let market = self.market_colors();
+        self.indicators
+            .iter()
+            .find_map(|binding| match binding.kind {
+                IndicatorKind::Bollinger { .. } if binding.outputs.first() == Some(&id) => binding
+                    .outputs
+                    .get(2)
+                    .copied()
+                    .map(|companion| BandFillSpec {
+                        companion,
+                        mode: BandFillMode::Uniform { alpha: 0.2 },
+                    }),
+                IndicatorKind::Keltner { .. } | IndicatorKind::Donchian { .. }
+                    if binding.outputs.first() == Some(&id) =>
+                {
+                    binding
+                        .outputs
+                        .get(2)
+                        .copied()
+                        .map(|companion| BandFillSpec {
+                            companion,
+                            mode: BandFillMode::Uniform { alpha: 0.14 },
+                        })
+                }
+                IndicatorKind::OpeningRange { .. } if binding.outputs.first() == Some(&id) => {
+                    binding
+                        .outputs
+                        .get(1)
+                        .copied()
+                        .map(|companion| BandFillSpec {
+                            companion,
+                            mode: BandFillMode::Uniform { alpha: 0.10 },
+                        })
+                }
+                IndicatorKind::VwapBands { .. } if binding.outputs.get(1) == Some(&id) => binding
+                    .outputs
+                    .get(2)
+                    .copied()
+                    .map(|companion| BandFillSpec {
+                        companion,
+                        mode: BandFillMode::Uniform { alpha: 0.12 },
+                    }),
+                IndicatorKind::Ichimoku if binding.outputs.get(2) == Some(&id) => binding
+                    .outputs
+                    .get(3)
+                    .copied()
+                    .map(|companion| BandFillSpec {
+                        companion,
+                        mode: BandFillMode::Directional {
+                            bullish: Color::rgba(market.up.r(), market.up.g(), market.up.b(), 46),
+                            bearish: Color::rgba(
+                                market.down.r(),
+                                market.down.g(),
+                                market.down.b(),
+                                46,
+                            ),
+                        },
+                    }),
+                _ => None,
+            })
+    }
+
+    /// Sorted UTC timestamps where segmented period/session studies break their stroke & fills.
+    pub(crate) fn series_segment_break_times(&self, id: SeriesId) -> &[i64] {
+        self.indicators
+            .iter()
+            .find(|binding| binding.outputs.contains(&id))
+            .map_or(&[], |binding| binding.segment_break_times.as_slice())
     }
 
     /// Drop every indicator binding that reads from or writes to `id`, returning the output series
@@ -2219,14 +2666,22 @@ impl ChartEngine {
         let source_placement = self
             .series_entry(source)
             .map(|series| (series.pane_index, series.price_scale_target));
+        let ma_cycle_index = if is_moving_average_kind(&kind) {
+            self.indicators
+                .iter()
+                .filter(|binding| binding.source == source && is_moving_average_kind(&binding.kind))
+                .count()
+        } else {
+            0
+        };
         let ids = (0..output_count)
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
         // bar close), the auto-generated name chip shows (platforms override the name through
-        // the series `title` option — custom-script indicators will set their own), and the
-        // line draws at its kind's default width without a last-price pulse — every default is
-        // overridable through the ordinary series options.
+        // the series `title` option — custom-script indicators will set their own), and each
+        // output gets its semantic default palette, stroke style, break policy, reference lines,
+        // and level tag — every visual default remains overridable through ordinary series options.
         for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
@@ -2235,6 +2690,14 @@ impl ChartEngine {
                 s.price_line_visible = self.indicator_chrome.price_lines_visible;
                 s.title = indicator_output_title(&kind, output_index, self.language);
                 s.line_width = Some(indicator_default_line_width(&kind, output_index));
+                s.line_style = indicator_default_line_style(&kind, output_index);
+                let (tone, default_color) =
+                    indicator_default_color(&kind, output_index, ma_cycle_index);
+                s.market_tone = tone;
+                s.default_line_color = default_color;
+                s.line_break_mode = indicator_default_line_break_mode(&kind);
+                s.level_tag = indicator_default_level_tag(&kind, output_index);
+                s.reference_lines = indicator_default_reference_lines(&kind, output_index);
                 if matches!(
                     kind,
                     IndicatorKind::SwingPoints { .. }
@@ -2257,17 +2720,15 @@ impl ChartEngine {
                             lower: 30.0,
                             upper: 70.0,
                         }),
-                        IndicatorKind::Stochastic { .. } => Some(SeriesThresholdRegion {
+                        IndicatorKind::Stochastic { .. }
+                        | IndicatorKind::StochasticRsi { .. }
+                        | IndicatorKind::Mfi { .. } => Some(SeriesThresholdRegion {
                             lower: 20.0,
                             upper: 80.0,
                         }),
                         IndicatorKind::Cci { .. } => Some(SeriesThresholdRegion {
                             lower: -100.0,
                             upper: 100.0,
-                        }),
-                        IndicatorKind::StochasticRsi { .. } => Some(SeriesThresholdRegion {
-                            lower: 20.0,
-                            upper: 80.0,
                         }),
                         _ => None,
                     };
@@ -2301,6 +2762,7 @@ impl ChartEngine {
             source_generation: 0,
             volume_generation: None,
             inputs: BindingInputs::default(),
+            segment_break_times: Vec::new(),
         });
         self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         ids
@@ -2537,6 +2999,18 @@ impl ChartEngine {
             SessionSource::Utc
         };
         let kind = session_study_kind(&self.indicators[index].kind).expect("session kind");
+        {
+            let binding = &mut self.indicators[index];
+            update_segment_break_times(
+                &mut binding.segment_break_times,
+                &binding.kind,
+                binding.calendar,
+                &self.study_calendar_spans,
+                times,
+                from,
+                full_replace,
+            );
+        }
         let state = self.indicators[index]
             .session
             .as_mut()
@@ -2690,6 +3164,15 @@ impl ChartEngine {
                     volume: volume.get(first_source..).unwrap_or(&[]),
                 },
                 if reset { 0 } else { from - first_source },
+            );
+            update_segment_break_times(
+                &mut binding.segment_break_times,
+                &binding.kind,
+                binding.calendar,
+                &self.study_calendar_spans,
+                times,
+                from,
+                full_replace,
             );
             first_source
         };
