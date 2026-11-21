@@ -278,11 +278,6 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
-    pub fn add_aroon(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        self.engine
-            .add_aroon(source_id as SeriesId, period as usize)
-    }
-
     pub fn add_swing_points(&mut self, source_id: u32, left: u32, right: u32) -> Vec<u32> {
         self.engine
             .add_swing_points(source_id as SeriesId, left as usize, right as usize)
@@ -338,51 +333,6 @@ impl ChartInner {
             .add_opening_range(source_id as SeriesId, duration_seconds, calendar)
     }
 
-    pub fn add_awesome_oscillator(&mut self, source_id: u32) -> u32 {
-        self.engine
-            .add_awesome_oscillator(source_id as SeriesId)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_dpo(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_dpo(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_chande_momentum(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_chande_momentum(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_bollinger_metrics(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        deviation: f64,
-    ) -> Vec<u32> {
-        self.engine
-            .add_bollinger_metrics(source_id as SeriesId, period as usize, deviation)
-    }
-
-    pub fn add_envelopes(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        percent: f64,
-        exponential: bool,
-    ) -> Vec<u32> {
-        self.engine
-            .add_envelopes(source_id as SeriesId, period as usize, percent, exponential)
-    }
-
-    pub fn add_alma(&mut self, source_id: u32, period: u32, offset: f64, sigma: f64) -> u32 {
-        self.engine
-            .add_alma(source_id as SeriesId, period as usize, offset, sigma)
-            .unwrap_or(u32::MAX)
-    }
-
     pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
         let Some(source_input) = Self::indicator_input_source(source) else {
             return u32::MAX;
@@ -407,34 +357,6 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
-    pub fn add_dema(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_dema(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_tema(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_tema(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_smma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_smma(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_rma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.add_smma(source_id, period)
-    }
-
-    pub fn add_hma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_hma(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
     pub fn add_vwma(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
         let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
         self.engine
@@ -442,21 +364,9 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
-    pub fn add_standard_deviation(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_standard_deviation(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
     pub fn add_cci(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_cci(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_williams_r(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_williams_r(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
     }
 
@@ -475,18 +385,6 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
-    pub fn add_momentum(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_momentum(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_roc(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_roc(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.engine
             .add_donchian(source_id as SeriesId, period as usize)
@@ -497,11 +395,6 @@ impl ChartInner {
             return Vec::new();
         };
         self.engine.add_pivot_points(source_id as SeriesId, kind)
-    }
-
-    pub fn add_zigzag(&mut self, source_id: u32, deviation_percent: f64) -> u32 {
-        self.engine
-            .add_zigzag(source_id as SeriesId, deviation_percent)
     }
 
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
@@ -624,117 +517,6 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
-    pub fn add_accumulation_distribution(&mut self, source_id: u32, volume_source: i32) -> u32 {
-        if volume_source < 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_accumulation_distribution(source_id as SeriesId, volume_source as SeriesId)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_price_volume_trend(&mut self, source_id: u32, volume_source: i32) -> u32 {
-        if volume_source < 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_price_volume_trend(source_id as SeriesId, volume_source as SeriesId)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_chaikin_oscillator(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-    ) -> u32 {
-        if volume_source < 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_chaikin_oscillator(
-                source_id as SeriesId,
-                volume_source as SeriesId,
-                fast as usize,
-                slow as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_klinger(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-        signal: u32,
-    ) -> Vec<u32> {
-        if volume_source < 0 || fast == 0 || fast >= slow || signal == 0 {
-            return Vec::new();
-        }
-        self.engine.add_klinger(
-            source_id as SeriesId,
-            volume_source as SeriesId,
-            fast as usize,
-            slow as usize,
-            signal as usize,
-        )
-    }
-
-    pub fn add_kama(&mut self, source_id: u32, period: u32, fast: u32, slow: u32) -> u32 {
-        if period == 0 || fast == 0 || fast >= slow {
-            return u32::MAX;
-        }
-        self.engine
-            .add_kama(
-                source_id as SeriesId,
-                period as usize,
-                fast as usize,
-                slow as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_mcginley(&mut self, source_id: u32, period: u32) -> u32 {
-        if period == 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_mcginley(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_linear_regression(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        deviation: f64,
-    ) -> Vec<u32> {
-        if period == 0 || !deviation.is_finite() || deviation < 0.0 {
-            return Vec::new();
-        }
-        self.engine
-            .add_linear_regression(source_id as SeriesId, period as usize, deviation)
-    }
-
-    pub fn add_choppiness(&mut self, source_id: u32, period: u32) -> u32 {
-        if period < 2 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_choppiness(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_atr_bands(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
-        if period == 0 || !multiplier.is_finite() || multiplier < 0.0 {
-            return Vec::new();
-        }
-        self.engine
-            .add_atr_bands(source_id as SeriesId, period as usize, multiplier)
-    }
-
     pub fn add_relative_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
         if volume_source < 0 {
             return u32::MAX;
@@ -744,170 +526,6 @@ impl ChartInner {
                 source_id as SeriesId,
                 volume_source as SeriesId,
                 period as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_volume_oscillator(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-        signal: u32,
-    ) -> Vec<u32> {
-        if volume_source < 0 {
-            return Vec::new();
-        }
-        self.engine.add_volume_oscillator(
-            source_id as SeriesId,
-            volume_source as SeriesId,
-            fast as usize,
-            slow as usize,
-            signal as usize,
-        )
-    }
-
-    pub fn add_elder_force(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
-        if volume_source < 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_elder_force(
-                source_id as SeriesId,
-                volume_source as SeriesId,
-                period as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_ease_of_movement(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        period: u32,
-        divisor: f64,
-    ) -> u32 {
-        if volume_source < 0 {
-            return u32::MAX;
-        }
-        self.engine
-            .add_ease_of_movement(
-                source_id as SeriesId,
-                volume_source as SeriesId,
-                period as usize,
-                divisor,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_historical_volatility(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        annualization: f64,
-    ) -> u32 {
-        self.engine
-            .add_historical_volatility(source_id as SeriesId, period as usize, annualization)
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_trix(&mut self, source_id: u32, period: u32, signal: u32) -> Vec<u32> {
-        self.engine
-            .add_trix(source_id as SeriesId, period as usize, signal as usize)
-    }
-
-    pub fn add_kst(
-        &mut self,
-        source_id: u32,
-        roc: [u32; 4],
-        smoothing: [u32; 4],
-        signal: u32,
-    ) -> Vec<u32> {
-        if roc
-            .iter()
-            .chain(smoothing.iter())
-            .chain([&signal])
-            .any(|&p| p == 0)
-        {
-            return Vec::new();
-        }
-        self.engine.add_kst(
-            source_id as SeriesId,
-            roc.map(|p| p as usize),
-            smoothing.map(|p| p as usize),
-            signal as usize,
-        )
-    }
-
-    pub fn add_tsi(&mut self, source_id: u32, long: u32, short: u32, signal: u32) -> Vec<u32> {
-        if [long, short, signal].contains(&0) {
-            return Vec::new();
-        }
-        self.engine.add_tsi(
-            source_id as SeriesId,
-            long as usize,
-            short as usize,
-            signal as usize,
-        )
-    }
-
-    pub fn add_mass_index(&mut self, source_id: u32, ema_period: u32, sum_period: u32) -> u32 {
-        if [ema_period, sum_period].contains(&0) {
-            return u32::MAX;
-        }
-        self.engine
-            .add_mass_index(
-                source_id as SeriesId,
-                ema_period as usize,
-                sum_period as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_vortex(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        if period == 0 {
-            return Vec::new();
-        }
-        self.engine
-            .add_vortex(source_id as SeriesId, period as usize)
-    }
-
-    pub fn add_coppock_curve(
-        &mut self,
-        source_id: u32,
-        long: u32,
-        short: u32,
-        smoothing: u32,
-    ) -> u32 {
-        self.engine
-            .add_coppock_curve(
-                source_id as SeriesId,
-                long as usize,
-                short as usize,
-                smoothing as usize,
-            )
-            .unwrap_or(u32::MAX)
-    }
-
-    pub fn add_fisher_transform(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        self.engine
-            .add_fisher_transform(source_id as SeriesId, period as usize)
-    }
-
-    pub fn add_ultimate_oscillator(
-        &mut self,
-        source_id: u32,
-        short: u32,
-        medium: u32,
-        long: u32,
-    ) -> u32 {
-        self.engine
-            .add_ultimate_oscillator(
-                source_id as SeriesId,
-                short as usize,
-                medium as usize,
-                long as usize,
             )
             .unwrap_or(u32::MAX)
     }
@@ -971,12 +589,6 @@ impl ChartInner {
             standard_deviation,
             percent,
         )
-    }
-
-    pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.engine
-            .add_wma(source_id as SeriesId, period as usize)
-            .unwrap_or(u32::MAX)
     }
 
     /// Sets the main series' data (series 0). `times` are ascending UTC seconds.

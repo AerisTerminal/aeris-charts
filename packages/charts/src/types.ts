@@ -1866,7 +1866,7 @@ export interface comparison_legend_entry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "aroon" | "awesome_oscillator" | "dpo" | "chande_momentum" | "bollinger_metrics" | "envelopes" | "alma" | "accumulation_distribution" | "price_volume_trend" | "chaikin_oscillator" | "klinger" | "kama" | "mcginley" | "linear_regression" | "choppiness" | "atr_bands" | "relative_volume" | "volume_oscillator" | "elder_force" | "ease_of_movement" | "historical_volatility" | "trix" | "kst" | "tsi" | "mass_index" | "vortex" | "coppock_curve" | "fisher_transform" | "ultimate_oscillator" | "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "session_levels" | "previous_period_levels" | "opening_range" | "swing_points" | "relative_volume" | "sma" | "ema" | "vwma" | "cci" | "stochastic_rsi" | "donchian" | "pivot_points" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands";
 /** UTC groups by calendar day/week/month; host uses spans supplied by set_study_calendar. */
 export type study_calendar_policy = "utc" | "host";
 export type previous_period = "day" | "week" | "month";
@@ -1989,17 +1989,6 @@ export interface indicator_info {
     standard_deviation: number | null;
     percent: number | null;
     exponential: boolean | null;
-    offset: number | null;
-    sigma: number | null;
-    divisor: number | null;
-    annualization: number | null;
-    long_period: number | null;
-    short_period: number | null;
-    smoothing: number | null;
-    roc: [number, number, number, number] | null;
-    smoothing_periods: [number, number, number, number] | null;
-    ema_period: number | null;
-    sum_period: number | null;
     /** Normalized registered custom-study parameters (null for built-in kinds). */
     custom: Record<string, unknown> | null;
   };
@@ -2026,8 +2015,6 @@ export interface indicator_info {
   output_index: number;
   output_count: number;
 }
-
-export type kst_periods = readonly [number, number, number, number];
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
 export interface series_change_event {
@@ -4812,7 +4799,6 @@ export interface chart_api {
   register_custom_study<State>(definition: custom_study_definition<State>): void;
   add_custom_study(type: string, source: series_api, params?: Record<string, unknown>, options?: custom_study_binding_options): series_api[];
   subscribe_custom_study_fault(callback: (event: custom_study_fault_event) => void): () => void;
-  add_aroon(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api];
   /** Confirmed pivot levels and marker snapshots; levels begin at confirmation, never at the pivot. */
   add_swing_points(source: series_api, left?: number, right?: number, options?: Partial<series_options>): [series_api, series_api];
   /** Intraday running session high/low. Host policy uses set_study_calendar boundaries. */
@@ -4821,21 +4807,10 @@ export interface chart_api {
   add_previous_period_levels(source: series_api, period?: previous_period, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Running opening high/low/mid, fixed after duration_seconds from the session start. */
   add_opening_range(source: series_api, duration_seconds: number, calendar?: study_calendar_policy, options?: Partial<series_options>): [series_api, series_api, series_api];
-  add_awesome_oscillator(source: series_api, options?: Partial<series_options>): series_api;
-  add_dpo(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_chande_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_bollinger_metrics(source: series_api, period: number, deviation: number, options?: Partial<series_options>): [series_api, series_api];
-  add_envelopes(source: series_api, period: number, percent: number, exponential?: boolean, options?: Partial<series_options>): [series_api, series_api, series_api];
-  add_alma(source: series_api, period: number, offset?: number, sigma?: number, options?: Partial<series_options>): series_api;
   /** Add an SMA using an explicit OHLC/aggregate input from the source series. */
   add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_dema(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_tema(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_smma(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_rma(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  add_hma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the industry-standard
    *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
@@ -4862,32 +4837,7 @@ export interface chart_api {
    *  supplies per-bar volume (e.g. the volume histogram series); `null`/omitted = unit weights. */
   add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
   add_obv(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
-  add_accumulation_distribution(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
-  add_price_volume_trend(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
-  add_chaikin_oscillator(source: series_api, fast: number, slow: number, volume_source: series_api, options?: Partial<series_options>): series_api;
-  /** Klinger line and signal. Pass `undefined` for default periods (34/55/13); volume is required. */
-  add_klinger(source: series_api, fast: number | undefined, slow: number | undefined, signal: number | undefined, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api];
-  add_kama(source: series_api, period?: number, fast?: number, slow?: number, options?: Partial<series_options>): series_api;
-  add_mcginley(source: series_api, period?: number, options?: Partial<series_options>): series_api;
-  /** Regression curve, upper and lower residual-deviation bands. */
-  add_linear_regression(source: series_api, period?: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
-  /** Choppiness Index (0–100), in a separate oscillator pane. */
-  add_choppiness(source: series_api, period?: number, options?: Partial<series_options>): series_api;
-  /** Price-pane bands in upper, close-basis, lower order using Wilder ATR. */
-  add_atr_bands(source: series_api, period?: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   add_relative_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
-  add_volume_oscillator(source: series_api, fast: number, slow: number, signal: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api, series_api];
-  add_elder_force(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
-  add_ease_of_movement(source: series_api, period: number, volume_source: series_api, divisor?: number, options?: Partial<series_options>): series_api;
-  add_historical_volatility(source: series_api, period: number, annualization?: number, options?: Partial<series_options>): series_api;
-  add_trix(source: series_api, period: number, signal?: number, options?: Partial<series_options>): [series_api, series_api];
-  add_kst(source: series_api, roc?: kst_periods, smoothing?: kst_periods, signal?: number, options?: Partial<series_options>): [series_api, series_api];
-  add_tsi(source: series_api, long?: number, short?: number, signal?: number, options?: Partial<series_options>): [series_api, series_api];
-  add_mass_index(source: series_api, ema_period?: number, sum_period?: number, options?: Partial<series_options>): series_api;
-  add_vortex(source: series_api, period?: number, options?: Partial<series_options>): [series_api, series_api];
-  add_coppock_curve(source: series_api, long_period?: number, short_period?: number, smoothing?: number, options?: Partial<series_options>): series_api;
-  add_fisher_transform(source: series_api, period?: number, options?: Partial<series_options>): [series_api, series_api];
-  add_ultimate_oscillator(source: series_api, short_period?: number, medium_period?: number, long_period?: number, options?: Partial<series_options>): series_api;
   add_cmf(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_mfi(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api];
@@ -4901,26 +4851,15 @@ export interface chart_api {
   /** Add an options-volume study (calls above zero, puts below) in its own compact pane, fed
    * with host-supplied per-bar call and put volume. */
   add_options_volume(rows?: readonly options_volume_row[]): options_volume_api;
-  /** Add a Rust-native weighted moving-average line (linear weights, recent heaviest). */
-  add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a volume-weighted moving average. `volume_source` is optional and defaults to unit weights. */
   add_vwma(source: series_api, period: number, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
-  add_standard_deviation(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a Commodity Channel Index line in its own oscillator pane with ±100 bands. */
   add_cci(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  /** Add Williams %R in its own oscillator pane with conventional -80/-20 bands. */
-  add_williams_r(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add Stochastic RSI in its own oscillator pane with conventional 20/80 bands. */
   add_stochastic_rsi(source: series_api, rsi_period: number, stochastic_period: number, options?: Partial<series_options>): series_api;
-  /** Add Momentum in its own oscillator pane. */
-  add_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  /** Add Rate of Change (percentage) in its own oscillator pane. */
-  add_roc(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add previous-session pivot, R1, S1, R2, and S2 levels. */
   add_pivot_points(source: series_api, variant?: pivot_kind, options?: Partial<series_options>): [series_api, series_api, series_api, series_api, series_api];
-  /** Add a ZigZag line using a minimum reversal percentage. */
-  add_zigzag(source: series_api, deviation_percent?: number, options?: Partial<series_options>): series_api;
   /** Add Keltner channel upper, middle, and lower lines using an EMA center and Wilder ATR envelope. */
   add_keltner(source: series_api, period: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add +DI, -DI, and ADX lines in an oscillator pane. */

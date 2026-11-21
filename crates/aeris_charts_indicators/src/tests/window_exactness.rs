@@ -23,49 +23,23 @@ const N: usize = 1_300;
 const REPAIR_FROM: usize = 1_021;
 
 /// Kinds whose value at a row depends only on a bounded trailing window of source rows.
-const WINDOW_KINDS: [TestKind; 32] = [
+const WINDOW_KINDS: [TestKind; 11] = [
     TestKind::Sma,
-    TestKind::Wma,
-    TestKind::Hma,
     TestKind::Vwma,
-    TestKind::StandardDeviation,
     TestKind::Cci,
-    TestKind::WilliamsR,
-    TestKind::Momentum,
-    TestKind::RateOfChange,
     TestKind::Donchian,
     TestKind::Ichimoku,
     TestKind::Bollinger,
-    TestKind::BollingerMetrics,
-    TestKind::EnvelopesSma,
-    TestKind::Alma,
     TestKind::Stochastic,
-    TestKind::Aroon,
-    TestKind::AwesomeOscillator,
-    TestKind::Dpo,
-    TestKind::ChandeMomentum,
     TestKind::RelativeVolume,
-    TestKind::EaseOfMovement,
-    TestKind::HistoricalVolatility,
-    TestKind::Kst,
-    TestKind::LinearRegression,
-    TestKind::Choppiness,
-    TestKind::CoppockCurve,
-    TestKind::UltimateOscillator,
-    TestKind::Vortex,
     TestKind::Cmf,
     TestKind::Mfi,
     TestKind::Volume,
 ];
 
-/// Window kinds fed by a recursive stage (RSI, EMA or adaptive smoothing). Their value depends on
+/// Window kinds fed by a recursive stage (RSI). Their value depends on
 /// all history, so no finite-window reference exists; every path must still match dense.
-const RECURSIVE_WINDOW_KINDS: [TestKind; 4] = [
-    TestKind::StochasticRsi,
-    TestKind::MassIndex,
-    TestKind::Kama,
-    TestKind::FisherTransform,
-];
+const RECURSIVE_WINDOW_KINDS: [TestKind; 1] = [TestKind::StochasticRsi];
 
 struct Bars {
     times: Vec<i64>,
@@ -425,12 +399,6 @@ fn handwritten(kind: TestKind, bars: &Bars) -> Option<Vec<Column>> {
     let mean_of = |values: &[f64]| exact(exact_mean(values), mean_abs(values.iter().copied()));
     Some(match kind {
         TestKind::Sma => vec![window(5, &|row| mean_of(&c[row - 4..=row]))],
-        TestKind::Wma => vec![window(5, &|row| {
-            exact(
-                neumaier((0..5).map(|i| (i + 1) as f64 * c[row - 4 + i])) / 15.0,
-                mean_abs(c[row - 4..=row].iter().copied()),
-            )
-        })],
         TestKind::Vwma => vec![window(5, &|row| {
             let rows = row - 4..=row;
             let volume = neumaier(rows.clone().map(|i| v[i].max(0.0)));
@@ -440,63 +408,6 @@ fn handwritten(kind: TestKind, bars: &Bars) -> Option<Vec<Column>> {
                 exact_mean(&c[rows.clone()])
             };
             exact(value, mean_abs(c[rows].iter().copied()))
-        })],
-        TestKind::StandardDeviation => vec![window(5, &|row| {
-            let values = &c[row - 4..=row];
-            let mean = exact_mean(values);
-            exact(
-                (neumaier(values.iter().map(|value| (value - mean).powi(2))) / 5.0).sqrt(),
-                mean.abs(),
-            )
-        })],
-        TestKind::Dpo => vec![window(5, &|row| {
-            let mean = mean_of(&c[row - 4..=row]);
-            exact(c[row - 3] - mean.value, mean.scale)
-        })],
-        TestKind::ChandeMomentum => vec![window(6, &|row| {
-            let deltas = (row - 4..=row).map(|i| c[i] - c[i - 1]).collect::<Vec<_>>();
-            let signed = neumaier(deltas.iter().copied());
-            let absolute = neumaier(deltas.iter().map(|delta| delta.abs()));
-            exact(
-                if absolute == 0.0 {
-                    0.0
-                } else {
-                    100.0 * signed / absolute
-                },
-                100.0,
-            )
-        })],
-        TestKind::EaseOfMovement => vec![window(6, &|row| {
-            let raws = (row - 4..=row)
-                .map(|i| {
-                    if v[i].max(0.0) == 0.0 {
-                        f64::NAN
-                    } else {
-                        ((h[i] + l[i]) * 0.5 - (h[i - 1] + l[i - 1]) * 0.5) * (h[i] - l[i]) * 100.0
-                            / v[i]
-                    }
-                })
-                .collect::<Vec<_>>();
-            if raws.iter().all(|raw| raw.is_finite()) {
-                exact(
-                    neumaier(raws.iter().copied()) / 5.0,
-                    mean_abs(raws.into_iter()),
-                )
-            } else {
-                exact(f64::NAN, 0.0)
-            }
-        })],
-        TestKind::HistoricalVolatility => vec![window(6, &|row| {
-            let returns = (row - 4..=row)
-                .map(|i| c[i].ln() - c[i - 1].ln())
-                .collect::<Vec<_>>();
-            let mean = exact_mean(&returns);
-            let squares = neumaier(returns.iter().map(|value| (value - mean).powi(2)));
-            let factor = 252.0_f64.sqrt() * 100.0;
-            exact(
-                (squares / 4.0).max(0.0).sqrt() * factor,
-                mean.abs() * factor,
-            )
         })],
         TestKind::Cmf => vec![window(5, &|row| {
             let rows = row - 4..=row;
@@ -533,63 +444,6 @@ fn handwritten(kind: TestKind, bars: &Bars) -> Option<Vec<Column>> {
                 100.0,
             )
         })],
-        TestKind::Choppiness => vec![window(6, &|row| {
-            let rows = row - 4..=row;
-            let highest = rows.clone().map(|i| h[i]).fold(f64::NEG_INFINITY, f64::max);
-            let lowest = rows.clone().map(|i| l[i]).fold(f64::INFINITY, f64::min);
-            let true_range = neumaier(rows.map(|i| {
-                (h[i] - l[i])
-                    .max((h[i] - c[i - 1]).abs())
-                    .max((l[i] - c[i - 1]).abs())
-            }));
-            let span = highest - lowest;
-            exact(
-                if span <= 0.0 || true_range <= 0.0 {
-                    f64::NAN
-                } else {
-                    (100.0 * (true_range / span).log10() / 5.0_f64.log10()).clamp(0.0, 100.0)
-                },
-                100.0,
-            )
-        })],
-        TestKind::UltimateOscillator => vec![window(8, &|row| {
-            let mut averages = [0.0; 3];
-            for (average, period) in averages.iter_mut().zip([3, 5, 7]) {
-                let rows = row + 1 - period..=row;
-                let bottom = |i: usize| l[i].min(c[i - 1]);
-                let pressure = neumaier(rows.clone().map(|i| c[i] - bottom(i)));
-                let range = neumaier(rows.map(|i| h[i].max(c[i - 1]) - bottom(i)));
-                if range <= 0.0 {
-                    return exact(f64::NAN, 0.0);
-                }
-                *average = pressure / range;
-            }
-            exact(
-                100.0 * (4.0 * averages[0] + 2.0 * averages[1] + averages[2]) / 7.0,
-                100.0,
-            )
-        })],
-        TestKind::Vortex => {
-            let parts = |row: usize| {
-                let rows = row - 4..=row;
-                let plus = neumaier(rows.clone().map(|i| (h[i] - l[i - 1]).abs()));
-                let minus = neumaier(rows.clone().map(|i| (l[i] - h[i - 1]).abs()));
-                let range = neumaier(rows.map(|i| {
-                    (h[i] - l[i])
-                        .max((h[i] - c[i - 1]).abs())
-                        .max((l[i] - c[i - 1]).abs())
-                }));
-                if range <= 0.0 {
-                    (f64::NAN, f64::NAN)
-                } else {
-                    (plus / range, minus / range)
-                }
-            };
-            vec![
-                window(6, &|row| exact(parts(row).0, 1.0)),
-                window(6, &|row| exact(parts(row).1, 1.0)),
-            ]
-        }
         TestKind::Volume => vec![
             window(1, &|row| exact(v[row].max(0.0), 0.0)),
             window(5, &|row| {
@@ -627,12 +481,9 @@ fn spans(kind: TestKind) -> Vec<usize> {
             },
         )],
     );
-    // The first Ultimate value substitutes the first close for the missing prior close, so its
-    // warm-up is one row shorter than the span every later value depends on.
-    let extra = usize::from(kind == TestKind::UltimateOscillator);
     expected(kind, bars.input(0..=N - 1))
         .iter()
-        .map(|column| column.iter().position(Option::is_some).unwrap() + 1 + extra)
+        .map(|column| column.iter().position(Option::is_some).unwrap() + 1)
         .collect()
 }
 
@@ -744,9 +595,8 @@ fn set_provisional_tip(scratch: &mut Bars, bars: &Bars, row: usize) {
     scratch.volume[row] = bars.volume[row] * 2.0 + 7.0;
 }
 
-/// Kinds whose update may rewrite rows before the changed one: ZigZag repaints its unconfirmed
-/// leg, and PivotPoints carries the current UTC day and the last completed day across rows.
-const REPAINT_KINDS: [TestKind; 2] = [TestKind::PivotPoints, TestKind::ZigZag];
+/// Kinds whose update carries session state across UTC day boundaries.
+const REPAINT_KINDS: [TestKind; 1] = [TestKind::PivotPoints];
 
 /// Apply one update's emitted suffix to engine-style output columns: rows before `output_from`
 /// are kept, later rows are replaced.
@@ -764,7 +614,7 @@ fn apply(state: &IncrementalState, columns: &mut [Vec<f64>], rows: usize) {
 }
 
 /// Every update path, applied to maintained columns, must equal dense on the current prefix after
-/// each step. ZigZag must never re-emit a row before its last confirmed turning point.
+/// each step.
 fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)) {
     let dense_prefix = |rows: usize, bars: &Bars| -> Vec<Vec<f64>> {
         expected(kind, bars.input(0..=rows - 1))
@@ -777,12 +627,7 @@ fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)
         for (column, (actual, expected)) in actual.iter().zip(dense_prefix(rows, bars)).enumerate()
         {
             for (row, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
-                let same = if kind == TestKind::ZigZag {
-                    actual.to_bits() == expected.to_bits()
-                } else {
-                    within(actual, expected, 0.0)
-                };
-                if !same {
+                if !within(actual, expected, 0.0) {
                     return Some(format!(
                         "after row {step}: col {column} row {row}: {actual:e} != {expected:e}"
                     ));
@@ -799,15 +644,6 @@ fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)
         if let Some(detail) = compare(step, actual, bars) {
             fail(path, detail);
         }
-    };
-    let last_confirmed = |columns: &[Vec<f64>]| {
-        let mut turns = columns[0]
-            .iter()
-            .enumerate()
-            .filter(|(_, value)| value.is_finite())
-            .map(|(row, _)| row);
-        let provisional = turns.next_back();
-        provisional.and(turns.next_back())
     };
     let empty = || vec![Vec::new(); dense_prefix(N, bars).len()];
 
@@ -826,14 +662,7 @@ fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)
     let mut tip = empty();
     let mut scratch = with_gaps(bars, &[]);
     for row in 0..N {
-        let confirmed = last_confirmed(&live);
         live_state.rebuild_from(bars.input(0..=row), row);
-        if kind == TestKind::ZigZag && confirmed.is_some_and(|c| live_state.output_from(0) < c) {
-            fail(
-                "live append",
-                format!("row {row} re-emitted before {confirmed:?}"),
-            );
-        }
         apply(&live_state, &mut live, row + 1);
         check(fail, "live append", row, &live, bars);
 
@@ -845,14 +674,7 @@ fn repaint_audit(kind: TestKind, bars: &Bars, fail: &mut dyn FnMut(&str, String)
         scratch.high[row] = bars.high[row];
         scratch.low[row] = bars.low[row];
         scratch.volume[row] = bars.volume[row];
-        let confirmed = last_confirmed(&tip);
         tip_state.rebuild_from(scratch.input(0..=row), row);
-        if kind == TestKind::ZigZag && confirmed.is_some_and(|c| tip_state.output_from(0) < c) {
-            fail(
-                "live tip replace",
-                format!("row {row} re-emitted before {confirmed:?}"),
-            );
-        }
         apply(&tip_state, &mut tip, row + 1);
         check(fail, "live tip replace", row, &tip, bars);
     }
@@ -1003,78 +825,6 @@ fn window_kinds_are_exact_on_alternating_million_dollar_prices() {
 #[test]
 fn window_kinds_are_exact_on_flat_runs_after_million_dollar_moves() {
     audit(7);
-}
-
-/// A flat window has exactly zero movement, so ChandeMomentum, EaseOfMovement and
-/// HistoricalVolatility must be exactly 0 on every path, however large the earlier moves were.
-#[test]
-fn flat_windows_after_moves_larger_than_the_price_are_exactly_zero_on_every_path() {
-    let mut rng = Rng(0x0dd_ba11);
-    let levels = [1.0_f64, 100.0, 1e6];
-    for level in levels.into_iter().cycle().take(48) {
-        let mut close = Vec::new();
-        for row in 0..120 {
-            // Moves larger than the price make the window sums coarser than the price grid, so
-            // an add/subtract sum cannot return to exactly zero once they leave the window.
-            close.push(if row < 60 {
-                level * (1.0 + 2.0 * (row % 2) as f64 + rng.below(1_000) as f64 * 1e-3)
-            } else {
-                level * 1.234_567
-            });
-        }
-        let high = close
-            .iter()
-            .enumerate()
-            .map(|(row, close)| close + 0.25 * (1 + row % 3) as f64)
-            .collect::<Vec<_>>();
-        let low = close
-            .iter()
-            .enumerate()
-            .map(|(row, close)| close - 0.25 * (1 + row % 3) as f64)
-            .collect::<Vec<_>>();
-        let volume = (0..120).map(|row| (row % 7 + 1) as f64).collect::<Vec<_>>();
-        let times = (0..120).collect::<Vec<i64>>();
-        let input = IndicatorInput {
-            times: &times,
-            open: &close,
-            high: &high,
-            low: &low,
-            close: &close,
-            volume: &volume,
-        };
-        for kind in [
-            TestKind::ChandeMomentum,
-            TestKind::EaseOfMovement,
-            TestKind::HistoricalVolatility,
-        ] {
-            let dense = expected(kind, input).remove(0);
-            let mut state = fresh_state(kind);
-            for (path, from) in [("rebuild", 0), ("repair", 62)] {
-                state.rebuild_from(input, from);
-                for (row, value) in dense.iter().enumerate().skip(70) {
-                    let incremental = state.output(0)[row - state.output_from(0)];
-                    assert_eq!(*value, Some(0.0), "{kind:?} level {level} dense row {row}");
-                    assert_eq!(incremental, 0.0, "{kind:?} level {level} {path} row {row}");
-                }
-            }
-            for row in 70..120 {
-                // Install the rows before `row`, then append `row` as a live update.
-                let prefix = |end: usize| IndicatorInput {
-                    times: &times[..end],
-                    open: &close[..end],
-                    high: &high[..end],
-                    low: &low[..end],
-                    close: &close[..end],
-                    volume: &volume[..end],
-                };
-                let mut live = fresh_state(kind);
-                live.rebuild_from(prefix(row), 0);
-                live.rebuild_from(prefix(row + 1), row);
-                let value = live.output(0)[row - live.output_from(0)];
-                assert_eq!(value, 0.0, "{kind:?} level {level} live row {row}");
-            }
-        }
-    }
 }
 
 #[test]

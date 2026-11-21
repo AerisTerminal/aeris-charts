@@ -20,44 +20,53 @@ fn settled_chart() -> ChartEngine {
 #[test]
 fn language_switch_retitles_engine_generated_indicator_titles() {
     let mut chart = settled_chart();
-    let momentum = chart.add_momentum(0, 10).unwrap();
-    assert_eq!(chart.series_entry(momentum).unwrap().title, "Momentum 10");
+    let supertrend = chart.add_supertrend(0, 10, 3.0).unwrap();
+    assert_eq!(
+        chart.series_entry(supertrend).unwrap().title,
+        "SuperTrend 10 3"
+    );
     chart.set_language(ChartLanguage::Russian);
-    assert_eq!(chart.series_entry(momentum).unwrap().title, "Моментум 10");
+    assert_eq!(
+        chart.series_entry(supertrend).unwrap().title,
+        "Супертренд 10 3"
+    );
     chart.set_language(ChartLanguage::English);
-    assert_eq!(chart.series_entry(momentum).unwrap().title, "Momentum 10");
+    assert_eq!(
+        chart.series_entry(supertrend).unwrap().title,
+        "SuperTrend 10 3"
+    );
 }
 
 #[test]
 fn host_overridden_indicator_title_survives_language_switches() {
     let mut chart = settled_chart();
-    let momentum = chart.add_momentum(0, 10).unwrap();
-    chart.series_entry_mut(momentum).unwrap().title = "My study".to_string();
+    let supertrend = chart.add_supertrend(0, 10, 3.0).unwrap();
+    chart.series_entry_mut(supertrend).unwrap().title = "My study".to_string();
     chart.set_language(ChartLanguage::Russian);
-    assert_eq!(chart.series_entry(momentum).unwrap().title, "My study");
+    assert_eq!(chart.series_entry(supertrend).unwrap().title, "My study");
     chart.set_language(ChartLanguage::English);
-    assert_eq!(chart.series_entry(momentum).unwrap().title, "My study");
+    assert_eq!(chart.series_entry(supertrend).unwrap().title, "My study");
 }
 
 #[test]
 fn multi_output_indicator_titles_and_labels_follow_the_language() {
     let mut chart = settled_chart();
-    let outputs = chart.add_aroon(0, 14);
-    assert_eq!(outputs.len(), 2);
+    let outputs = chart.add_bollinger(0, 20, 2.0);
+    assert_eq!(outputs.len(), 3);
     let english = chart.indicator_info(outputs[0]).unwrap();
     // English keeps the persisted output identifier as the display label.
     assert_eq!(english.output_label, english.output_name);
     chart.set_language(ChartLanguage::Russian);
     let russian = chart.indicator_info(outputs[0]).unwrap();
-    assert_eq!(russian.output_label, "Арун вверх");
+    assert_eq!(russian.output_label, "Верхняя");
     assert_eq!(russian.output_name, english.output_name);
     assert_eq!(
         chart.series_entry(outputs[0]).unwrap().title,
-        "Арун вверх 14"
+        "Полосы Боллинджера 20 2"
     );
     assert_eq!(
         chart.series_entry(outputs[1]).unwrap().title,
-        "Арун вниз 14"
+        "Полосы Боллинджера 20 2"
     );
 }
 
@@ -126,7 +135,7 @@ fn drawing_schema_labels_come_in_the_requested_language() {
 #[test]
 fn restored_indicator_titles_follow_the_target_charts_language() {
     let mut source = settled_chart();
-    source.add_momentum(0, 10);
+    source.add_supertrend(0, 10, 3.0);
     let document = source.export_state_json().unwrap();
     let mut restored = settled_chart();
     restored.set_language(ChartLanguage::Russian);
@@ -134,7 +143,7 @@ fn restored_indicator_titles_follow_the_target_charts_language() {
     let binding = &restored.indicator_bindings()[0];
     assert_eq!(
         restored.series_entry(binding.outputs[0]).unwrap().title,
-        "Моментум 10"
+        "Супертренд 10 3"
     );
 }
 

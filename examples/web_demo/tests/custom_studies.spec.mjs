@@ -562,7 +562,7 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
       },
     };
     chart.register_custom_study(definition);
-    const i2 = chart.add_kama(source, 10, 2, 30);
+    const i2 = chart.add_vwma(source, 10);
     const i3 = chart.add_swing_points(source, 2, 2);
     const range = chart.add_opening_range(source, 86_400);
     const custom = chart.add_custom_study("test.cross", source)[0];
@@ -578,20 +578,20 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
     const imported = restored.import_state(state);
     const outputs = restored.series_order();
     const kinds = outputs.map((entry) => entry.indicator_info()?.kind).filter(Boolean);
-    const restoredKama = outputs.find((entry) => entry.indicator_info()?.kind === "kama");
+    const restoredVwma = outputs.find((entry) => entry.indicator_info()?.kind === "vwma");
     const restoredSwing = outputs.find((entry) => entry.indicator_info()?.kind === "swing_points");
     const restoredRange = outputs.find((entry) => entry.indicator_info()?.kind === "opening_range");
     const restoredCustom = outputs.find((entry) => entry.indicator_info()?.kind === "test.cross");
     const comparison = {
-      kama: [i2.data(), restoredKama?.data()],
+      vwma: [i2.data(), restoredVwma?.data()],
       swing: [i3[0].data(), restoredSwing?.data()],
       custom: [custom.data(), restoredCustom?.data()],
       markers: [chart.study_annotations(i3[0]).markers, restored.study_annotations(restoredSwing).markers],
       range: [range[0].data(), restoredRange?.data()],
       styles: [[i2, i3[0], range[0], custom].map((entry) => entry.indicator_info().style),
-        [restoredKama, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().style)],
+        [restoredVwma, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().style)],
       params: [[i2, i3[0], range[0], custom].map((entry) => entry.indicator_info().parameters),
-        [restoredKama, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().parameters)],
+        [restoredVwma, restoredSwing, restoredRange, restoredCustom].map((entry) => entry.indicator_info().parameters)],
     };
     restored.remove();
     host.remove();
@@ -599,7 +599,7 @@ test("I2, I3 and custom studies retain definitions and values in one layout", as
   });
   expect(result.schema).toBe(3);
   expect(result.imported.unresolved_custom_studies).toEqual([]);
-  expect(result.kinds).toContain("kama");
+  expect(result.kinds).toContain("vwma");
   expect(result.kinds).toContain("swing_points");
   expect(result.kinds).toContain("opening_range");
   expect(result.kinds).toContain("test.cross");

@@ -35,7 +35,7 @@ const BAR_SECONDS: f64 = 60.0;
 const SPARSE_VOLUME_STRIDE: usize = 10;
 const CUSTOM_TYPE: &str = "perf.close";
 /// `IndicatorKind` variants, including `Custom`.
-const VARIANTS: usize = 67;
+const VARIANTS: usize = 29;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Volume {
@@ -66,14 +66,7 @@ fn uses_volume(kind: &IndicatorKind) -> bool {
             | IndicatorKind::VwapBands { .. }
             | IndicatorKind::Vwma { .. }
             | IndicatorKind::Obv
-            | IndicatorKind::AccumulationDistribution
-            | IndicatorKind::PriceVolumeTrend
-            | IndicatorKind::ChaikinOscillator { .. }
-            | IndicatorKind::Klinger { .. }
             | IndicatorKind::RelativeVolume { .. }
-            | IndicatorKind::VolumeOscillator { .. }
-            | IndicatorKind::ElderForce { .. }
-            | IndicatorKind::EaseOfMovement { .. }
             | IndicatorKind::Cmf { .. }
             | IndicatorKind::Mfi { .. }
             | IndicatorKind::Volume { .. }
@@ -84,141 +77,65 @@ fn uses_volume(kind: &IndicatorKind) -> bool {
 /// and `cases` then fails at run time until a case covers it.
 fn variant_slot(kind: &IndicatorKind) -> usize {
     match kind {
-        IndicatorKind::Aroon { .. } => 0,
-        IndicatorKind::AwesomeOscillator => 1,
-        IndicatorKind::Dpo { .. } => 2,
-        IndicatorKind::ChandeMomentum { .. } => 3,
-        IndicatorKind::Sma { .. } => 4,
-        IndicatorKind::Ema { .. } => 5,
-        IndicatorKind::Dema { .. } => 6,
-        IndicatorKind::Tema { .. } => 7,
-        IndicatorKind::Smma { .. } => 8,
-        IndicatorKind::Hma { .. } => 9,
-        IndicatorKind::Vwma { .. } => 10,
-        IndicatorKind::StandardDeviation { .. } => 11,
-        IndicatorKind::Cci { .. } => 12,
-        IndicatorKind::WilliamsR { .. } => 13,
-        IndicatorKind::StochasticRsi { .. } => 14,
-        IndicatorKind::Momentum { .. } => 15,
-        IndicatorKind::RateOfChange { .. } => 16,
-        IndicatorKind::Donchian { .. } => 17,
-        IndicatorKind::PivotPoints { .. } => 18,
-        IndicatorKind::ZigZag { .. } => 19,
-        IndicatorKind::Keltner { .. } => 20,
-        IndicatorKind::AdxDmi { .. } => 21,
-        IndicatorKind::ParabolicSar => 22,
-        IndicatorKind::SuperTrend { .. } => 23,
-        IndicatorKind::Ichimoku => 24,
-        IndicatorKind::Bollinger { .. } => 25,
-        IndicatorKind::BollingerMetrics { .. } => 26,
-        IndicatorKind::Envelopes { .. } => 27,
-        IndicatorKind::Alma { .. } => 28,
-        IndicatorKind::Rsi { .. } => 29,
-        IndicatorKind::Macd { .. } => 30,
-        IndicatorKind::Stochastic { .. } => 31,
-        IndicatorKind::Atr { .. } => 32,
-        IndicatorKind::Vwap => 33,
-        IndicatorKind::Obv => 34,
-        IndicatorKind::AccumulationDistribution => 35,
-        IndicatorKind::PriceVolumeTrend => 36,
-        IndicatorKind::ChaikinOscillator { .. } => 37,
-        IndicatorKind::Klinger { .. } => 38,
-        IndicatorKind::Kama { .. } => 39,
-        IndicatorKind::McGinley { .. } => 40,
-        IndicatorKind::LinearRegression { .. } => 41,
-        IndicatorKind::Choppiness { .. } => 42,
-        IndicatorKind::AtrBands { .. } => 43,
-        IndicatorKind::RelativeVolume { .. } => 44,
-        IndicatorKind::VolumeOscillator { .. } => 45,
-        IndicatorKind::ElderForce { .. } => 46,
-        IndicatorKind::EaseOfMovement { .. } => 47,
-        IndicatorKind::HistoricalVolatility { .. } => 48,
-        IndicatorKind::Trix { .. } => 49,
-        IndicatorKind::Kst { .. } => 50,
-        IndicatorKind::Tsi { .. } => 51,
-        IndicatorKind::MassIndex { .. } => 52,
-        IndicatorKind::Vortex { .. } => 53,
-        IndicatorKind::CoppockCurve { .. } => 54,
-        IndicatorKind::FisherTransform { .. } => 55,
-        IndicatorKind::UltimateOscillator { .. } => 56,
-        IndicatorKind::Cmf { .. } => 57,
-        IndicatorKind::Mfi { .. } => 58,
-        IndicatorKind::Volume { .. } => 59,
-        IndicatorKind::VwapBands { .. } => 60,
-        IndicatorKind::Wma { .. } => 61,
-        IndicatorKind::SwingPoints { .. } => 62,
-        IndicatorKind::SessionLevels { .. } => 63,
-        IndicatorKind::PreviousPeriodLevels { .. } => 64,
-        IndicatorKind::OpeningRange { .. } => 65,
-        IndicatorKind::Custom { .. } => 66,
+        IndicatorKind::Sma { .. } => 0,
+        IndicatorKind::Ema { .. } => 1,
+        IndicatorKind::Vwma { .. } => 2,
+        IndicatorKind::Cci { .. } => 3,
+        IndicatorKind::StochasticRsi { .. } => 4,
+        IndicatorKind::Donchian { .. } => 5,
+        IndicatorKind::PivotPoints { .. } => 6,
+        IndicatorKind::Keltner { .. } => 7,
+        IndicatorKind::AdxDmi { .. } => 8,
+        IndicatorKind::ParabolicSar => 9,
+        IndicatorKind::SuperTrend { .. } => 10,
+        IndicatorKind::Ichimoku => 11,
+        IndicatorKind::Bollinger { .. } => 12,
+        IndicatorKind::Rsi { .. } => 13,
+        IndicatorKind::Macd { .. } => 14,
+        IndicatorKind::Stochastic { .. } => 15,
+        IndicatorKind::Atr { .. } => 16,
+        IndicatorKind::Vwap => 17,
+        IndicatorKind::Obv => 18,
+        IndicatorKind::RelativeVolume { .. } => 19,
+        IndicatorKind::Cmf { .. } => 20,
+        IndicatorKind::Mfi { .. } => 21,
+        IndicatorKind::Volume { .. } => 22,
+        IndicatorKind::VwapBands { .. } => 23,
+        IndicatorKind::SwingPoints { .. } => 24,
+        IndicatorKind::SessionLevels { .. } => 25,
+        IndicatorKind::PreviousPeriodLevels { .. } => 26,
+        IndicatorKind::OpeningRange { .. } => 27,
+        IndicatorKind::Custom { .. } => 28,
     }
 }
 
 /// Engine schema names. `schema_definition(name, 14, 2.0)` is the documented canonical-default
 /// query; pivot points select their variant by index instead, and 1 is the default (standard).
-const DEFAULT_KIND_NAMES: [&str; 66] = [
-    "aroon",
-    "awesome_oscillator",
-    "dpo",
-    "chande_momentum",
+const DEFAULT_KIND_NAMES: [&str; 28] = [
     "sma",
     "ema",
-    "dema",
-    "tema",
-    "smma",
-    "hma",
     "vwma",
-    "standard_deviation",
     "cci",
-    "williams_r",
     "stochastic_rsi",
-    "momentum",
-    "roc",
     "donchian",
     "pivot_points",
-    "zigzag",
     "keltner",
     "adx_dmi",
     "parabolic_sar",
     "supertrend",
     "ichimoku",
     "bollinger",
-    "bollinger_metrics",
-    "envelopes",
-    "alma",
     "rsi",
     "macd",
     "stochastic",
     "atr",
     "vwap",
     "obv",
-    "accumulation_distribution",
-    "price_volume_trend",
-    "chaikin_oscillator",
-    "klinger",
-    "kama",
-    "mcginley",
-    "linear_regression",
-    "choppiness",
-    "atr_bands",
     "relative_volume",
-    "volume_oscillator",
-    "elder_force",
-    "ease_of_movement",
-    "historical_volatility",
-    "trix",
-    "kst",
-    "tsi",
-    "mass_index",
-    "vortex",
-    "coppock_curve",
-    "fisher_transform",
-    "ultimate_oscillator",
     "cmf",
     "mfi",
     "volume",
     "vwap_bands",
-    "wma",
     "swing_points",
     "session_levels",
     "previous_period_levels",
@@ -234,7 +151,7 @@ fn case(label: &str, kind: IndicatorKind, input: IndicatorInputSource, volume: V
     }
 }
 
-/// One default-parameter case per built-in kind, the exponential Envelopes and Volume modes, derived input
+/// One default-parameter case per built-in kind, the exponential Volume mode, derived input
 /// sources, a volume series on its own timeline, and one Rust custom study.
 pub fn cases() -> Vec<Case> {
     let mut cases = DEFAULT_KIND_NAMES
@@ -255,16 +172,6 @@ pub fn cases() -> Vec<Case> {
         })
         .collect::<Vec<_>>();
     cases.extend([
-        case(
-            "envelopes (exponential)",
-            IndicatorKind::Envelopes {
-                period: 20,
-                percent: 2.0,
-                exponential: true,
-            },
-            IndicatorInputSource::Close,
-            Volume::None,
-        ),
         case(
             "volume (exponential)",
             IndicatorKind::Volume {

@@ -93,7 +93,7 @@ fn add_indicator_set(chart: &mut ChartEngine, name: &str) {
             chart.add_stochastic(0, 14, 3);
             chart.add_atr(0, 14);
             chart.add_vwap(0, None);
-            chart.add_wma(0, 20);
+            chart.add_supertrend(0, 10, 3.0);
         }
         _ => unreachable!("known benchmark indicator set"),
     }
@@ -187,7 +187,7 @@ fn indicator_scaling_rows() -> Vec<serde_json::Value> {
                     chart.add_vwap(0, None);
                 }
                 _ => {
-                    chart.add_wma(0, 20);
+                    chart.add_ema(0, 20);
                 }
             }
         }

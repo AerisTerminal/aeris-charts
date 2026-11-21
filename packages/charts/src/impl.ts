@@ -30,7 +30,7 @@ import type {
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   depth_event_columns, depth_event_layer_options, depth_heatmap_options, depth_ladder_row, depth_options, depth_profile_options, depth_snapshot_columns, depth_study_snapshot, depth_update_columns,
   drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template, builtin_drawing_icon,
-  kst_periods, study_calendar_policy, previous_period,
+  study_calendar_policy, previous_period,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_range, general_brush_snapshot, general_legend_snapshot, general_pane_composition, general_pane_composition_result, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
@@ -6299,26 +6299,6 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_ema(source.id, Math.max(1, Math.floor(period))), options);
   }
 
-  add_dema(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_dema(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
-  add_tema(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_tema(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
-  add_smma(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_smma(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
-  add_rma(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_rma(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
-  add_hma(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_hma(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
   add_bollinger(source: series_api, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_bollinger(source.id, Math.max(1, Math.floor(period)), deviation);
     if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Bollinger configuration");
@@ -6376,180 +6356,11 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_obv(source.id, volume_source.id), options);
   }
 
-  add_accumulation_distribution(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_accumulation_distribution(source.id, volume_source.id), options);
-  }
-
-  add_price_volume_trend(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_price_volume_trend(source.id, volume_source.id), options);
-  }
-
-  add_chaikin_oscillator(source: series_api, fast: number, slow: number, volume_source: series_api, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(fast) || !Number.isInteger(slow) || fast < 1 || fast >= slow || slow > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Chaikin periods must satisfy 1 <= fast < slow <= 1000000");
-    }
-    return this.indicator_series(this.wasm.add_chaikin_oscillator(source.id, volume_source.id, fast, slow), options);
-  }
-
-  add_klinger(source: series_api, fast: number | undefined, slow: number | undefined, signal: number | undefined, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api] {
-    fast ??= 34;
-    slow ??= 55;
-    signal ??= 13;
-    if (![fast, slow, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000) || fast >= slow || !volume_source) {
-      throw new AerisChartsError("invalid_options", "Klinger requires volume and periods satisfying 1 <= fast < slow <= 1000000 and 1 <= signal <= 1000000");
-    }
-    const ids = this.wasm.add_klinger(source.id, volume_source.id, fast, slow, signal);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Klinger configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_kama(source: series_api, period = 10, fast = 2, slow = 30, options?: Partial<series_options>): series_api {
-    if (![period, fast, slow].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000) || fast >= slow) {
-      throw new AerisChartsError("invalid_options", "KAMA requires 1 <= period <= 1000000 and 1 <= fast < slow <= 1000000");
-    }
-    return this.indicator_series(this.wasm.add_kama(source.id, period, fast, slow), options);
-  }
-
-  add_mcginley(source: series_api, period = 14, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "McGinley period must be an integer from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_mcginley(source.id, period), options);
-  }
-
-  add_linear_regression(source: series_api, period = 20, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(deviation) || deviation < 0) {
-      throw new AerisChartsError("invalid_options", "Linear Regression requires a period from 1 to 1000000 and a nonnegative finite deviation");
-    }
-    const ids = this.wasm.add_linear_regression(source.id, period, deviation);
-    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Linear Regression configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
-  }
-
-  add_choppiness(source: series_api, period = 14, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 2 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Choppiness period must be an integer from 2 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_choppiness(source.id, period), options);
-  }
-
-  add_atr_bands(source: series_api, period = 14, multiplier = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(multiplier) || multiplier < 0) {
-      throw new AerisChartsError("invalid_options", "ATR Bands require a period from 1 to 1000000 and a nonnegative finite multiplier");
-    }
-    const ids = this.wasm.add_atr_bands(source.id, period, multiplier);
-    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid ATR Bands configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
-  }
-
   add_relative_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
     if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
       throw new AerisChartsError("invalid_options", "Relative Volume period must be an integer from 1 to 1000000");
     }
     return this.indicator_series(this.wasm.add_relative_volume(source.id, volume_source.id, period), options);
-  }
-
-  add_volume_oscillator(source: series_api, fast: number, slow: number, signal: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api, series_api] {
-    if (![fast, slow, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000) || fast >= slow) {
-      throw new AerisChartsError("invalid_options", "Volume Oscillator periods must satisfy 1 <= fast < slow <= 1000000 and 1 <= signal <= 1000000");
-    }
-    const ids = this.wasm.add_volume_oscillator(source.id, volume_source.id, fast, slow, signal);
-    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Volume Oscillator configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
-  }
-
-  add_elder_force(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Elder Force period must be an integer from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_elder_force(source.id, volume_source.id, period), options);
-  }
-
-  add_ease_of_movement(source: series_api, period: number, volume_source: series_api, divisor = 100_000_000, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(divisor) || divisor <= 0) {
-      throw new AerisChartsError("invalid_options", "Ease of Movement requires a period from 1 to 1000000 and a positive finite divisor");
-    }
-    return this.indicator_series(this.wasm.add_ease_of_movement(source.id, volume_source.id, period, divisor), options);
-  }
-
-  add_historical_volatility(source: series_api, period: number, annualization = 252, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 2 || period > 1_000_000 || !Number.isFinite(annualization) || annualization <= 0) {
-      throw new AerisChartsError("invalid_options", "Historical Volatility requires at least two returns and a positive finite annualization factor");
-    }
-    return this.indicator_series(this.wasm.add_historical_volatility(source.id, period, annualization), options);
-  }
-
-  add_trix(source: series_api, period: number, signal = 9, options?: Partial<series_options>): [series_api, series_api] {
-    if (![period, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "TRIX periods must be integers from 1 to 1000000");
-    }
-    const ids = this.wasm.add_trix(source.id, period, signal);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid TRIX configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_kst(
-    source: series_api,
-    roc: kst_periods = [10, 15, 20, 30],
-    smoothing: kst_periods = [10, 10, 10, 15],
-    signal = 9,
-    options?: Partial<series_options>,
-  ): [series_api, series_api] {
-    if (roc.length !== 4 || smoothing.length !== 4 ||
-        ![...roc, ...smoothing, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "KST periods must be integers from 1 to 1000000");
-    }
-    const ids = this.wasm.add_kst(source.id, Uint32Array.from(roc), Uint32Array.from(smoothing), signal);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid KST configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_tsi(source: series_api, long = 25, short = 13, signal = 13, options?: Partial<series_options>): [series_api, series_api] {
-    if (![long, short, signal].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "TSI periods must be integers from 1 to 1000000");
-    }
-    const ids = this.wasm.add_tsi(source.id, long, short, signal);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid TSI configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_mass_index(source: series_api, ema_period = 9, sum_period = 25, options?: Partial<series_options>): series_api {
-    if (![ema_period, sum_period].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "Mass Index periods must be integers from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_mass_index(source.id, ema_period, sum_period), options);
-  }
-
-  add_vortex(source: series_api, period = 14, options?: Partial<series_options>): [series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Vortex period must be an integer from 1 to 1000000");
-    }
-    const ids = this.wasm.add_vortex(source.id, period);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Vortex configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_coppock_curve(source: series_api, long_period = 14, short_period = 11, smoothing = 10, options?: Partial<series_options>): series_api {
-    if (![long_period, short_period, smoothing].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "Coppock Curve periods must be integers from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_coppock_curve(source.id, long_period, short_period, smoothing), options);
-  }
-
-  add_fisher_transform(source: series_api, period = 10, options?: Partial<series_options>): [series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Fisher Transform period must be an integer from 1 to 1000000");
-    }
-    const ids = this.wasm.add_fisher_transform(source.id, period);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Fisher Transform configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_ultimate_oscillator(source: series_api, short_period = 7, medium_period = 14, long_period = 28, options?: Partial<series_options>): series_api {
-    if (![short_period, medium_period, long_period].every((value) => Number.isInteger(value) && value >= 1 && value <= 1_000_000)) {
-      throw new AerisChartsError("invalid_options", "Ultimate Oscillator periods must be integers from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_ultimate_oscillator(source.id, short_period, medium_period, long_period), options);
   }
 
   add_cmf(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
@@ -6710,20 +6521,9 @@ export class chart_impl implements chart_api {
     };
   }
 
-  add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_wma(source.id, Math.max(1, Math.floor(period))), options);
-  }
-
   add_vwma(source: series_api, period: number, volume_source?: series_api | null, options?: Partial<series_options>): series_api {
     return this.indicator_series(
       this.wasm.add_vwma(source.id, volume_source?.id ?? -1, Math.max(1, Math.floor(period))),
-      options,
-    );
-  }
-
-  add_standard_deviation(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(
-      this.wasm.add_standard_deviation(source.id, Math.max(1, Math.floor(period))),
       options,
     );
   }
@@ -6735,13 +6535,6 @@ export class chart_impl implements chart_api {
     );
   }
 
-  add_williams_r(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(
-      this.wasm.add_williams_r(source.id, Math.max(1, Math.floor(period))),
-      options,
-    );
-  }
-
   add_stochastic_rsi(source: series_api, rsi_period: number, stochastic_period: number, options?: Partial<series_options>): series_api {
     return this.indicator_series(
       this.wasm.add_stochastic_rsi(
@@ -6749,20 +6542,6 @@ export class chart_impl implements chart_api {
         Math.max(1, Math.floor(rsi_period)),
         Math.max(1, Math.floor(stochastic_period)),
       ),
-      options,
-    );
-  }
-
-  add_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(
-      this.wasm.add_momentum(source.id, Math.max(1, Math.floor(period))),
-      options,
-    );
-  }
-
-  add_roc(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    return this.indicator_series(
-      this.wasm.add_roc(source.id, Math.max(1, Math.floor(period))),
       options,
     );
   }
@@ -6788,12 +6567,6 @@ export class chart_impl implements chart_api {
       this.indicator_series(ids[3]!, options),
       this.indicator_series(ids[4]!, options),
     ];
-  }
-
-  add_zigzag(source: series_api, deviation_percent = 5, options?: Partial<series_options>): series_api {
-    const id = this.wasm.add_zigzag(source.id, deviation_percent);
-    if (id === 0xffffffff) throw new AerisChartsError("invalid_options", "invalid ZigZag deviation");
-    return this.indicator_series(id, options);
   }
 
   add_keltner(source: series_api, period: number, multiplier = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
@@ -7116,14 +6889,6 @@ export class chart_impl implements chart_api {
     return JSON.parse(value) as drawing_kind_options;
   }
 
-  add_aroon(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "Aroon period must be an integer from 1 to 1000000");
-    }
-    const ids = this.wasm.add_aroon(source.id, period);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Aroon configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
   private validate_structure_pivots(left: number, right: number): void {
     if (![left, right].every((value) => Number.isInteger(value) && value >= 1 && value <= 50)) {
       throw new AerisChartsError("invalid_options", "structure pivot left and right must be integers from 1 to 50");
@@ -7177,53 +6942,6 @@ export class chart_impl implements chart_api {
       this.indicator_series(ids[1]!, options),
       this.indicator_series(ids[2]!, options),
     ];
-  }
-
-  add_awesome_oscillator(source: series_api, options?: Partial<series_options>): series_api {
-    return this.indicator_series(this.wasm.add_awesome_oscillator(source.id), options);
-  }
-
-  add_dpo(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "DPO period must be an integer from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_dpo(source.id, period), options);
-  }
-
-  add_chande_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "CMO period must be an integer from 1 to 1000000");
-    }
-    return this.indicator_series(this.wasm.add_chande_momentum(source.id, period), options);
-  }
-
-  add_bollinger_metrics(source: series_api, period: number, deviation: number, options?: Partial<series_options>): [series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(deviation) || deviation < 0 || deviation > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "invalid Bollinger metrics configuration");
-    }
-    const ids = this.wasm.add_bollinger_metrics(source.id, period, deviation);
-    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid Bollinger metrics configuration");
-    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
-  }
-
-  add_envelopes(source: series_api, period: number, percent: number, exponential = false, options?: Partial<series_options>): [series_api, series_api, series_api] {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(percent) || percent < 0 || percent > 1_000_000 || typeof exponential !== "boolean") {
-      throw new AerisChartsError("invalid_options", "invalid Envelopes configuration");
-    }
-    const ids = this.wasm.add_envelopes(source.id, period, percent, exponential);
-    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Envelopes configuration");
-    return [
-      this.indicator_series(ids[0]!, options),
-      this.indicator_series(ids[1]!, options),
-      this.indicator_series(ids[2]!, options),
-    ];
-  }
-
-  add_alma(source: series_api, period: number, offset = 0.85, sigma = 6, options?: Partial<series_options>): series_api {
-    if (!Number.isInteger(period) || period < 1 || period > 1_000_000 || !Number.isFinite(offset) || offset < 0 || offset > 1 || !Number.isFinite(sigma) || sigma < 0.01 || sigma > 1_000_000) {
-      throw new AerisChartsError("invalid_options", "invalid ALMA configuration");
-    }
-    return this.indicator_series(this.wasm.add_alma(source.id, period, offset, sigma), options);
   }
 
   register_drawing_icon(name: string, width: number, height: number, pixels: Uint8Array): void {

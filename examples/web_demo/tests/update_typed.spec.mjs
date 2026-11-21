@@ -229,7 +229,7 @@ test("typed batch and repeated singles produce identical built-in indicators", a
       ...chart.add_stochastic(source, 5, 3),
       chart.add_atr(source, 5),
       chart.add_vwap(source, null),
-      chart.add_wma(source, 5),
+      chart.add_vwma(source, 5),
     ];
     const outputs_a = attach(a);
     const outputs_b = attach(b);

@@ -5,8 +5,7 @@ use super::*;
 /// Largest trailing lookback among the test parameters (Ichimoku's 52-row leading span).
 const MAX_LOOKBACK_ROWS: usize = 52;
 
-/// Rows an update may re-emit: the lookback for window kinds, or ZigZag's unconfirmed leg, which
-/// the fixture's swings keep shorter than this.
+/// Rows an update may re-emit (bounded by the largest lookback window).
 const MAX_EMITTED_ROWS: usize = 64;
 
 struct Columns {

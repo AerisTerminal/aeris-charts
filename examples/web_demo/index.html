@@ -2288,7 +2288,7 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
 const indicator_definitions = [
   ["sma", "SMA · Simple moving average (20)", () => chart.add_sma(main, 20)],
   ["ema", "EMA · Exponential moving average (20)", () => chart.add_ema(main, 20)],
-  ["wma", "WMA · Weighted moving average (20)", () => chart.add_wma(main, 20)],
+  ["volume", "Volume · Separate-pane histogram + MA (20)", (volume) => chart.add_volume(main, 20, volume)],
   ["bollinger", "Bollinger Bands · 20 / 2", () => chart.add_bollinger(main, 20, 2)],
   ["rsi", "RSI · Relative strength index (14)", () => chart.add_rsi(main, 14, { color: "#ab47bc", line_width: 2 })],
   ["macd", "MACD · 12 / 26 / 9", () => chart.add_macd(main, 12, 26, 9)],
@@ -2324,7 +2324,7 @@ for (const [id, title, create] of indicator_definitions) {
     }
     let volume;
     try {
-      if (id === "vwap" || id === "volume_profile") {
+      if (id === "vwap" || id === "volume_profile" || id === "volume") {
         volume = chart.add_series("histogram", { visible: false, title: "Synthetic demo volume" });
         volume.set_data(current_volume_data());
         indicator_volumes.add(volume);

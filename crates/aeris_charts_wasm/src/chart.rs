@@ -2734,9 +2734,6 @@ impl AerisChart {
         self.inner.borrow_mut().add_sma(source_id, period)
     }
 
-    pub fn add_aroon(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        self.inner.borrow_mut().add_aroon(source_id, period)
-    }
     pub fn add_swing_points(&mut self, source_id: u32, left: u32, right: u32) -> Vec<u32> {
         self.inner
             .borrow_mut()
@@ -2768,49 +2765,6 @@ impl AerisChart {
             .add_opening_range(source_id, duration_seconds, calendar)
     }
 
-    pub fn add_awesome_oscillator(&mut self, source_id: u32) -> u32 {
-        self.inner.borrow_mut().add_awesome_oscillator(source_id)
-    }
-
-    pub fn add_dpo(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_dpo(source_id, period)
-    }
-
-    pub fn add_chande_momentum(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_chande_momentum(source_id, period)
-    }
-
-    pub fn add_bollinger_metrics(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        deviation: f64,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_bollinger_metrics(source_id, period, deviation)
-    }
-
-    pub fn add_envelopes(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        percent: f64,
-        exponential: bool,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_envelopes(source_id, period, percent, exponential)
-    }
-
-    pub fn add_alma(&mut self, source_id: u32, period: u32, offset: f64, sigma: f64) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_alma(source_id, period, offset, sigma)
-    }
-
     pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
         self.inner
             .borrow_mut()
@@ -2822,44 +2776,14 @@ impl AerisChart {
         self.inner.borrow_mut().add_ema(source_id, period)
     }
 
-    pub fn add_dema(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_dema(source_id, period)
-    }
-
-    pub fn add_tema(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_tema(source_id, period)
-    }
-
-    pub fn add_smma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_smma(source_id, period)
-    }
-
-    pub fn add_rma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_rma(source_id, period)
-    }
-
-    pub fn add_hma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_hma(source_id, period)
-    }
-
     pub fn add_vwma(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
         self.inner
             .borrow_mut()
             .add_vwma(source_id, volume_source, period)
     }
 
-    pub fn add_standard_deviation(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_standard_deviation(source_id, period)
-    }
-
     pub fn add_cci(&mut self, source_id: u32, period: u32) -> u32 {
         self.inner.borrow_mut().add_cci(source_id, period)
-    }
-
-    pub fn add_williams_r(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_williams_r(source_id, period)
     }
 
     pub fn add_stochastic_rsi(
@@ -2873,14 +2797,6 @@ impl AerisChart {
             .add_stochastic_rsi(source_id, rsi_period, stochastic_period)
     }
 
-    pub fn add_momentum(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_momentum(source_id, period)
-    }
-
-    pub fn add_roc(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_roc(source_id, period)
-    }
-
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_donchian(source_id, period)
     }
@@ -2889,13 +2805,6 @@ impl AerisChart {
     /// 3=Camarilla, 4=Woodie, or 5=DeMark; invalid values return an empty array.
     pub fn add_pivot_points(&mut self, source_id: u32, variant: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_pivot_points(source_id, variant)
-    }
-
-    /// Add a ZigZag line. `deviation_percent` is the minimum reversal percentage.
-    pub fn add_zigzag(&mut self, source_id: u32, deviation_percent: f64) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_zigzag(source_id, deviation_percent)
     }
 
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
@@ -3264,185 +3173,10 @@ impl AerisChart {
         self.inner.borrow_mut().add_obv(source_id, volume_source)
     }
 
-    pub fn add_accumulation_distribution(&mut self, source_id: u32, volume_source: i32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_accumulation_distribution(source_id, volume_source)
-    }
-
-    pub fn add_price_volume_trend(&mut self, source_id: u32, volume_source: i32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_price_volume_trend(source_id, volume_source)
-    }
-
-    pub fn add_chaikin_oscillator(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_chaikin_oscillator(source_id, volume_source, fast, slow)
-    }
-
-    pub fn add_klinger(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-        signal: u32,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_klinger(source_id, volume_source, fast, slow, signal)
-    }
-
-    pub fn add_kama(&mut self, source_id: u32, period: u32, fast: u32, slow: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_kama(source_id, period, fast, slow)
-    }
-
-    pub fn add_mcginley(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_mcginley(source_id, period)
-    }
-
-    pub fn add_linear_regression(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        deviation: f64,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_linear_regression(source_id, period, deviation)
-    }
-
-    pub fn add_choppiness(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_choppiness(source_id, period)
-    }
-
-    pub fn add_atr_bands(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_atr_bands(source_id, period, multiplier)
-    }
-
     pub fn add_relative_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
         self.inner
             .borrow_mut()
             .add_relative_volume(source_id, volume_source, period)
-    }
-
-    pub fn add_volume_oscillator(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        fast: u32,
-        slow: u32,
-        signal: u32,
-    ) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_volume_oscillator(source_id, volume_source, fast, slow, signal)
-    }
-
-    pub fn add_elder_force(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_elder_force(source_id, volume_source, period)
-    }
-
-    pub fn add_ease_of_movement(
-        &mut self,
-        source_id: u32,
-        volume_source: i32,
-        period: u32,
-        divisor: f64,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_ease_of_movement(source_id, volume_source, period, divisor)
-    }
-
-    pub fn add_historical_volatility(
-        &mut self,
-        source_id: u32,
-        period: u32,
-        annualization: f64,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_historical_volatility(source_id, period, annualization)
-    }
-
-    pub fn add_trix(&mut self, source_id: u32, period: u32, signal: u32) -> Vec<u32> {
-        self.inner.borrow_mut().add_trix(source_id, period, signal)
-    }
-
-    pub fn add_kst(
-        &mut self,
-        source_id: u32,
-        roc: Vec<u32>,
-        smoothing: Vec<u32>,
-        signal: u32,
-    ) -> Vec<u32> {
-        let (Ok(roc), Ok(smoothing)) = (roc.try_into(), smoothing.try_into()) else {
-            return Vec::new();
-        };
-        self.inner
-            .borrow_mut()
-            .add_kst(source_id, roc, smoothing, signal)
-    }
-
-    pub fn add_tsi(&mut self, source_id: u32, long: u32, short: u32, signal: u32) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_tsi(source_id, long, short, signal)
-    }
-
-    pub fn add_mass_index(&mut self, source_id: u32, ema_period: u32, sum_period: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_mass_index(source_id, ema_period, sum_period)
-    }
-
-    pub fn add_vortex(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        self.inner.borrow_mut().add_vortex(source_id, period)
-    }
-
-    pub fn add_coppock_curve(
-        &mut self,
-        source_id: u32,
-        long: u32,
-        short: u32,
-        smoothing: u32,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_coppock_curve(source_id, long, short, smoothing)
-    }
-
-    pub fn add_fisher_transform(&mut self, source_id: u32, period: u32) -> Vec<u32> {
-        self.inner
-            .borrow_mut()
-            .add_fisher_transform(source_id, period)
-    }
-
-    pub fn add_ultimate_oscillator(
-        &mut self,
-        source_id: u32,
-        short: u32,
-        medium: u32,
-        long: u32,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_ultimate_oscillator(source_id, short, medium, long)
     }
 
     /// Add Chaikin money flow in its own oscillator pane.
@@ -3482,11 +3216,6 @@ impl AerisChart {
             standard_deviation,
             percent,
         )
-    }
-
-    /// Add a weighted moving-average line on the source's pane.
-    pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
-        self.inner.borrow_mut().add_wma(source_id, period)
     }
 
     /// Sets the main series' data (series 0). `times` are ascending UTC seconds.

@@ -129,7 +129,7 @@ test("financial product composes through one public chart and ordered frame", as
       chart.add_stochastic(source, 5, 3),
       [chart.add_atr(source, 5)],
       [chart.add_vwap(source)],
-      [chart.add_wma(source, 4)],
+      [chart.add_vwma(source, 4)],
     ];
     const indicators = indicator_groups.flat();
 
@@ -200,7 +200,7 @@ test("financial product composes through one public chart and ordered frame", as
   expect(result.footprint).toEqual({ type: "footprint", bars: 1 });
   expect(new Set(result.indicator_kinds)).toEqual(new Set([
     "sma", "ema", "bollinger", "rsi",
-    "macd", "stochastic", "atr", "vwap", "wma",
+    "macd", "stochastic", "atr", "vwap", "vwma",
   ]));
   expect(result.drawing_kinds).toEqual([
     "trend_line", "horizontal_line", "horizontal_ray", "vertical_line", "rectangle",

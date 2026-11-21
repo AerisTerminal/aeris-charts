@@ -142,117 +142,6 @@ fn pivot_step(state: &mut PivotState, time: i64, bar: [f64; 4], kind: PivotKind)
         .map_or_else(PivotPoint::default, |session| pivot_levels(session, kind))
 }
 
-/// Compute confirmed ZigZag turning points from high/low bars.
-///
-/// `deviation_percent` is the minimum percentage move required to confirm a reversal. The
-/// current extreme is emitted as a provisional endpoint, while earlier extrema are only emitted
-/// once the opposing move has crossed the threshold.
-pub fn zigzag(highs: &[f64], lows: &[f64], deviation_percent: f64) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len());
-    let mut out = vec![None; n];
-    if n == 0 || !deviation_percent.is_finite() || deviation_percent <= 0.0 {
-        return out;
-    }
-    let threshold = deviation_percent / 100.0;
-    let mut state = ZigZagState::default();
-    for index in 0..n {
-        zigzag_step(
-            &mut state,
-            index,
-            highs[index],
-            lows[index],
-            threshold,
-            |row, value| out[row] = Some(value),
-        );
-    }
-    if state.direction != 0 {
-        out[state.extreme_index] = Some(state.extreme);
-    }
-    out
-}
-
-/// ZigZag scan position: the first bar, the leg direction (0 until the first reversal), and the
-/// leg's provisional extreme. Every row before `extreme_index` is final; only that extreme and
-/// later rows can still change.
-#[derive(Clone, Copy, Debug, Default)]
-struct ZigZagState {
-    started: bool,
-    first_high: f64,
-    first_low: f64,
-    direction: i8,
-    extreme_index: usize,
-    extreme: f64,
-}
-
-/// Advance one bar. `confirm(row, value)` receives each turning point the bar confirms.
-fn zigzag_step(
-    state: &mut ZigZagState,
-    index: usize,
-    high: f64,
-    low: f64,
-    threshold: f64,
-    mut confirm: impl FnMut(usize, f64),
-) {
-    if !state.started {
-        *state = ZigZagState {
-            started: true,
-            first_high: high,
-            first_low: low,
-            direction: 0,
-            extreme_index: index,
-            extreme: (high + low) / 2.0,
-        };
-        return;
-    }
-    if state.direction == 0 {
-        if high_at_least(high, state.first_low, threshold) {
-            state.direction = 1;
-            state.extreme_index = index;
-            state.extreme = high;
-            confirm(0, state.first_low);
-        } else if low_at_most(low, state.first_high, threshold) {
-            state.direction = -1;
-            state.extreme_index = index;
-            state.extreme = low;
-            confirm(0, state.first_high);
-        } else if high > state.extreme {
-            state.extreme = high;
-            state.extreme_index = index;
-        } else if low < state.extreme {
-            state.extreme = low;
-            state.extreme_index = index;
-        }
-        return;
-    }
-    if state.direction > 0 {
-        if high >= state.extreme {
-            state.extreme = high;
-            state.extreme_index = index;
-        } else if low_at_most(low, state.extreme, threshold) {
-            confirm(state.extreme_index, state.extreme);
-            state.direction = -1;
-            state.extreme_index = index;
-            state.extreme = low;
-        }
-    } else if low <= state.extreme {
-        state.extreme = low;
-        state.extreme_index = index;
-    } else if high_at_least(high, state.extreme, threshold) {
-        confirm(state.extreme_index, state.extreme);
-        state.direction = 1;
-        state.extreme_index = index;
-        state.extreme = high;
-    }
-}
-
-fn high_at_least(high: f64, reference: f64, threshold: f64) -> bool {
-    high >= reference * (1.0 + threshold)
-}
-
-fn low_at_most(low: f64, reference: f64, threshold: f64) -> bool {
-    low <= reference * (1.0 - threshold)
-}
-
 #[derive(Clone, Copy, Debug)]
 struct Session {
     open: f64,
@@ -412,210 +301,9 @@ fn ichimoku_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize) -> Ichim
     }
 }
 
-/// Simple moving average. The first `period - 1` values are warm-up `None` entries.
-/// Aroon uses the most recent extremum in the current bar plus `period` preceding bars.
-/// Equal extrema prefer the newest occurrence, so a repeated high or low resets to 100.
-pub fn aroon(high: &[f64], low: &[f64], period: usize) -> Vec<(Option<f64>, Option<f64>)> {
-    let n = high.len().min(low.len());
-    let mut out = vec![(None, None); n];
-    if period == 0 {
-        return out;
-    }
-    for (row, output) in out.iter_mut().enumerate().skip(period) {
-        let start = row - period;
-        if !(start..=row).all(|index| high[index].is_finite() && low[index].is_finite()) {
-            continue;
-        }
-        let mut high_index = start;
-        let mut low_index = start;
-        for index in start + 1..=row {
-            if high[index] >= high[high_index] {
-                high_index = index;
-            }
-            if low[index] <= low[low_index] {
-                low_index = index;
-            }
-        }
-        *output = (
-            Some((period - (row - high_index)) as f64 * 100.0 / period as f64),
-            Some((period - (row - low_index)) as f64 * 100.0 / period as f64),
-        );
-    }
-    out
-}
-
-/// Bill Williams' Awesome Oscillator: SMA(5, HL2) minus SMA(34, HL2).
-pub fn awesome_oscillator(high: &[f64], low: &[f64]) -> Vec<Option<f64>> {
-    let n = high.len().min(low.len());
-    let mut out = vec![None; n];
-    for (row, output) in out.iter_mut().enumerate().skip(33) {
-        if !(row - 33..=row).all(|index| high[index].is_finite() && low[index].is_finite()) {
-            continue;
-        }
-        let short = (row - 4..=row)
-            .map(|index| (high[index] + low[index]) / 2.0)
-            .sum::<f64>()
-            / 5.0;
-        let long = (row - 33..=row)
-            .map(|index| (high[index] + low[index]) / 2.0)
-            .sum::<f64>()
-            / 34.0;
-        *output = Some(short - long);
-    }
-    out
-}
-
-/// Uncentered DPO: price from `period / 2 + 1` bars ago minus today's period SMA.
-pub fn dpo(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 {
-        return out;
-    }
-    let lag = period / 2 + 1;
-    for (row, output) in out
-        .iter_mut()
-        .enumerate()
-        .skip(period.saturating_sub(1).max(lag))
-    {
-        let window = &values[row + 1 - period..=row];
-        if window.iter().all(|value| value.is_finite()) {
-            *output = Some(values[row - lag] - window.iter().sum::<f64>() / period as f64);
-        }
-    }
-    out
-}
-
-/// Chande Momentum Oscillator: signed close movement divided by total movement.
-pub fn chande_momentum(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 {
-        return out;
-    }
-    for row in period..values.len() {
-        let mut signed = 0.0;
-        let mut absolute = 0.0;
-        let mut valid = true;
-        for pair in values[row - period..=row].windows(2) {
-            if !pair[0].is_finite() || !pair[1].is_finite() {
-                valid = false;
-                break;
-            }
-            let delta = pair[1] - pair[0];
-            signed += delta;
-            absolute += delta.abs();
-        }
-        if valid {
-            out[row] = Some(if absolute == 0.0 {
-                0.0
-            } else {
-                100.0 * signed / absolute
-            });
-        }
-    }
-    out
-}
-
 #[cfg(test)]
-mod breadth_reference_tests {
+mod volume_reference_tests {
     use super::*;
-
-    #[test]
-    fn aroon_uses_period_plus_current_and_prefers_latest_equal_extreme() {
-        let high = [1.0, 4.0, 3.0, 4.0, 2.0];
-        let low = [5.0, 4.0, 3.0, 3.0, 6.0];
-        let out = aroon(&high, &low, 3);
-        assert_eq!(out[..3], [(None, None); 3]);
-        assert_eq!(out[3], (Some(100.0), Some(100.0)));
-        assert_eq!(out[4], (Some(200.0 / 3.0), Some(200.0 / 3.0)));
-    }
-
-    #[test]
-    fn awesome_oscillator_uses_median_price_and_34_bar_warmup() {
-        let high = (0..34).map(|row| row as f64 + 1.0).collect::<Vec<_>>();
-        let low = (0..34).map(|row| row as f64 - 1.0).collect::<Vec<_>>();
-        let out = awesome_oscillator(&high, &low);
-        assert!(out[..33].iter().all(Option::is_none));
-        assert_eq!(out[33], Some(14.5));
-    }
-
-    #[test]
-    fn dpo_uses_lagged_price_against_current_sma() {
-        let values = (0..10).map(f64::from).collect::<Vec<_>>();
-        let out = dpo(&values, 5);
-        assert_eq!(out[..4], [None; 4]);
-        assert_eq!(out[4], Some(-1.0));
-        assert_eq!(out[9], Some(-1.0));
-    }
-
-    #[test]
-    fn chande_momentum_uses_signed_over_absolute_movement() {
-        let out = chande_momentum(&[10.0, 12.0, 11.0, 13.0, 13.0], 3);
-        assert_eq!(out[..3], [None; 3]);
-        assert_eq!(out[3], Some(60.0));
-        assert_eq!(out[4], Some(100.0 / 3.0));
-        assert_eq!(chande_momentum(&[3.0, 3.0, 3.0], 2)[2], Some(0.0));
-    }
-
-    #[test]
-    fn bollinger_metrics_measure_band_position_and_relative_width() {
-        let out = bollinger_metrics(&[10.0, 11.0, 12.0], 3, 1.0);
-        assert_eq!(out[..2], [(None, None); 2]);
-        let spread = (2.0_f64 / 3.0).sqrt();
-        assert!((out[2].0.unwrap() - (1.0 + spread) / (2.0 * spread)).abs() < 1e-12);
-        assert!((out[2].1.unwrap() - 2.0 * spread / 11.0 * 100.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn envelopes_place_percent_bands_around_selected_average() {
-        let simple = envelopes(&[10.0, 12.0, 14.0], 2, 10.0, false);
-        assert_eq!(simple[0], (None, None, None));
-        assert!((simple[1].0.unwrap() - 12.1).abs() < 1e-12);
-        assert_eq!(simple[1].1, Some(11.0));
-        assert!((simple[1].2.unwrap() - 9.9).abs() < 1e-12);
-        assert!((simple[2].1.unwrap() - 13.0).abs() < 1e-12);
-
-        let exponential = envelopes(&[10.0, 12.0, 14.0], 2, 10.0, true);
-        assert_eq!(exponential[0], (None, None, None));
-        assert!((exponential[2].1.unwrap() - 13.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn alma_uses_normalized_shifted_gaussian_weights() {
-        let symmetric = alma(&[1.0, 2.0, 3.0], 3, 0.5, 6.0);
-        assert_eq!(symmetric[..2], [None; 2]);
-        assert!((symmetric[2].unwrap() - 2.0).abs() < 1e-12);
-        let recent = alma(&[1.0, 2.0, 3.0], 3, 1.0, 6.0);
-        let first = (-8.0_f64).exp();
-        let second = (-2.0_f64).exp();
-        let expected = (first + 2.0 * second + 3.0) / (first + second + 1.0);
-        assert!((recent[2].unwrap() - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cumulative_volume_studies_use_their_distinct_price_weights() {
-        let highs = [12.0, 14.0, 15.0, 18.0];
-        let lows = [8.0, 10.0, 15.0, 14.0];
-        let closes = [11.0, 11.0, 15.0, 14.0];
-        let volumes = [10.0, 20.0, 30.0, 40.0];
-        assert_eq!(
-            accumulation_distribution(&highs, &lows, &closes, &volumes),
-            vec![Some(5.0), Some(-5.0), Some(-5.0), Some(-45.0)]
-        );
-        let pvt = price_volume_trend(&[10.0, 12.0, 9.0], &[5.0, 10.0, 8.0]);
-        assert_eq!(pvt, vec![Some(0.0), Some(2.0), Some(0.0)]);
-        assert_eq!(
-            price_volume_trend(&[0.0, 1.0], &[1.0, 5.0]),
-            vec![Some(0.0), Some(0.0)]
-        );
-    }
-
-    #[test]
-    fn chaikin_oscillator_subtracts_emas_of_cumulative_money_flow() {
-        let out = chaikin_oscillator(&[2.0; 4], &[0.0; 4], &[2.0, 2.0, 0.0, 0.0], &[1.0; 4], 2, 3);
-        assert_eq!(out[..2], [None; 2]);
-        assert!((out[2].unwrap() + 1.0 / 6.0).abs() < 1e-12);
-        assert!((out[3].unwrap() + 5.0 / 18.0).abs() < 1e-12);
-    }
 
     #[test]
     fn relative_volume_excludes_current_bar_from_baseline() {
@@ -626,17 +314,6 @@ mod breadth_reference_tests {
         let zero_baseline = relative_volume(&[0.0, 0.0, 5.0], 2);
         assert_eq!(zero_baseline[..2], [None; 2]);
         assert!(zero_baseline[2].unwrap().is_nan());
-    }
-
-    #[test]
-    fn volume_oscillator_normalizes_fast_slow_ema_gap_and_signals_it() {
-        let out = volume_oscillator(&[1.0, 2.0, 3.0, 4.0], 2, 3, 2);
-        assert!(out[..2].iter().all(|point| point.line.is_none()));
-        assert_eq!(out[2].line, Some(25.0));
-        assert_eq!(out[2].signal, None);
-        assert!((out[3].line.unwrap() - 100.0 / 6.0).abs() < 1e-12);
-        assert!((out[3].signal.unwrap() - 125.0 / 6.0).abs() < 1e-12);
-        assert!((out[3].histogram.unwrap() + 25.0 / 6.0).abs() < 1e-12);
     }
 
     #[test]
@@ -745,289 +422,9 @@ mod breadth_reference_tests {
             }
         }
     }
-
-    #[test]
-    fn elder_force_smooths_close_change_weighted_by_volume() {
-        let out = elder_force(&[10.0, 12.0, 11.0, 14.0], &[5.0, 10.0, 20.0, 10.0], 2);
-        assert_eq!(out, vec![None, None, Some(0.0), Some(20.0)]);
-    }
-
-    #[test]
-    fn ease_of_movement_smooths_midpoint_distance_over_box_ratio() {
-        let out = ease_of_movement(
-            &[12.0, 14.0, 16.0, 17.0],
-            &[8.0, 10.0, 12.0, 13.0],
-            &[10.0, 20.0, 10.0, 0.0],
-            2,
-            100.0,
-        );
-        assert_eq!(out[0], None);
-        assert_eq!(out[1], None);
-        assert_eq!(out[2], Some(60.0));
-        assert!(out[3].unwrap().is_nan());
-    }
-
-    #[test]
-    fn historical_volatility_uses_sample_log_return_deviation() {
-        let out = historical_volatility(&[1.0, 2.0, 4.0, 16.0], 2, 4.0);
-        assert_eq!(out[..2], [None, None]);
-        assert!(out[2].unwrap().abs() < 1e-10);
-        assert!((out[3].unwrap() - 200.0 * 2.0_f64.ln() / 2.0_f64.sqrt()).abs() < 1e-10);
-        let gaps = historical_volatility(&[1.0, 0.0, 4.0, 16.0], 2, 4.0);
-        assert!(gaps[2].unwrap().is_nan());
-        assert!(gaps[3].unwrap().is_nan());
-    }
-
-    #[test]
-    fn trix_is_percent_change_of_three_successive_emas_with_signal() {
-        let out = trix(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 2, 2);
-        assert!(out[..4].iter().all(|point| point.line.is_none()));
-        assert_eq!(out[4].line, Some(40.0));
-        assert_eq!(out[4].signal, None);
-        assert!((out[5].line.unwrap() - 200.0 / 7.0).abs() < 1e-10);
-        assert!((out[5].signal.unwrap() - 240.0 / 7.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn coppock_curve_weights_the_sum_of_two_percent_changes() {
-        let out = coppock_curve(&[1.0, 2.0, 4.0, 8.0, 16.0], 2, 1, 2);
-        assert_eq!(out, vec![None, None, None, Some(400.0), Some(400.0)]);
-    }
-
-    #[test]
-    fn fisher_transform_smooths_clamped_rolling_price_position() {
-        let out = fisher_transform(&[2.0, 4.0, 6.0], &[0.0, 2.0, 4.0], 2);
-        assert_eq!(
-            out[0],
-            FisherPoint {
-                line: None,
-                trigger: None
-            }
-        );
-        let first_value = 0.165_f64;
-        let first = 0.5 * ((1.0 + first_value) / (1.0 - first_value)).ln();
-        let second_value = 0.165 + 0.67 * first_value;
-        let second = 0.5 * ((1.0 + second_value) / (1.0 - second_value)).ln() + 0.5 * first;
-        assert!((out[1].line.unwrap() - first).abs() < 1e-12);
-        assert_eq!(out[1].trigger, None);
-        assert!((out[2].line.unwrap() - second).abs() < 1e-12);
-        assert_eq!(out[2].trigger, Some(first));
-        let flat = fisher_transform(&[1.0, 1.0, 1.0], &[1.0, 1.0, 1.0], 2);
-        assert_eq!(flat[2].line, Some(0.0));
-        assert_eq!(flat[2].trigger, Some(0.0));
-        let gapped = fisher_transform(&[1.0, f64::NAN, 2.0, 3.0], &[0.0, 1.0, 1.0, 2.0], 2);
-        let compact = fisher_transform(&[1.0, 2.0, 3.0], &[0.0, 1.0, 2.0], 2);
-        assert!(gapped[1].line.is_none());
-        assert_eq!(gapped[2].line, compact[1].line);
-        assert_eq!(gapped[3].trigger, compact[2].trigger);
-    }
-
-    #[test]
-    fn ultimate_oscillator_weights_three_true_range_windows() {
-        let out = ultimate_oscillator(
-            &[10.0, 12.0, 14.0],
-            &[0.0, 2.0, 4.0],
-            &[5.0, 9.0, 13.0],
-            1,
-            2,
-            3,
-        );
-        assert_eq!(out[..2], [None, None]);
-        assert!((out[2].unwrap() - 590.0 / 7.0).abs() < 1e-12);
-        let flat = ultimate_oscillator(&[1.0; 3], &[1.0; 3], &[1.0; 3], 1, 2, 3);
-        assert!(flat[2].unwrap().is_nan());
-    }
-
-    #[test]
-    fn vortex_sums_cross_bar_movement_against_true_range() {
-        let points = vortex(&[2.0, 4.0, 6.0], &[0.0, 2.0, 4.0], &[1.0, 3.0, 5.0], 2);
-        assert_eq!(points[0].plus, None);
-        assert_eq!(points[1].minus, None);
-        assert!((points[2].plus.unwrap() - 4.0 / 3.0).abs() < 1e-12);
-        assert_eq!(points[2].minus, Some(0.0));
-    }
-
-    #[test]
-    fn kst_weights_four_roc_averages_and_sma_signal() {
-        let out = kst(&[1.0, 2.0, 4.0], [1; 4], [1; 4], 2);
-        assert_eq!(
-            out[0],
-            KstPoint {
-                line: None,
-                signal: None
-            }
-        );
-        assert_eq!(
-            out[1],
-            KstPoint {
-                line: Some(1000.0),
-                signal: None
-            }
-        );
-        assert_eq!(
-            out[2],
-            KstPoint {
-                line: Some(1000.0),
-                signal: Some(1000.0)
-            }
-        );
-        let gap = kst(&[1.0, 2.0, f64::NAN, 4.0, 8.0, 16.0], [1; 4], [1; 4], 2);
-        assert!(gap[4].line.unwrap().is_finite());
-        assert!(gap[4].signal.unwrap().is_nan());
-        assert_eq!(gap[5].signal, Some(1000.0));
-        // Different ROC and smoothing windows exercise all four independent weights.
-        let closes: Vec<_> = (1..=12).map(f64::from).collect();
-        let roc = [1, 2, 3, 4];
-        let smoothing = [1, 2, 3, 4];
-        let weighted = |row: usize| {
-            roc.iter()
-                .zip(smoothing)
-                .enumerate()
-                .map(|(component, (&lag, period))| {
-                    let average = (row + 1 - period..=row)
-                        .map(|i| (closes[i] / closes[i - lag] - 1.0) * 100.0)
-                        .sum::<f64>()
-                        / period as f64;
-                    (component + 1) as f64 * average
-                })
-                .sum::<f64>()
-        };
-        let varied = kst(&closes, roc, smoothing, 2);
-        assert!(varied[..7].iter().all(|point| point.line.is_none()));
-        assert!((varied[7].line.unwrap() - weighted(7)).abs() < 1e-9);
-        assert!((varied[8].signal.unwrap() - (weighted(7) + weighted(8)) / 2.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn tsi_double_ema_and_signal_match_hand_derived_momentum() {
-        let out = tsi(&[1.0, 2.0, 4.0, 3.0, 5.0], 2, 2, 2);
-        assert!(out[..3].iter().all(|point| point.line.is_none()));
-        assert!((out[3].line.unwrap() - 50.0).abs() < 1e-12);
-        assert_eq!(out[3].signal, None);
-        assert!((out[4].line.unwrap() - 2900.0 / 43.0).abs() < 1e-12);
-        assert!((out[4].signal.unwrap() - 2525.0 / 43.0).abs() < 1e-12);
-        assert!(
-            out.iter()
-                .filter_map(|point| point.line)
-                .all(|value| value.abs() <= 100.0)
-        );
-        let flat = tsi(&[5.0; 8], 2, 2, 2);
-        assert_eq!(flat[4].line, Some(0.0));
-        assert_eq!(flat[4].signal, Some(0.0));
-        let gap = tsi(
-            &[1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0, 6.0, 7.0, 8.0, 9.0],
-            2,
-            2,
-            2,
-        );
-        let compact = tsi(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 2, 2, 2);
-        assert!(gap[4].line.unwrap().is_nan());
-        assert_eq!(gap[7].line, compact[6].line);
-        assert_eq!(gap[8].signal, compact[7].signal);
-    }
-
-    #[test]
-    fn mass_index_sums_two_ema_ratios_and_continues_after_gap() {
-        let lows = [0.0; 5];
-        let out = mass_index(&[1.0, 2.0, 4.0, 3.0, 5.0], &lows, 2, 2);
-        assert_eq!(out[..3], [None; 3]);
-        assert!((out[3].unwrap() - (19.0 / 14.0 + 165.0 / 152.0)).abs() < 1e-12);
-        let flat = mass_index(&[0.0; 5], &lows, 2, 2);
-        assert!(flat[3].unwrap().is_nan());
-        let gap = mass_index(
-            &[1.0, 2.0, 4.0, f64::NAN, 1.0, 2.0, 4.0, 3.0],
-            &[0.0; 8],
-            2,
-            2,
-        );
-        let compact = mass_index(&[1.0, 2.0, 4.0, 1.0, 2.0, 4.0, 3.0], &[0.0; 7], 2, 2);
-        assert!(gap[3].unwrap().is_nan());
-        assert_eq!(gap[6], compact[5]);
-        assert_eq!(gap[7], compact[6]);
-    }
-
-    #[test]
-    fn klinger_uses_signed_cumulative_range_force_and_ema_signal() {
-        // Ranges are all two; trends +,+,-,-. Force = 100, 0, 0, -100/3.
-        let highs = [3.0, 4.0, 3.0, 2.0];
-        let lows = [1.0, 2.0, 1.0, 0.0];
-        let closes = [2.0, 3.0, 2.0, 1.0];
-        let out = klinger(&highs, &lows, &closes, &[1.0; 4], 1, 2, 2);
-        assert_eq!(out[0].line, None);
-        assert_eq!(out[1].line, Some(-50.0));
-        assert_eq!(out[1].signal, None);
-        assert!((out[2].line.unwrap() + 50.0 / 3.0).abs() < 1e-12);
-        assert!((out[2].signal.unwrap() + 100.0 / 3.0).abs() < 1e-12);
-        let gap = klinger(
-            &[3.0, f64::NAN, 3.0, 4.0],
-            &[1.0; 4],
-            &[2.0; 4],
-            &[1.0; 4],
-            1,
-            2,
-            2,
-        );
-        assert!(gap[1].line.unwrap().is_nan());
-        let compact = klinger(&[3.0, 3.0, 4.0], &[1.0; 3], &[2.0; 3], &[1.0; 3], 1, 2, 2);
-        assert_eq!(gap[2].line, compact[1].line);
-        assert_eq!(gap[3].signal, compact[2].signal);
-    }
-
-    #[test]
-    fn kama_squares_efficiency_adjusted_smoothing_and_continues() {
-        let out = kama(&[1.0, 2.0, 3.0, 4.0, 3.0, 4.0], 3, 2, 5);
-        assert_eq!(out[..2], [None, None]);
-        assert_eq!(out[2], Some(2.0));
-        assert!((out[3].unwrap() - (2.0 + 2.0 * (2.0_f64 / 3.0).powi(2))).abs() < 1e-12);
-        // Net 1, path 3: ER=1/3, SC=(1/3*(2/3-1/3)+1/3)^2 = 16/81.
-        let expected = out[3].unwrap() + (3.0 - out[3].unwrap()) * 16.0 / 81.0;
-        assert!((out[4].unwrap() - expected).abs() < 1e-12);
-        let gap = kama(&[1.0, 2.0, 3.0, f64::NAN, 4.0, 5.0, 6.0], 3, 2, 5);
-        let compact = kama(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3, 2, 5);
-        assert!(gap[3].unwrap().is_nan());
-        assert_eq!(gap[4], compact[3]);
-        assert_eq!(gap[6], compact[5]);
-        assert_eq!(kama(&[1.0; 5], 2, 2, 5)[4], Some(1.0));
-    }
-
-    #[test]
-    fn mcginley_adapts_with_fourth_power_ratio() {
-        let out = mcginley(&[2.0, 4.0, 4.0, f64::NAN, 8.0], 2);
-        assert_eq!(out[0], Some(2.0));
-        assert_eq!(out[1], Some(2.0625)); // 2 + (4-2)/(2 * (4/2)^4)
-        assert!(out[3].unwrap().is_nan());
-        // The carried state uses the previous valid 4.0 close, not a new 8.0 seed.
-        let preceding = out[2].unwrap();
-        assert_eq!(
-            out[4],
-            Some(preceding + (8.0 - preceding) / (2.0 * (8.0 / preceding).powi(4)))
-        );
-        assert!(mcginley(&[0.0, 2.0], 2)[0].unwrap().is_nan());
-    }
-
-    #[test]
-    fn regression_channel_uses_residual_not_price_deviation() {
-        let out = linear_regression(&[1.0, 3.0, 2.0, 5.0], 3, 2.0);
-        assert_eq!(out[0].curve, None);
-        assert_eq!(out[1].upper, None);
-        // Window 1,3,2: slope 1/2, intercept 3/2, fitted 3/2,2,5/2.
-        // Residuals -1/2,1,-1/2: population variance 1/2.
-        assert!((out[2].curve.unwrap() - 2.5).abs() < 1e-12);
-        assert!((out[2].upper.unwrap() - (2.5 + 2.0 / 2.0_f64.sqrt())).abs() < 1e-12);
-        assert!((out[2].lower.unwrap() - (2.5 - 2.0 / 2.0_f64.sqrt())).abs() < 1e-12);
-        let linear = linear_regression(&[1.0, 2.0, 3.0], 3, 3.0);
-        assert_eq!(linear[2].upper, Some(3.0));
-        assert_eq!(linear[2].lower, Some(3.0));
-        assert!(
-            linear_regression(&[1.0, f64::NAN, 3.0], 2, 2.0)[2]
-                .curve
-                .unwrap()
-                .is_nan()
-        );
-        assert_eq!(linear_regression(&[5.0], 1, 2.0)[0].curve, Some(5.0));
-    }
 }
 
+/// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
         return vec![None; values.len()];
@@ -1037,266 +434,6 @@ pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
         out[i] = Some(values[i + 1 - period..=i].iter().sum::<f64>() / period as f64);
     }
     out
-}
-
-/// Kaufman's adaptive moving average, SMA-seeded after `period` prices.
-/// Efficiency compares the net `period`-bar change with the sum of absolute
-/// changes; a flat window has zero efficiency.
-pub fn kama(values: &[f64], period: usize, fast: usize, slow: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 || fast == 0 || slow == 0 || fast >= slow {
-        return out;
-    }
-    let mut state = KamaState::default();
-    for (row, slot) in out.iter_mut().enumerate() {
-        let value = kama_step(&mut state, values, row, period, fast, slow);
-        if row + 1 >= period {
-            *slot = Some(value.unwrap_or(f64::NAN));
-        }
-    }
-    out
-}
-
-/// McGinley Dynamic, initialized at the first close. Missing prices skip
-/// the recurrence; a nonpositive price or invalid ratio requires a new seed.
-pub fn mcginley(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 {
-        return out;
-    }
-    let mut state = McGinleyState::default();
-    for (slot, &value) in out.iter_mut().zip(values) {
-        *slot = Some(mcginley_step(&mut state, value, period).unwrap_or(f64::NAN));
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LinearRegressionPoint {
-    pub curve: Option<f64>,
-    pub upper: Option<f64>,
-    pub lower: Option<f64>,
-}
-
-/// Rolling least-squares line evaluated at the current bar. Channel width is
-/// `deviation` times the population standard deviation of residuals inside
-/// that window (not the standard deviation of the price itself).
-pub fn linear_regression(
-    values: &[f64],
-    period: usize,
-    deviation: f64,
-) -> Vec<LinearRegressionPoint> {
-    let mut out = vec![
-        LinearRegressionPoint {
-            curve: None,
-            upper: None,
-            lower: None,
-        };
-        values.len()
-    ];
-    if period == 0 || !deviation.is_finite() || deviation < 0.0 {
-        return out;
-    }
-    for (row, slot) in out.iter_mut().enumerate().skip(period - 1) {
-        let (curve, upper, lower) = linear_regression_at(values, row, period, deviation);
-        *slot = LinearRegressionPoint {
-            curve: Some(curve),
-            upper: Some(upper),
-            lower: Some(lower),
-        };
-    }
-    out
-}
-
-/// Choppiness Index on the last `period` true ranges, requiring a prior close
-/// for the first range. A zero high/low span or a broken OHLC window is whitespace.
-pub fn choppiness(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len()).min(closes.len());
-    let mut out = vec![None; n];
-    if period < 2 {
-        return out;
-    }
-    for (row, slot) in out.iter_mut().enumerate().skip(period) {
-        *slot = Some(choppiness_at(highs, lows, closes, row, period));
-    }
-    out
-}
-
-fn choppiness_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize, period: usize) -> f64 {
-    let start = row + 1 - period;
-    let mut highest = f64::NEG_INFINITY;
-    let mut lowest = f64::INFINITY;
-    let mut sum_tr = 0.0;
-    for index in start..=row {
-        let (high, low, close, previous) =
-            (highs[index], lows[index], closes[index], closes[index - 1]);
-        if !high.is_finite()
-            || !low.is_finite()
-            || !close.is_finite()
-            || !previous.is_finite()
-            || high < low
-        {
-            return f64::NAN;
-        }
-        highest = highest.max(high);
-        lowest = lowest.min(low);
-        sum_tr += (high - low)
-            .max((high - previous).abs())
-            .max((low - previous).abs());
-    }
-    let span = highest - lowest;
-    if span <= 0.0 || !span.is_finite() || !sum_tr.is_finite() || sum_tr <= 0.0 {
-        f64::NAN
-    } else {
-        (100.0 * (sum_tr / span).log10() / (period as f64).log10()).clamp(0.0, 100.0)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AtrBandsPoint {
-    pub basis: Option<f64>,
-    pub upper: Option<f64>,
-    pub lower: Option<f64>,
-}
-
-/// Close-centered bands at `close ± multiplier × Wilder ATR`. Whitespace
-/// leaves the ATR seed unchanged and has no output.
-pub fn atr_bands(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    period: usize,
-    multiplier: f64,
-) -> Vec<AtrBandsPoint> {
-    let n = highs.len().min(lows.len()).min(closes.len());
-    let mut out = vec![
-        AtrBandsPoint {
-            basis: None,
-            upper: None,
-            lower: None
-        };
-        n
-    ];
-    if period == 0 || !multiplier.is_finite() || multiplier < 0.0 {
-        return out;
-    }
-    let mut state = AtrState::default();
-    for (row, slot) in out.iter_mut().enumerate() {
-        let atr = atr_bands_step(&mut state, highs[row], lows[row], closes[row], period);
-        if atr.is_some() {
-            *slot = atr_bands_point(closes[row], atr, multiplier);
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod choppiness_atr_bands_tests {
-    use super::*;
-
-    #[test]
-    fn empty_single_warmup_flat_and_gapped_ohlc() {
-        assert!(choppiness(&[], &[], &[], 3).is_empty());
-        assert!(atr_bands(&[], &[], &[], 3, 2.0).is_empty());
-        assert_eq!(choppiness(&[2.0], &[1.0], &[1.5], 2), [None]);
-        assert_eq!(atr_bands(&[2.0], &[1.0], &[1.5], 2, 2.0)[0].basis, None);
-
-        let highs = [2.0, 2.0, 2.0, 2.0];
-        let lows = [0.0; 4];
-        let closes = [1.0; 4];
-        // Each TR = 2, range = 2: 100 * log10(2) / log10(2).
-        assert_eq!(
-            choppiness(&highs, &lows, &closes, 2),
-            [None, None, Some(100.0), Some(100.0)]
-        );
-        let bands = atr_bands(&highs, &lows, &closes, 2, 1.5);
-        assert_eq!(bands[2].basis, Some(1.0));
-        assert_eq!(bands[2].upper, Some(4.0));
-        assert_eq!(bands[2].lower, Some(-2.0));
-        assert!(
-            choppiness(&[1.0; 4], &[1.0; 4], &[1.0; 4], 2)[2]
-                .unwrap()
-                .is_nan()
-        );
-
-        let highs = [2.0, 2.0, f64::NAN, 2.0, 2.0, 2.0, 2.0];
-        let chop = choppiness(&highs, &[0.0; 7], &[1.0; 7], 2);
-        assert!(chop[2..4].iter().all(|value| value.unwrap().is_nan()));
-        assert_eq!(chop[4], Some(100.0));
-        assert_eq!(chop[5], Some(100.0));
-        let bands = atr_bands(&highs, &[0.0; 7], &[1.0; 7], 2, 1.5);
-        assert_eq!(bands[2].upper, None);
-        assert_eq!(bands[3].upper, Some(4.0));
-        assert_eq!(bands[4].upper, Some(4.0));
-        assert_eq!(bands[5].upper, Some(4.0));
-    }
-}
-
-fn atr_bands_step(
-    state: &mut AtrState,
-    high: f64,
-    low: f64,
-    close: f64,
-    period: usize,
-) -> Option<f64> {
-    if !valid_bar(high, low, close) {
-        return None;
-    }
-    atr_step(state, AtrSample { high, low, close }, period)
-}
-
-fn atr_bands_point(close: f64, atr: Option<f64>, multiplier: f64) -> AtrBandsPoint {
-    let (basis, upper, lower) = match atr {
-        Some(atr) if atr.is_finite() => {
-            let spread = atr * multiplier;
-            (Some(close), Some(close + spread), Some(close - spread))
-        }
-        _ => (Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)),
-    };
-    AtrBandsPoint {
-        basis,
-        upper,
-        lower,
-    }
-}
-
-fn linear_regression_at(
-    values: &[f64],
-    row: usize,
-    period: usize,
-    deviation: f64,
-) -> (f64, f64, f64) {
-    let window = &values[row + 1 - period..=row];
-    if window.iter().any(|value| !value.is_finite()) {
-        return (f64::NAN, f64::NAN, f64::NAN);
-    }
-    let n = period as f64;
-    let mean_x = (n - 1.0) * 0.5;
-    let mean_y = window.iter().sum::<f64>() / n;
-    let denominator = n * (n * n - 1.0) / 12.0;
-    let slope = if period == 1 {
-        0.0
-    } else {
-        window
-            .iter()
-            .enumerate()
-            .map(|(x, &y)| (x as f64 - mean_x) * (y - mean_y))
-            .sum::<f64>()
-            / denominator
-    };
-    let intercept = mean_y - slope * mean_x;
-    let curve = intercept + slope * (n - 1.0);
-    let variance = window
-        .iter()
-        .enumerate()
-        .map(|(x, &y)| {
-            let residual = y - (intercept + slope * x as f64);
-            residual * residual
-        })
-        .sum::<f64>()
-        / n;
-    let spread = variance.sqrt() * deviation;
-    (curve, curve + spread, curve - spread)
 }
 
 /// Exponential moving average using the standard SMA seed, followed by the EMA recurrence.
@@ -1312,90 +449,6 @@ pub fn ema(values: &[f64], period: usize) -> Vec<Option<f64>> {
     out
 }
 
-/// Double exponential moving average: `2 * EMA(source) - EMA(EMA(source))`.
-pub fn dema(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    let first = ema(values, period);
-    let compact = first.iter().flatten().copied().collect::<Vec<_>>();
-    let second = ema(&compact, period);
-    let mut second_index = 0;
-    for (index, first) in first.into_iter().enumerate() {
-        if let Some(first) = first {
-            if let Some(second) = second.get(second_index).copied().flatten() {
-                out[index] = Some(2.0 * first - second);
-            }
-            second_index += 1;
-        }
-    }
-    out
-}
-
-/// Triple exponential moving average: `3 * EMA(source) - 3 * EMA(EMA(source)) + EMA(EMA(EMA(source)))`.
-pub fn tema(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    let first = ema(values, period);
-    let first_values = first.iter().flatten().copied().collect::<Vec<_>>();
-    let second = ema(&first_values, period);
-    let second_values = second.iter().flatten().copied().collect::<Vec<_>>();
-    let third = ema(&second_values, period);
-    let mut second_index = 0;
-    let mut third_index = 0;
-    for (index, first) in first.into_iter().enumerate() {
-        if let Some(first) = first {
-            if let Some(second) = second.get(second_index).copied().flatten() {
-                if let Some(third) = third.get(third_index).copied().flatten() {
-                    out[index] = Some(3.0 * first - 3.0 * second + third);
-                }
-                third_index += 1;
-            }
-            second_index += 1;
-        }
-    }
-    out
-}
-
-/// Smoothed moving average (also called Wilder's moving average or RMA).
-/// The first value is an SMA seed; later values use Wilder's `1 / period` smoothing.
-pub fn smma(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    let mut state = SmmaState::default();
-    for (index, &value) in values.iter().enumerate() {
-        out[index] = smma_step(&mut state, value, period);
-    }
-    out
-}
-
-/// Wilder's moving average (RMA), an alias of [`smma`].
-pub fn rma(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    smma(values, period)
-}
-
-/// Hull moving average: `WMA(2 * WMA(source, period / 2) - WMA(source, period), sqrt(period))`.
-/// Periods use the conventional floored half and square-root lengths, each clamped to one.
-pub fn hma(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    let output_start = period
-        .saturating_sub(1)
-        .saturating_add((period as f64).sqrt() as usize)
-        .saturating_sub(1);
-    for (row, output) in out.iter_mut().enumerate().skip(output_start) {
-        *output = hma_at(values, row, period);
-    }
-    out
-}
-
 /// Volume-weighted moving average. Missing volume rows use unit weight; nonpositive volume
 /// contributes zero, and an all-zero window falls back to its simple average.
 pub fn vwma(values: &[f64], volumes: &[f64], period: usize) -> Vec<Option<f64>> {
@@ -1407,30 +460,6 @@ pub fn vwma(values: &[f64], volumes: &[f64], period: usize) -> Vec<Option<f64>> 
         *output = vwma_at(values, volumes, row, period);
     }
     out
-}
-
-/// Population standard deviation over a rolling window.
-pub fn standard_deviation(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
-        *output = Some(standard_deviation_at(values, row, period));
-    }
-    out
-}
-
-/// Population deviation of the `period` values ending at `row`, centered on their own mean.
-fn standard_deviation_at(values: &[f64], row: usize, period: usize) -> f64 {
-    let window = &values[row + 1 - period..=row];
-    let mean = window.iter().sum::<f64>() / period as f64;
-    let variance = window
-        .iter()
-        .map(|value| (value - mean).powi(2))
-        .sum::<f64>()
-        / period as f64;
-    variance.sqrt()
 }
 
 /// Donchian channel: rolling high, midpoint, and rolling low over the high/low columns.
@@ -1578,40 +607,6 @@ fn cci_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize, period: usize
     }
 }
 
-/// Williams %R over a rolling high/low window. Flat windows emit zero instead of NaN.
-pub fn williams_r(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len()).min(closes.len());
-    let mut out = vec![None; n];
-    if period == 0 {
-        return out;
-    }
-    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
-        *output = Some(williams_r_at(highs, lows, closes, row, period));
-    }
-    out
-}
-
-/// Williams %R of the `period` rows ending at `row`; NaN while the window contains whitespace.
-fn williams_r_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize, period: usize) -> f64 {
-    let start = row + 1 - period;
-    if !(start..=row).all(|index| valid_bar(highs[index], lows[index], closes[index])) {
-        return f64::NAN;
-    }
-    let high = highs[start..=row]
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-    let low = lows[start..=row]
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
-    if high > low {
-        -100.0 * (high - closes[row]) / (high - low)
-    } else {
-        0.0
-    }
-}
-
 /// Stochastic RSI: normalize Wilder RSI within a rolling RSI range.
 /// The first value is available after both the RSI and stochastic windows warm up.
 pub fn stochastic_rsi(
@@ -1662,93 +657,6 @@ fn stochastic_rsi_step(
     } else {
         0.0
     })
-}
-
-/// Momentum as the current value minus the value `period` rows earlier.
-/// A missing row anywhere in the lag window leaves the result blank.
-pub fn momentum(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 {
-        return out;
-    }
-    for_each_lag_pair(values, period, 0, |row, pair| {
-        out[row] = pair.map(|(current, previous)| current - previous);
-    });
-    out
-}
-
-/// Rate of change as a percentage difference from the value `period` rows earlier.
-/// A zero denominator emits zero instead of a non-finite value.
-pub fn rate_of_change(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    if period == 0 {
-        return out;
-    }
-    for_each_lag_pair(values, period, 0, |row, pair| {
-        out[row] = pair.map(|(current, previous)| rate_of_change_value(current, previous));
-    });
-    out
-}
-
-fn rate_of_change_value(current: f64, previous: f64) -> f64 {
-    if previous != 0.0 {
-        (current / previous - 1.0) * 100.0
-    } else {
-        0.0
-    }
-}
-
-/// Calls `emit` for every row from `from` with the row's value and the value `period` rows
-/// earlier, or `None` unless all `period + 1` rows between them are valid. Only the `period`
-/// rows before `from` are scanned to establish the valid run.
-fn for_each_lag_pair(
-    values: &[f64],
-    period: usize,
-    from: usize,
-    mut emit: impl FnMut(usize, Option<(f64, f64)>),
-) {
-    let mut valid_run = 0;
-    for (row, &value) in values.iter().enumerate().skip(from.saturating_sub(period)) {
-        valid_run = if value.is_finite() { valid_run + 1 } else { 0 };
-        if row >= from {
-            emit(
-                row,
-                (valid_run > period).then(|| (value, values[row - period])),
-            );
-        }
-    }
-}
-
-fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
-    if period == 0 || row.saturating_add(1) < period {
-        return None;
-    }
-    let denominator = (period * (period + 1)) as f64 / 2.0;
-    let start = row + 1 - period;
-    Some(
-        values[start..=row]
-            .iter()
-            .enumerate()
-            .map(|(weight, value)| (weight + 1) as f64 * value)
-            .sum::<f64>()
-            / denominator,
-    )
-}
-
-fn hma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
-    let half_period = (period / 2).max(1);
-    let smoothing_period = ((period as f64).sqrt() as usize).max(1);
-    let raw_start = row + 1 - smoothing_period;
-    let denominator = (smoothing_period * (smoothing_period + 1)) as f64 / 2.0;
-    let weighted = (raw_start..=row)
-        .enumerate()
-        .map(|(weight, raw_row)| {
-            let half = wma_at(values, raw_row, half_period)?;
-            let full = wma_at(values, raw_row, period)?;
-            Some((weight + 1) as f64 * (2.0 * half - full))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(weighted.into_iter().sum::<f64>() / denominator)
 }
 
 fn vwma_at(values: &[f64], volumes: &[f64], row: usize, period: usize) -> Option<f64> {
@@ -1803,115 +711,6 @@ pub fn bollinger(values: &[f64], period: usize, deviation: f64) -> Vec<Bollinger
             upper: Some(mean + spread),
             lower: Some(mean - spread),
         };
-    }
-    out
-}
-
-/// Bollinger %B (unit interval at the bands) and BandWidth (percent of basis).
-pub fn bollinger_metrics(
-    values: &[f64],
-    period: usize,
-    deviation: f64,
-) -> Vec<(Option<f64>, Option<f64>)> {
-    bollinger(values, period, deviation)
-        .into_iter()
-        .enumerate()
-        .map(|(row, point)| {
-            let (Some(upper), Some(middle), Some(lower)) = (point.upper, point.middle, point.lower)
-            else {
-                return (None, None);
-            };
-            let width = upper - lower;
-            let percent_b = (width != 0.0).then_some((values[row] - lower) / width);
-            let bandwidth = (middle != 0.0).then_some(width / middle * 100.0);
-            (percent_b, bandwidth)
-        })
-        .collect()
-}
-
-/// Moving-average envelopes, with a percentage distance around SMA or EMA basis.
-pub fn envelopes(
-    values: &[f64],
-    period: usize,
-    percent: f64,
-    exponential: bool,
-) -> Vec<(Option<f64>, Option<f64>, Option<f64>)> {
-    let basis = if exponential {
-        ema(values, period)
-    } else {
-        sma(values, period)
-    };
-    let fraction = percent / 100.0;
-    basis
-        .into_iter()
-        .map(|value| match value {
-            Some(middle) => (
-                Some(middle * (1.0 + fraction)),
-                Some(middle),
-                Some(middle * (1.0 - fraction)),
-            ),
-            None => (None, None, None),
-        })
-        .collect()
-}
-
-fn alma_weights(period: usize, offset: f64, sigma: f64) -> (Vec<f64>, f64) {
-    if period == 0 || !offset.is_finite() || !sigma.is_finite() || sigma <= 0.0 {
-        return (Vec::new(), 0.0);
-    }
-    let center = offset * (period - 1) as f64;
-    let width = period as f64 / sigma;
-    let exponents = (0..period)
-        .map(|index| {
-            let z = (index as f64 - center) / width;
-            -0.5 * z * z
-        })
-        .collect::<Vec<_>>();
-    let maximum = exponents.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let weights = exponents
-        .into_iter()
-        .map(|exponent| (exponent - maximum).exp())
-        .collect::<Vec<_>>();
-    let sum = weights.iter().sum();
-    (weights, sum)
-}
-
-/// Gaussian-weighted moving average with the weight peak shifted by `offset`.
-pub fn alma(values: &[f64], period: usize, offset: f64, sigma: f64) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    let (weights, sum) = alma_weights(period, offset, sigma);
-    if sum == 0.0 {
-        return out;
-    }
-    for row in period.saturating_sub(1)..values.len() {
-        let window = &values[row + 1 - period..=row];
-        out[row] = Some(
-            window
-                .iter()
-                .zip(&weights)
-                .map(|(value, weight)| value * weight)
-                .sum::<f64>()
-                / sum,
-        );
-    }
-    out
-}
-
-/// Weighted moving average: linear weights 1..=period, the most recent bar heaviest.
-pub fn wma(values: &[f64], period: usize) -> Vec<Option<f64>> {
-    if period == 0 {
-        return vec![None; values.len()];
-    }
-    let mut out = vec![None; values.len()];
-    let denominator = (period * (period + 1)) as f64 / 2.0;
-    for i in period.saturating_sub(1)..values.len() {
-        let window = &values[i + 1 - period..=i];
-        let weighted: f64 = window
-            .iter()
-            .enumerate()
-            .map(|(j, v)| (j + 1) as f64 * v)
-            .sum();
-        out[i] = Some(weighted / denominator);
     }
     out
 }
@@ -2142,86 +941,6 @@ pub fn obv(closes: &[f64], volumes: &[f64]) -> Vec<Option<f64>> {
     out
 }
 
-/// Cumulative money-flow volume. Flat bars and non-positive volume contribute zero.
-pub fn accumulation_distribution(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    volumes: &[f64],
-) -> Vec<Option<f64>> {
-    let n = highs
-        .len()
-        .min(lows.len())
-        .min(closes.len())
-        .min(volumes.len());
-    let mut out = vec![None; n];
-    let mut cumulative = 0.0;
-    for row in 0..n {
-        out[row] = Some(accumulation_distribution_step(
-            &mut cumulative,
-            highs[row],
-            lows[row],
-            closes[row],
-            volumes[row],
-        ));
-    }
-    out
-}
-
-/// Price Volume Trend, seeded at zero. A zero previous close contributes no change.
-pub fn price_volume_trend(closes: &[f64], volumes: &[f64]) -> Vec<Option<f64>> {
-    let n = closes.len().min(volumes.len());
-    let mut out = vec![None; n];
-    if n == 0 {
-        return out;
-    }
-    let mut state = CumulativeCloseVolumeState::default();
-    for row in 0..n {
-        out[row] = Some(price_volume_trend_step(
-            &mut state,
-            closes[row],
-            volumes[row],
-        ));
-    }
-    out
-}
-
-/// Chaikin Oscillator: fast EMA of A/D minus slow EMA of A/D.
-pub fn chaikin_oscillator(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    volumes: &[f64],
-    fast: usize,
-    slow: usize,
-) -> Vec<Option<f64>> {
-    let n = highs
-        .len()
-        .min(lows.len())
-        .min(closes.len())
-        .min(volumes.len());
-    let mut out = vec![None; n];
-    if fast == 0 || slow == 0 || fast >= slow {
-        return out;
-    }
-    let mut state = ChaikinState::default();
-    for row in 0..n {
-        let adl = accumulation_distribution_step(
-            &mut state.cumulative,
-            highs[row],
-            lows[row],
-            closes[row],
-            volumes[row],
-        );
-        let fast_value = ema_step(&mut state.fast, adl, fast);
-        let slow_value = ema_step(&mut state.slow, adl, slow);
-        if row >= slow - 1 {
-            out[row] = Some(fast_value.zip(slow_value).map_or(f64::NAN, |(a, b)| a - b));
-        }
-    }
-    out
-}
-
 /// Current non-negative volume divided by the mean of the previous `period` bars.
 pub fn relative_volume(volumes: &[f64], period: usize) -> Vec<Option<f64>> {
     let mut out = vec![None; volumes.len()];
@@ -2244,956 +963,6 @@ pub fn relative_volume(volumes: &[f64], period: usize) -> Vec<Option<f64>> {
         });
     }
     out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VolumeOscillatorPoint {
-    pub line: Option<f64>,
-    pub signal: Option<f64>,
-    pub histogram: Option<f64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct KlingerPoint {
-    pub line: Option<f64>,
-    pub signal: Option<f64>,
-}
-
-/// Klinger volume oscillator: EMA(fast) - EMA(slow) of signed volume force,
-/// and an EMA signal. The trend follows the change in high + low + close;
-/// cumulative measurement restarts when the trend reverses. Flat ranges
-/// contribute zero force. Whitespace OHLC rows leave the EMA seeds unchanged.
-pub fn klinger(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    volumes: &[f64],
-    fast: usize,
-    slow: usize,
-    signal: usize,
-) -> Vec<KlingerPoint> {
-    let n = highs
-        .len()
-        .min(lows.len())
-        .min(closes.len())
-        .min(volumes.len());
-    let mut out = vec![
-        KlingerPoint {
-            line: None,
-            signal: None
-        };
-        n
-    ];
-    if fast == 0 || slow == 0 || signal == 0 || fast >= slow {
-        return out;
-    }
-    let mut state = KlingerState::default();
-    let signal_start = slow.saturating_add(signal).saturating_sub(2);
-    for row in 0..n {
-        let (line, signal_value) = klinger_step(
-            &mut state,
-            highs[row],
-            lows[row],
-            closes[row],
-            volumes[row],
-            [fast, slow, signal],
-        );
-        if row + 1 >= slow {
-            out[row].line = Some(line.unwrap_or(f64::NAN));
-        }
-        if row >= signal_start {
-            out[row].signal = Some(signal_value.unwrap_or(f64::NAN));
-        }
-    }
-    out
-}
-
-/// Percentage Volume Oscillator with an EMA signal and line-minus-signal histogram.
-pub fn volume_oscillator(
-    volumes: &[f64],
-    fast: usize,
-    slow: usize,
-    signal: usize,
-) -> Vec<VolumeOscillatorPoint> {
-    let mut out = vec![
-        VolumeOscillatorPoint {
-            line: None,
-            signal: None,
-            histogram: None,
-        };
-        volumes.len()
-    ];
-    if fast == 0 || slow == 0 || signal == 0 || fast >= slow {
-        return out;
-    }
-    let mut state = MacdState::default();
-    for (row, &volume) in volumes.iter().enumerate() {
-        let point = volume_oscillator_step(&mut state, volume, fast, slow, signal);
-        if row >= slow - 1 {
-            out[row].line = Some(point.line.unwrap_or(f64::NAN));
-        }
-        if row >= slow + signal - 2 {
-            out[row].signal = Some(point.signal.unwrap_or(f64::NAN));
-            out[row].histogram = Some(point.histogram.unwrap_or(f64::NAN));
-        }
-    }
-    out
-}
-
-/// Elder Force Index: EMA of close-to-close change times non-negative current volume.
-/// The first bar has no preceding close and does not seed the EMA.
-pub fn elder_force(closes: &[f64], volumes: &[f64], period: usize) -> Vec<Option<f64>> {
-    let n = closes.len().min(volumes.len());
-    let mut out = vec![None; n];
-    if period == 0 {
-        return out;
-    }
-    let mut ema_state = EmaState::default();
-    let mut previous = None;
-    for row in 0..n {
-        let close = closes[row];
-        if !close.is_finite() {
-            continue;
-        }
-        if let Some(last) = previous {
-            let force = (close - last) * volumes[row].max(0.0);
-            out[row] = ema_step(&mut ema_state, force, period);
-        }
-        previous = Some(close);
-    }
-    out
-}
-
-/// Ease of Movement: SMA of midpoint distance times high-low range divided by normalized
-/// current volume. A zero-volume bar makes each covering window undefined, preserving the gap.
-pub fn ease_of_movement(
-    highs: &[f64],
-    lows: &[f64],
-    volumes: &[f64],
-    period: usize,
-    divisor: f64,
-) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len()).min(volumes.len());
-    let mut out = vec![None; n];
-    if period == 0 || !divisor.is_finite() || divisor <= 0.0 {
-        return out;
-    }
-    for (row, slot) in out.iter_mut().enumerate().skip(period) {
-        *slot = Some(ease_of_movement_at(
-            highs, lows, volumes, row, period, divisor,
-        ));
-    }
-    out
-}
-
-/// Annualized sample standard deviation of close-to-close log returns, in percent.
-/// `annualization` is the number of chart bars per year, typically 252 for daily equities.
-pub fn historical_volatility(
-    closes: &[f64],
-    period: usize,
-    annualization: f64,
-) -> Vec<Option<f64>> {
-    let mut out = vec![None; closes.len()];
-    if period < 2 || !annualization.is_finite() || annualization <= 0.0 {
-        return out;
-    }
-    let mut window = VecDeque::with_capacity(period + 1);
-    for (row, slot) in out.iter_mut().enumerate().skip(1) {
-        push_log_return(&mut window, closes, row, period);
-        if row >= period {
-            *slot = Some(historical_volatility_window(&window, annualization));
-        }
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TrixPoint {
-    pub line: Option<f64>,
-    pub signal: Option<f64>,
-}
-
-/// Percent change of a triple-smoothed EMA and an EMA of that percent-change line.
-pub fn trix(values: &[f64], period: usize, signal_period: usize) -> Vec<TrixPoint> {
-    let mut out = vec![
-        TrixPoint {
-            line: None,
-            signal: None
-        };
-        values.len()
-    ];
-    if period == 0 || signal_period == 0 {
-        return out;
-    }
-    let mut state = TrixState::default();
-    for (&value, point) in values.iter().zip(out.iter_mut()) {
-        let (line, signal) = trix_step(&mut state, value, period, signal_period);
-        point.line = line;
-        point.signal = signal;
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct KstPoint {
-    pub line: Option<f64>,
-    pub signal: Option<f64>,
-}
-
-/// Know Sure Thing: 1:2:3:4 weighted SMAs of four percentage ROC series,
-/// with an SMA signal. Each unavailable ROC invalidates its whole smoothing window.
-pub fn kst(
-    closes: &[f64],
-    roc_periods: [usize; 4],
-    sma_periods: [usize; 4],
-    signal_period: usize,
-) -> Vec<KstPoint> {
-    let mut out = vec![
-        KstPoint {
-            line: None,
-            signal: None
-        };
-        closes.len()
-    ];
-    if roc_periods.contains(&0) || sma_periods.contains(&0) || signal_period == 0 {
-        return out;
-    }
-    let start = kst_line_start(roc_periods, sma_periods);
-    for (row, point) in out.iter_mut().enumerate().skip(start) {
-        point.line = Some(kst_at(closes, row, roc_periods, sma_periods));
-        if row >= start.saturating_add(signal_period - 1) {
-            let signal = (row + 1 - signal_period..=row)
-                .map(|index| kst_at(closes, index, roc_periods, sma_periods))
-                .fold(0.0, |sum, value| sum + value);
-            point.signal = Some(signal / signal_period as f64);
-        }
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TsiPoint {
-    pub line: Option<f64>,
-    pub signal: Option<f64>,
-}
-
-/// True Strength Index: double EMA of close momentum divided by double EMA of its
-/// absolute value, multiplied by 100, with an EMA signal. Flat momentum gives zero.
-pub fn tsi(closes: &[f64], long: usize, short: usize, signal_period: usize) -> Vec<TsiPoint> {
-    let mut out = vec![
-        TsiPoint {
-            line: None,
-            signal: None
-        };
-        closes.len()
-    ];
-    if long == 0 || short == 0 || signal_period == 0 {
-        return out;
-    }
-    let line_start = long.saturating_add(short).saturating_sub(1);
-    let mut state = TsiState::default();
-    for (row, point) in out.iter_mut().enumerate() {
-        let (line, signal) = tsi_step(&mut state, closes[row], long, short, signal_period);
-        if row >= line_start {
-            point.line = Some(line.unwrap_or(f64::NAN));
-        }
-        if row >= line_start.saturating_add(signal_period - 1) {
-            point.signal = Some(signal.unwrap_or(f64::NAN));
-        }
-    }
-    out
-}
-
-/// Sum of `sum_period` ratios of EMA(high-low) to its second EMA.
-pub fn mass_index(
-    highs: &[f64],
-    lows: &[f64],
-    ema_period: usize,
-    sum_period: usize,
-) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len());
-    let mut out = vec![None; n];
-    if ema_period == 0 || sum_period == 0 {
-        return out;
-    }
-    let mut state = MassState::default();
-    let start = mass_start(ema_period, sum_period);
-    for row in 0..n {
-        let value = mass_index_step(&mut state, highs[row], lows[row], ema_period, sum_period);
-        if row >= start {
-            out[row] = Some(value.unwrap_or(f64::NAN));
-        }
-    }
-    out
-}
-
-/// Weighted moving average of the sum of long and short percentage rates of change.
-pub fn coppock_curve(
-    closes: &[f64],
-    long_period: usize,
-    short_period: usize,
-    smoothing: usize,
-) -> Vec<Option<f64>> {
-    let mut out = vec![None; closes.len()];
-    if long_period == 0 || short_period == 0 || smoothing == 0 {
-        return out;
-    }
-    let first = coppock_start(long_period, short_period, smoothing);
-    for (row, slot) in out.iter_mut().enumerate().skip(first) {
-        *slot = Some(coppock_at(
-            closes,
-            row,
-            long_period,
-            short_period,
-            smoothing,
-        ));
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FisherPoint {
-    pub line: Option<f64>,
-    pub trigger: Option<f64>,
-}
-
-/// Ehlers Fisher Transform of median price over rolling high/low extrema. The trigger is the
-/// previous Fisher line. Flat ranges normalize to the midpoint; whitespace skips the recurrence.
-pub fn fisher_transform(highs: &[f64], lows: &[f64], period: usize) -> Vec<FisherPoint> {
-    let n = highs.len().min(lows.len());
-    let mut out = vec![
-        FisherPoint {
-            line: None,
-            trigger: None
-        };
-        n
-    ];
-    if period == 0 {
-        return out;
-    }
-    let mut window = FisherWindow::default();
-    let mut state = FisherState::default();
-    for (row, point) in out.iter_mut().enumerate() {
-        window.advance(highs, lows, row, period);
-        if window.valid_rows.len() == period && valid_range(highs[row], lows[row]) {
-            let (line, trigger) = fisher_step(&mut state, &window, highs, lows, row);
-            point.line = Some(line);
-            if row >= period {
-                point.trigger = Some(trigger);
-            }
-        }
-    }
-    out
-}
-
-/// Weighted buying pressure relative to true range across three windows (4:2:1).
-pub fn ultimate_oscillator(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    short: usize,
-    medium: usize,
-    long: usize,
-) -> Vec<Option<f64>> {
-    let n = highs.len().min(lows.len()).min(closes.len());
-    let mut out = vec![None; n];
-    if short == 0 || medium == 0 || long == 0 {
-        return out;
-    }
-    for (row, slot) in out
-        .iter_mut()
-        .enumerate()
-        .skip(short.max(medium).max(long) - 1)
-    {
-        *slot = Some(ultimate_at(highs, lows, closes, row, [short, medium, long]));
-    }
-    out
-}
-
-fn ultimate_at(
-    highs: &[f64],
-    lows: &[f64],
-    closes: &[f64],
-    row: usize,
-    periods: [usize; 3],
-) -> f64 {
-    let mut averages = [0.0; 3];
-    for (average, period) in averages.iter_mut().zip(periods) {
-        let mut pressure = 0.0;
-        let mut range = 0.0;
-        for index in row + 1 - period..=row {
-            let previous = if index == 0 {
-                closes[0]
-            } else {
-                closes[index - 1]
-            };
-            let bottom = lows[index].min(previous);
-            let top = highs[index].max(previous);
-            let current_pressure = closes[index] - bottom;
-            let current_range = top - bottom;
-            if !previous.is_finite()
-                || !highs[index].is_finite()
-                || !lows[index].is_finite()
-                || !closes[index].is_finite()
-                || current_range < 0.0
-            {
-                return f64::NAN;
-            }
-            pressure += current_pressure;
-            range += current_range;
-        }
-        if range <= 0.0 {
-            return f64::NAN;
-        }
-        *average = pressure / range;
-    }
-    100.0 * (4.0 * averages[0] + 2.0 * averages[1] + averages[2]) / 7.0
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VortexPoint {
-    pub plus: Option<f64>,
-    pub minus: Option<f64>,
-}
-
-/// Positive and negative vortex movement divided by true range over a common window.
-pub fn vortex(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<VortexPoint> {
-    let n = highs.len().min(lows.len()).min(closes.len());
-    let mut out = vec![
-        VortexPoint {
-            plus: None,
-            minus: None
-        };
-        n
-    ];
-    if period == 0 {
-        return out;
-    }
-    for (row, point) in out.iter_mut().enumerate().skip(period) {
-        let (plus, minus) = vortex_at(highs, lows, closes, row, period);
-        point.plus = Some(plus);
-        point.minus = Some(minus);
-    }
-    out
-}
-
-fn vortex_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize, period: usize) -> (f64, f64) {
-    let mut plus = 0.0;
-    let mut minus = 0.0;
-    let mut range = 0.0;
-    for index in row + 1 - period..=row {
-        let previous = index - 1;
-        if !highs[index].is_finite()
-            || !lows[index].is_finite()
-            || !highs[previous].is_finite()
-            || !lows[previous].is_finite()
-            || !closes[previous].is_finite()
-        {
-            return (f64::NAN, f64::NAN);
-        }
-        plus += (highs[index] - lows[previous]).abs();
-        minus += (lows[index] - highs[previous]).abs();
-        range += (highs[index] - lows[index])
-            .max((highs[index] - closes[previous]).abs())
-            .max((lows[index] - closes[previous]).abs());
-    }
-    if range <= 0.0 {
-        return (f64::NAN, f64::NAN);
-    }
-    (plus / range, minus / range)
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct FisherState {
-    normalized: f64,
-    line: f64,
-    valid: bool,
-}
-
-/// Fisher recurrence plus its window of row indices, both carried in checkpoints so a resume never
-/// walks back across whitespace to rediscover the last `period` valid rows.
-#[derive(Clone, Debug, Default)]
-struct FisherCarry {
-    state: FisherState,
-    window: FisherWindow,
-}
-
-#[derive(Clone, Debug, Default)]
-struct FisherWindow {
-    high_deque: VecDeque<usize>,
-    low_deque: VecDeque<usize>,
-    valid_rows: VecDeque<usize>,
-}
-
-impl FisherWindow {
-    fn bytes(&self) -> usize {
-        (self.high_deque.capacity() + self.low_deque.capacity() + self.valid_rows.capacity())
-            * std::mem::size_of::<usize>()
-    }
-
-    fn advance(&mut self, highs: &[f64], lows: &[f64], row: usize, period: usize) {
-        let high = highs[row];
-        let low = lows[row];
-        if !high.is_finite() || !low.is_finite() {
-            return;
-        }
-        self.valid_rows.push_back(row);
-        if self.valid_rows.len() > period {
-            self.valid_rows.pop_front();
-        }
-        while self
-            .high_deque
-            .back()
-            .is_some_and(|&index| high >= highs[index])
-        {
-            self.high_deque.pop_back();
-        }
-        while self
-            .low_deque
-            .back()
-            .is_some_and(|&index| low <= lows[index])
-        {
-            self.low_deque.pop_back();
-        }
-        self.high_deque.push_back(row);
-        self.low_deque.push_back(row);
-        let first = *self.valid_rows.front().expect("current valid Fisher row");
-        while self.high_deque.front().is_some_and(|&index| index < first) {
-            self.high_deque.pop_front();
-        }
-        while self.low_deque.front().is_some_and(|&index| index < first) {
-            self.low_deque.pop_front();
-        }
-    }
-}
-
-fn fisher_step(
-    state: &mut FisherState,
-    window: &FisherWindow,
-    highs: &[f64],
-    lows: &[f64],
-    row: usize,
-) -> (f64, f64) {
-    let highest = highs[*window.high_deque.front().expect("valid Fisher high")];
-    let lowest = lows[*window.low_deque.front().expect("valid Fisher low")];
-    let midpoint = (highs[row] + lows[row]) * 0.5;
-    let position = if highest > lowest {
-        ((midpoint - lowest) / (highest - lowest)).clamp(0.0, 1.0)
-    } else {
-        0.5
-    };
-    let normalized = (0.66 * (position - 0.5) + 0.67 * state.normalized).clamp(-0.999, 0.999);
-    let trigger = if state.valid { state.line } else { f64::NAN };
-    let line = 0.5 * ((1.0 + normalized) / (1.0 - normalized)).ln() + 0.5 * state.line;
-    state.normalized = normalized;
-    state.line = line;
-    state.valid = true;
-    (line, trigger)
-}
-
-fn coppock_start(long_period: usize, short_period: usize, smoothing: usize) -> usize {
-    long_period
-        .max(short_period)
-        .saturating_add(smoothing.saturating_sub(1))
-}
-
-fn coppock_at(
-    closes: &[f64],
-    row: usize,
-    long_period: usize,
-    short_period: usize,
-    smoothing: usize,
-) -> f64 {
-    let first = row + 1 - smoothing;
-    if !closes[first - long_period.max(short_period)..=row]
-        .iter()
-        .all(|close| close.is_finite())
-    {
-        return f64::NAN;
-    }
-    let weighted = (first..=row)
-        .enumerate()
-        .map(|(index, current)| {
-            let close = closes[current];
-            let long_base = closes[current - long_period];
-            let short_base = closes[current - short_period];
-            let long = if long_base != 0.0 {
-                (close / long_base - 1.0) * 100.0
-            } else {
-                0.0
-            };
-            let short = if short_base != 0.0 {
-                (close / short_base - 1.0) * 100.0
-            } else {
-                0.0
-            };
-            (index + 1) as f64 * (long + short)
-        })
-        .sum::<f64>();
-    weighted / (smoothing as f64 * (smoothing as f64 + 1.0) * 0.5)
-}
-
-fn trix_line_start(period: usize) -> usize {
-    period.saturating_sub(1).saturating_mul(3).saturating_add(1)
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct TrixState {
-    first: EmaState,
-    second: EmaState,
-    third: EmaState,
-    signal: EmaState,
-    previous_triple: Option<f64>,
-}
-
-fn trix_step(
-    state: &mut TrixState,
-    sample: f64,
-    period: usize,
-    signal_period: usize,
-) -> (Option<f64>, Option<f64>) {
-    if !sample.is_finite() {
-        return (None, None);
-    }
-    let triple = ema_step(&mut state.first, sample, period)
-        .and_then(|value| ema_step(&mut state.second, value, period))
-        .and_then(|value| ema_step(&mut state.third, value, period));
-    let Some(triple) = triple else {
-        return (None, None);
-    };
-    let previous = state.previous_triple.replace(triple);
-    let line = previous.map(|previous| {
-        if previous == 0.0 {
-            f64::NAN
-        } else {
-            (triple - previous) / previous * 100.0
-        }
-    });
-    let signal = line.and_then(|line| {
-        if line.is_finite() {
-            ema_step(&mut state.signal, line, signal_period)
-        } else {
-            state.signal = EmaState::default();
-            None
-        }
-    });
-    (line, signal)
-}
-
-fn kst_line_start(roc: [usize; 4], smooth: [usize; 4]) -> usize {
-    roc.into_iter()
-        .zip(smooth)
-        .map(|(roc, smooth)| roc.saturating_add(smooth.saturating_sub(1)))
-        .max()
-        .unwrap_or(0)
-}
-
-fn kst_at(closes: &[f64], row: usize, roc: [usize; 4], smooth: [usize; 4]) -> f64 {
-    let mut line = 0.0;
-    for (component, (lag, period)) in roc.into_iter().zip(smooth).enumerate() {
-        // Every ROC sample depends on the entire lag interval, even when
-        // smoothing is shorter than the lag and no endpoint lands on a gap.
-        if !closes[row + 1 - period - lag..=row]
-            .iter()
-            .all(|close| close.is_finite())
-        {
-            return f64::NAN;
-        }
-        let mut sum = 0.0;
-        for index in row + 1 - period..=row {
-            let current = closes[index];
-            let previous = closes[index - lag];
-            if previous == 0.0 {
-                return f64::NAN;
-            }
-            sum += 100.0 * (current / previous - 1.0);
-        }
-        line += (component + 1) as f64 * sum / period as f64;
-    }
-    line
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct TsiState {
-    previous: Option<f64>,
-    momentum_long: EmaState,
-    momentum_short: EmaState,
-    absolute_long: EmaState,
-    absolute_short: EmaState,
-    signal: EmaState,
-}
-
-#[derive(Clone, Debug, Default)]
-struct KamaState {
-    value: f64,
-    recent: VecDeque<f64>,
-}
-
-fn kama_step(
-    state: &mut KamaState,
-    values: &[f64],
-    row: usize,
-    period: usize,
-    fast: usize,
-    slow: usize,
-) -> Option<f64> {
-    let close = values[row];
-    if !close.is_finite() {
-        return None;
-    }
-    state.recent.push_back(close);
-    if state.recent.len() < period {
-        return None;
-    }
-    if state.recent.len() == period {
-        state.value = state.recent.iter().sum::<f64>() / period as f64;
-    } else {
-        let change = (close - state.recent[0]).abs();
-        let volatility = state
-            .recent
-            .iter()
-            .zip(state.recent.iter().skip(1))
-            .map(|(a, b)| (b - a).abs())
-            .sum::<f64>();
-        let efficiency = if volatility == 0.0 {
-            0.0
-        } else {
-            change / volatility
-        };
-        let smoothing = (efficiency * (2.0 / (fast as f64 + 1.0) - 2.0 / (slow as f64 + 1.0))
-            + 2.0 / (slow as f64 + 1.0))
-            .powi(2);
-        state.value += smoothing * (close - state.value);
-        state.recent.pop_front();
-    }
-    Some(state.value)
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct McGinleyState {
-    value: Option<f64>,
-}
-
-fn mcginley_step(state: &mut McGinleyState, close: f64, period: usize) -> Option<f64> {
-    if !close.is_finite() {
-        return None;
-    }
-    if close <= 0.0 {
-        state.value = None;
-        return None;
-    }
-    let value = match state.value {
-        Some(previous) => {
-            let denominator = period as f64 * (close / previous).powi(4);
-            previous + (close - previous) / denominator
-        }
-        None => close,
-    };
-    state.value = value.is_finite().then_some(value);
-    state.value
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct KlingerState {
-    previous_sum: Option<f64>,
-    previous_range: f64,
-    trend: f64,
-    cumulative: f64,
-    fast: EmaState,
-    slow: EmaState,
-    signal: EmaState,
-}
-
-fn klinger_step(
-    state: &mut KlingerState,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
-    periods: [usize; 3],
-) -> (Option<f64>, Option<f64>) {
-    let range = high - low;
-    let sum = high + low + close;
-    if !sum.is_finite() || !range.is_finite() || range < 0.0 {
-        return (None, None);
-    }
-    if !volume.is_finite() || volume < 0.0 {
-        *state = KlingerState::default();
-        return (None, None);
-    }
-    let trend = state
-        .previous_sum
-        .map_or(1.0, |previous| if sum > previous { 1.0 } else { -1.0 });
-    state.cumulative = if state.previous_sum.is_some() && trend == state.trend {
-        state.cumulative + range
-    } else {
-        state.previous_range + range
-    };
-    state.previous_range = range;
-    state.previous_sum = Some(sum);
-    state.trend = trend;
-    let force = if state.cumulative == 0.0 {
-        0.0
-    } else {
-        volume * trend * 100.0 * (2.0 * range / state.cumulative - 1.0).abs()
-    };
-    let first = ema_step(&mut state.fast, force, periods[0]);
-    let second = ema_step(&mut state.slow, force, periods[1]);
-    let line = first.zip(second).map(|(first, second)| first - second);
-    let signal_value = line.and_then(|line| ema_step(&mut state.signal, line, periods[2]));
-    (line, signal_value)
-}
-
-fn tsi_step(
-    state: &mut TsiState,
-    close: f64,
-    long: usize,
-    short: usize,
-    signal_period: usize,
-) -> (Option<f64>, Option<f64>) {
-    if !close.is_finite() {
-        return (None, None);
-    }
-    let previous = state.previous.replace(close);
-    let Some(previous) = previous else {
-        return (None, None);
-    };
-    let momentum = close - previous;
-    if !momentum.is_finite() {
-        *state = TsiState::default();
-        return (None, None);
-    }
-    let numerator = ema_step(&mut state.momentum_long, momentum, long)
-        .and_then(|sample| ema_step(&mut state.momentum_short, sample, short));
-    let denominator = ema_step(&mut state.absolute_long, momentum.abs(), long)
-        .and_then(|sample| ema_step(&mut state.absolute_short, sample, short));
-    let line = numerator.zip(denominator).map(|(numerator, denominator)| {
-        if denominator == 0.0 {
-            0.0
-        } else {
-            (100.0 * (numerator / denominator)).clamp(-100.0, 100.0)
-        }
-    });
-    let signal = line.and_then(|line| ema_step(&mut state.signal, line, signal_period));
-    (line, signal)
-}
-
-fn mass_start(ema_period: usize, sum_period: usize) -> usize {
-    ema_period
-        .saturating_sub(1)
-        .saturating_mul(2)
-        .saturating_add(sum_period - 1)
-}
-
-#[derive(Clone, Debug, Default)]
-struct MassState {
-    first: EmaState,
-    second: EmaState,
-    ratios: VecDeque<f64>,
-}
-
-fn mass_step(state: &mut MassState, high: f64, low: f64, period: usize) -> Option<f64> {
-    let range = high - low;
-    if !range.is_finite() || range < 0.0 {
-        return None;
-    }
-    let first = ema_step(&mut state.first, range, period)?;
-    let second = ema_step(&mut state.second, first, period)?;
-    Some(if second == 0.0 {
-        f64::NAN
-    } else {
-        first / second
-    })
-}
-
-fn mass_index_step(
-    state: &mut MassState,
-    high: f64,
-    low: f64,
-    ema_period: usize,
-    sum_period: usize,
-) -> Option<f64> {
-    if !valid_range(high, low) {
-        return None;
-    }
-    if let Some(ratio) = mass_step(state, high, low, ema_period) {
-        state.ratios.push_back(ratio);
-        if state.ratios.len() > sum_period {
-            state.ratios.pop_front();
-        }
-    }
-    (state.ratios.len() == sum_period).then(|| state.ratios.iter().sum())
-}
-
-fn log_return(closes: &[f64], row: usize) -> f64 {
-    let previous = closes[row - 1];
-    let current = closes[row];
-    if previous <= 0.0 || current <= 0.0 {
-        f64::NAN
-    } else {
-        current.ln() - previous.ln()
-    }
-}
-
-fn push_log_return(window: &mut VecDeque<f64>, closes: &[f64], row: usize, period: usize) {
-    window.push_back(log_return(closes, row));
-    if window.len() > period {
-        window.pop_front();
-    }
-}
-
-/// Annualized sample deviation of the log returns in `window`, centered on the window's own
-/// mean. Running sums of returns and squares cancel catastrophically when small moves follow
-/// large ones, and keep that residue after the large moves leave the window.
-fn historical_volatility_window(window: &VecDeque<f64>, annualization: f64) -> f64 {
-    if window.iter().any(|value| !value.is_finite()) {
-        return f64::NAN;
-    }
-    let count = window.len() as f64;
-    let mean = window.iter().sum::<f64>() / count;
-    let squares = window
-        .iter()
-        .map(|value| (value - mean) * (value - mean))
-        .sum::<f64>();
-    (squares / (count - 1.0)).sqrt() * annualization.sqrt() * 100.0
-}
-
-fn ease_of_movement_raw(
-    highs: &[f64],
-    lows: &[f64],
-    volumes: &[f64],
-    row: usize,
-    divisor: f64,
-) -> f64 {
-    let volume = volumes.get(row).copied().unwrap_or(0.0).max(0.0);
-    if volume == 0.0 {
-        return f64::NAN;
-    }
-    let prior_midpoint = (highs[row - 1] + lows[row - 1]) * 0.5;
-    let midpoint = (highs[row] + lows[row]) * 0.5;
-    (midpoint - prior_midpoint) * (highs[row] - lows[row]) * divisor / volume
-}
-
-/// Mean of the `period` raw values ending at `row`, summed afresh for each window. A running
-/// sum keeps cancellation residue from moves that already left the window, which is visible on a
-/// flat window after large moves.
-fn ease_of_movement_at(
-    highs: &[f64],
-    lows: &[f64],
-    volumes: &[f64],
-    row: usize,
-    period: usize,
-    divisor: f64,
-) -> f64 {
-    let mut sum = 0.0;
-    for index in row + 1 - period..=row {
-        let raw = ease_of_movement_raw(highs, lows, volumes, index, divisor);
-        if !raw.is_finite() {
-            return f64::NAN;
-        }
-        sum += raw;
-    }
-    sum / period as f64
 }
 
 /// Chaikin money flow over a rolling window. Each bar contributes its close location value times
@@ -3534,58 +1303,6 @@ struct EmaState {
     seen: usize,
     seed_sum: f64,
     value: f64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct DemaState {
-    first: EmaState,
-    second: EmaState,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct TemaState {
-    first: EmaState,
-    second: EmaState,
-    third: EmaState,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct SmmaState {
-    seen: usize,
-    seed_sum: f64,
-    value: f64,
-}
-
-fn dema_step(state: &mut DemaState, sample: f64, period: usize) -> Option<f64> {
-    let first = ema_step(&mut state.first, sample, period)?;
-    let second = ema_step(&mut state.second, first, period)?;
-    Some(2.0 * first - second)
-}
-
-fn tema_step(state: &mut TemaState, sample: f64, period: usize) -> Option<f64> {
-    let first = ema_step(&mut state.first, sample, period)?;
-    let second = ema_step(&mut state.second, first, period)?;
-    let third = ema_step(&mut state.third, second, period)?;
-    Some(3.0 * first - 3.0 * second + third)
-}
-
-fn smma_step(state: &mut SmmaState, sample: f64, period: usize) -> Option<f64> {
-    if !sample.is_finite() {
-        return None;
-    }
-    state.seen += 1;
-    if state.seen <= period {
-        state.seed_sum += sample;
-        if state.seen == period {
-            state.value = state.seed_sum / period as f64;
-            Some(state.value)
-        } else {
-            None
-        }
-    } else {
-        state.value = (state.value * (period as f64 - 1.0) + sample) / period as f64;
-        Some(state.value)
-    }
 }
 
 fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
@@ -4320,38 +2037,6 @@ fn macd_step(
     }
 }
 
-fn volume_oscillator_step(
-    state: &mut MacdState,
-    volume: f64,
-    fast_period: usize,
-    slow_period: usize,
-    signal_period: usize,
-) -> VolumeOscillatorPoint {
-    if !volume.is_finite() {
-        return VolumeOscillatorPoint {
-            line: None,
-            signal: None,
-            histogram: None,
-        };
-    }
-    let sample = volume.max(0.0);
-    let fast = ema_step(&mut state.fast, sample, fast_period);
-    let slow = ema_step(&mut state.slow, sample, slow_period);
-    let line = fast.zip(slow).map(|(fast, slow)| {
-        if slow == 0.0 {
-            0.0
-        } else {
-            (fast - slow) / slow * 100.0
-        }
-    });
-    let signal = line.and_then(|line| ema_step(&mut state.signal, line, signal_period));
-    VolumeOscillatorPoint {
-        line,
-        signal,
-        histogram: line.zip(signal).map(|(line, signal)| line - signal),
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct VwapState {
     day: i64,
@@ -4365,19 +2050,6 @@ struct CumulativeCloseVolumeState {
     cumulative: f64,
     previous_close: f64,
     initialized: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ChaikinState {
-    cumulative: f64,
-    fast: EmaState,
-    slow: EmaState,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ElderForceState {
-    previous_close: Option<f64>,
-    ema: EmaState,
 }
 
 // A missing source price is not an observation. Volume whitespace has a separate policy.
@@ -4718,35 +2390,6 @@ fn obv_step(state: &mut CumulativeCloseVolumeState, close: f64, volume: f64) -> 
     state.cumulative
 }
 
-fn accumulation_distribution_step(
-    cumulative: &mut f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
-) -> f64 {
-    if !valid_bar(high, low, close) {
-        return f64::NAN;
-    }
-    let range = high - low;
-    if range > 0.0 {
-        *cumulative += ((close - low) - (high - close)) / range * volume.max(0.0);
-    }
-    *cumulative
-}
-
-fn price_volume_trend_step(state: &mut CumulativeCloseVolumeState, close: f64, volume: f64) -> f64 {
-    if !close.is_finite() {
-        return f64::NAN;
-    }
-    if state.initialized && state.previous_close != 0.0 {
-        state.cumulative += (close - state.previous_close) / state.previous_close * volume.max(0.0);
-    }
-    state.previous_close = close;
-    state.initialized = true;
-    state.cumulative
-}
-
 fn vwap_bands_step(
     state: &mut VwapBandsState,
     sample: VwapBandsSample,
@@ -4822,18 +2465,6 @@ fn month_key(days: i64) -> i64 {
 
 #[derive(Clone, Debug)]
 enum IncrementalKind {
-    Aroon {
-        period: usize,
-        high_deque: VecDeque<usize>,
-        low_deque: VecDeque<usize>,
-    },
-    AwesomeOscillator,
-    Dpo {
-        period: usize,
-    },
-    ChandeMomentum {
-        period: usize,
-    },
     Sma {
         period: usize,
     },
@@ -4841,31 +2472,10 @@ enum IncrementalKind {
         period: usize,
         state: RecursiveHistory<EmaState>,
     },
-    Dema {
-        period: usize,
-        state: RecursiveHistory<DemaState>,
-    },
-    Tema {
-        period: usize,
-        state: RecursiveHistory<TemaState>,
-    },
-    Smma {
-        period: usize,
-        state: RecursiveHistory<SmmaState>,
-    },
-    Hma {
-        period: usize,
-    },
     Vwma {
         period: usize,
     },
-    StandardDeviation {
-        period: usize,
-    },
     Cci {
-        period: usize,
-    },
-    WilliamsR {
         period: usize,
     },
     StochasticRsi {
@@ -4873,22 +2483,12 @@ enum IncrementalKind {
         stochastic_period: usize,
         state: RecursiveHistory<StochasticRsiState>,
     },
-    Momentum {
-        period: usize,
-    },
-    RateOfChange {
-        period: usize,
-    },
     Donchian {
         period: usize,
     },
     PivotPoints {
         kind: PivotKind,
         state: RecursiveHistory<PivotState>,
-    },
-    ZigZag {
-        deviation_percent: f64,
-        state: RecursiveHistory<ZigZagState>,
     },
     Keltner {
         period: usize,
@@ -4911,20 +2511,6 @@ enum IncrementalKind {
     Bollinger {
         period: usize,
         deviation: f64,
-    },
-    BollingerMetrics {
-        period: usize,
-        deviation: f64,
-    },
-    Envelopes {
-        period: usize,
-        percent: f64,
-        ema_state: Option<RecursiveHistory<EmaState>>,
-    },
-    Alma {
-        period: usize,
-        weights: Vec<f64>,
-        weight_sum: f64,
     },
     Rsi {
         period: usize,
@@ -4953,103 +2539,7 @@ enum IncrementalKind {
     Obv {
         state: RecursiveHistory<CumulativeCloseVolumeState>,
     },
-    AccumulationDistribution {
-        state: RecursiveHistory<f64>,
-    },
-    PriceVolumeTrend {
-        state: RecursiveHistory<CumulativeCloseVolumeState>,
-    },
-    ChaikinOscillator {
-        fast: usize,
-        slow: usize,
-        state: RecursiveHistory<ChaikinState>,
-    },
     RelativeVolume {
-        period: usize,
-    },
-    VolumeOscillator {
-        fast_period: usize,
-        slow_period: usize,
-        signal_period: usize,
-        state: RecursiveHistory<MacdState>,
-    },
-    ElderForce {
-        period: usize,
-        state: RecursiveHistory<ElderForceState>,
-    },
-    EaseOfMovement {
-        period: usize,
-        divisor: f64,
-    },
-    HistoricalVolatility {
-        period: usize,
-        annualization: f64,
-        window: VecDeque<f64>,
-    },
-    Trix {
-        period: usize,
-        signal_period: usize,
-        state: RecursiveHistory<TrixState>,
-    },
-    Kst {
-        roc_periods: [usize; 4],
-        sma_periods: [usize; 4],
-        signal_period: usize,
-    },
-    Tsi {
-        long: usize,
-        short: usize,
-        signal_period: usize,
-        state: RecursiveHistory<TsiState>,
-    },
-    MassIndex {
-        ema_period: usize,
-        sum_period: usize,
-        state: RecursiveHistory<MassState>,
-    },
-    Klinger {
-        fast: usize,
-        slow: usize,
-        signal: usize,
-        state: RecursiveHistory<KlingerState>,
-    },
-    Kama {
-        period: usize,
-        fast: usize,
-        slow: usize,
-        state: RecursiveHistory<KamaState>,
-    },
-    McGinley {
-        period: usize,
-        state: RecursiveHistory<McGinleyState>,
-    },
-    LinearRegression {
-        period: usize,
-        deviation: f64,
-    },
-    Choppiness {
-        period: usize,
-    },
-    AtrBands {
-        period: usize,
-        multiplier: f64,
-        state: RecursiveHistory<AtrState>,
-    },
-    CoppockCurve {
-        long_period: usize,
-        short_period: usize,
-        smoothing: usize,
-    },
-    FisherTransform {
-        period: usize,
-        state: RecursiveHistory<FisherCarry>,
-    },
-    UltimateOscillator {
-        short: usize,
-        medium: usize,
-        long: usize,
-    },
-    Vortex {
         period: usize,
     },
     Cmf {
@@ -5069,9 +2559,6 @@ enum IncrementalKind {
         standard_deviation: f64,
         percent: f64,
         state: RecursiveHistory<VwapBandsState>,
-    },
-    Wma {
-        period: usize,
     },
 }
 
@@ -5098,29 +2585,6 @@ impl IncrementalState {
         }
     }
 
-    pub fn aroon(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Aroon {
-                period,
-                high_deque: VecDeque::new(),
-                low_deque: VecDeque::new(),
-            },
-            2,
-        )
-    }
-
-    pub fn awesome_oscillator() -> Self {
-        Self::new(IncrementalKind::AwesomeOscillator, 1)
-    }
-
-    pub fn dpo(period: usize) -> Self {
-        Self::new(IncrementalKind::Dpo { period }, 1)
-    }
-
-    pub fn chande_momentum(period: usize) -> Self {
-        Self::new(IncrementalKind::ChandeMomentum { period }, 1)
-    }
-
     pub fn sma(period: usize) -> Self {
         Self::new(IncrementalKind::Sma { period }, 1)
     }
@@ -5135,54 +2599,12 @@ impl IncrementalState {
         )
     }
 
-    pub fn dema(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Dema {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn tema(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Tema {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn smma(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Smma {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn hma(period: usize) -> Self {
-        Self::new(IncrementalKind::Hma { period }, 1)
-    }
-
     pub fn vwma(period: usize) -> Self {
         Self::new(IncrementalKind::Vwma { period }, 1)
     }
 
-    pub fn standard_deviation(period: usize) -> Self {
-        Self::new(IncrementalKind::StandardDeviation { period }, 1)
-    }
-
     pub fn cci(period: usize) -> Self {
         Self::new(IncrementalKind::Cci { period }, 1)
-    }
-
-    pub fn williams_r(period: usize) -> Self {
-        Self::new(IncrementalKind::WilliamsR { period }, 1)
     }
 
     pub fn stochastic_rsi(rsi_period: usize, stochastic_period: usize) -> Self {
@@ -5196,14 +2618,6 @@ impl IncrementalState {
         )
     }
 
-    pub fn momentum(period: usize) -> Self {
-        Self::new(IncrementalKind::Momentum { period }, 1)
-    }
-
-    pub fn rate_of_change(period: usize) -> Self {
-        Self::new(IncrementalKind::RateOfChange { period }, 1)
-    }
-
     pub fn donchian(period: usize) -> Self {
         Self::new(IncrementalKind::Donchian { period }, 3)
     }
@@ -5215,16 +2629,6 @@ impl IncrementalState {
                 state: RecursiveHistory::new(),
             },
             5,
-        )
-    }
-
-    pub fn zigzag(deviation_percent: f64) -> Self {
-        Self::new(
-            IncrementalKind::ZigZag {
-                deviation_percent,
-                state: RecursiveHistory::new(),
-            },
-            1,
         )
     }
 
@@ -5275,33 +2679,6 @@ impl IncrementalState {
 
     pub fn bollinger(period: usize, deviation: f64) -> Self {
         Self::new(IncrementalKind::Bollinger { period, deviation }, 3)
-    }
-
-    pub fn bollinger_metrics(period: usize, deviation: f64) -> Self {
-        Self::new(IncrementalKind::BollingerMetrics { period, deviation }, 2)
-    }
-
-    pub fn envelopes(period: usize, percent: f64, exponential: bool) -> Self {
-        Self::new(
-            IncrementalKind::Envelopes {
-                period,
-                percent,
-                ema_state: exponential.then(RecursiveHistory::new),
-            },
-            3,
-        )
-    }
-
-    pub fn alma(period: usize, offset: f64, sigma: f64) -> Self {
-        let (weights, weight_sum) = alma_weights(period, offset, sigma);
-        Self::new(
-            IncrementalKind::Alma {
-                period,
-                weights,
-                weight_sum,
-            },
-            1,
-        )
     }
 
     pub fn rsi(period: usize) -> Self {
@@ -5367,208 +2744,8 @@ impl IncrementalState {
         )
     }
 
-    pub fn accumulation_distribution() -> Self {
-        Self::new(
-            IncrementalKind::AccumulationDistribution {
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn price_volume_trend() -> Self {
-        Self::new(
-            IncrementalKind::PriceVolumeTrend {
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn chaikin_oscillator(fast: usize, slow: usize) -> Self {
-        Self::new(
-            IncrementalKind::ChaikinOscillator {
-                fast,
-                slow,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
     pub fn relative_volume(period: usize) -> Self {
         Self::new(IncrementalKind::RelativeVolume { period }, 1)
-    }
-
-    pub fn volume_oscillator(fast_period: usize, slow_period: usize, signal_period: usize) -> Self {
-        Self::new(
-            IncrementalKind::VolumeOscillator {
-                fast_period,
-                slow_period,
-                signal_period,
-                state: RecursiveHistory::new(),
-            },
-            3,
-        )
-    }
-
-    pub fn elder_force(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::ElderForce {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn ease_of_movement(period: usize, divisor: f64) -> Self {
-        Self::new(IncrementalKind::EaseOfMovement { period, divisor }, 1)
-    }
-
-    pub fn historical_volatility(period: usize, annualization: f64) -> Self {
-        Self::new(
-            IncrementalKind::HistoricalVolatility {
-                period,
-                annualization,
-                window: VecDeque::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn trix(period: usize, signal_period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Trix {
-                period,
-                signal_period,
-                state: RecursiveHistory::new(),
-            },
-            2,
-        )
-    }
-
-    pub fn kst(roc_periods: [usize; 4], sma_periods: [usize; 4], signal_period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Kst {
-                roc_periods,
-                sma_periods,
-                signal_period,
-            },
-            2,
-        )
-    }
-
-    pub fn tsi(long: usize, short: usize, signal_period: usize) -> Self {
-        Self::new(
-            IncrementalKind::Tsi {
-                long,
-                short,
-                signal_period,
-                state: RecursiveHistory::new(),
-            },
-            2,
-        )
-    }
-
-    pub fn mass_index(ema_period: usize, sum_period: usize) -> Self {
-        Self::new(
-            IncrementalKind::MassIndex {
-                ema_period,
-                sum_period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn klinger(fast: usize, slow: usize, signal: usize) -> Self {
-        Self::new(
-            IncrementalKind::Klinger {
-                fast,
-                slow,
-                signal,
-                state: RecursiveHistory::new(),
-            },
-            2,
-        )
-    }
-
-    pub fn kama(period: usize, fast: usize, slow: usize) -> Self {
-        Self::new(
-            IncrementalKind::Kama {
-                period,
-                fast,
-                slow,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn mcginley(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::McGinley {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            1,
-        )
-    }
-
-    pub fn linear_regression(period: usize, deviation: f64) -> Self {
-        Self::new(IncrementalKind::LinearRegression { period, deviation }, 3)
-    }
-
-    pub fn choppiness(period: usize) -> Self {
-        Self::new(IncrementalKind::Choppiness { period }, 1)
-    }
-
-    pub fn atr_bands(period: usize, multiplier: f64) -> Self {
-        Self::new(
-            IncrementalKind::AtrBands {
-                period,
-                multiplier,
-                state: RecursiveHistory::new(),
-            },
-            3,
-        )
-    }
-
-    pub fn coppock_curve(long_period: usize, short_period: usize, smoothing: usize) -> Self {
-        Self::new(
-            IncrementalKind::CoppockCurve {
-                long_period,
-                short_period,
-                smoothing,
-            },
-            1,
-        )
-    }
-
-    pub fn fisher_transform(period: usize) -> Self {
-        Self::new(
-            IncrementalKind::FisherTransform {
-                period,
-                state: RecursiveHistory::new(),
-            },
-            2,
-        )
-    }
-
-    pub fn ultimate_oscillator(short: usize, medium: usize, long: usize) -> Self {
-        Self::new(
-            IncrementalKind::UltimateOscillator {
-                short,
-                medium,
-                long,
-            },
-            1,
-        )
-    }
-
-    pub fn vortex(period: usize) -> Self {
-        Self::new(IncrementalKind::Vortex { period }, 2)
     }
 
     pub fn cmf(period: usize) -> Self {
@@ -5606,10 +2783,6 @@ impl IncrementalState {
             },
             5,
         )
-    }
-
-    pub fn wma(period: usize) -> Self {
-        Self::new(IncrementalKind::Wma { period }, 1)
     }
 
     pub fn output_count(&self) -> usize {
@@ -5651,24 +2824,7 @@ impl IncrementalState {
 
     pub fn runtime_bytes(&self) -> usize {
         match &self.kind {
-            IncrementalKind::Aroon {
-                high_deque,
-                low_deque,
-                ..
-            } => (high_deque.capacity() + low_deque.capacity()) * std::mem::size_of::<usize>(),
-            IncrementalKind::AwesomeOscillator => 0,
-            IncrementalKind::Dpo { .. } => 0,
-            IncrementalKind::ChandeMomentum { .. } => 0,
-            IncrementalKind::Envelopes { ema_state, .. } => {
-                ema_state.as_ref().map_or(0, RecursiveHistory::bytes)
-            }
-            IncrementalKind::Alma { weights, .. } => {
-                weights.capacity() * std::mem::size_of::<f64>()
-            }
             IncrementalKind::Ema { state, .. } => state.bytes(),
-            IncrementalKind::Dema { state, .. } => state.bytes(),
-            IncrementalKind::Tema { state, .. } => state.bytes(),
-            IncrementalKind::Smma { state, .. } => state.bytes(),
             IncrementalKind::Rsi { state, .. } => state.bytes(),
             IncrementalKind::Macd { state, .. } => state.bytes(),
             IncrementalKind::Stochastic { state, tail_k, .. } => {
@@ -5683,36 +2839,7 @@ impl IncrementalState {
             IncrementalKind::Ichimoku => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::Obv { state } => state.bytes(),
-            IncrementalKind::AccumulationDistribution { state } => state.bytes(),
-            IncrementalKind::PriceVolumeTrend { state } => state.bytes(),
-            IncrementalKind::ChaikinOscillator { state, .. } => state.bytes(),
             IncrementalKind::RelativeVolume { .. } => 0,
-            IncrementalKind::VolumeOscillator { state, .. } => state.bytes(),
-            IncrementalKind::ElderForce { state, .. } => state.bytes(),
-            IncrementalKind::EaseOfMovement { .. } => 0,
-            IncrementalKind::HistoricalVolatility { window, .. } => {
-                window.capacity() * std::mem::size_of::<f64>()
-            }
-            IncrementalKind::Trix { state, .. } => state.bytes(),
-            IncrementalKind::Kst { .. } => 0,
-            IncrementalKind::Tsi { state, .. } => state.bytes(),
-            IncrementalKind::MassIndex { state, .. } => {
-                state.bytes_with(|saved| saved.ratios.capacity() * std::mem::size_of::<f64>())
-            }
-            IncrementalKind::Klinger { state, .. } => state.bytes(),
-            IncrementalKind::Kama { state, .. } => {
-                state.bytes_with(|saved| saved.recent.capacity() * std::mem::size_of::<f64>())
-            }
-            IncrementalKind::McGinley { state, .. } => state.bytes(),
-            IncrementalKind::LinearRegression { .. } => 0,
-            IncrementalKind::Choppiness { .. } => 0,
-            IncrementalKind::AtrBands { state, .. } => state.bytes(),
-            IncrementalKind::CoppockCurve { .. } => 0,
-            IncrementalKind::FisherTransform { state, .. } => {
-                state.bytes_with(|saved| saved.window.bytes())
-            }
-            IncrementalKind::UltimateOscillator { .. } => 0,
-            IncrementalKind::Vortex { .. } => 0,
             IncrementalKind::Cmf { .. } => 0,
             IncrementalKind::Mfi { state, .. } => state.bytes_with(|saved| {
                 saved.references.capacity() * std::mem::size_of::<Option<f64>>()
@@ -5723,20 +2850,13 @@ impl IncrementalState {
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
-            | IncrementalKind::BollingerMetrics { .. }
-            | IncrementalKind::Wma { .. }
-            | IncrementalKind::Hma { .. } => 0,
-            IncrementalKind::Vwma { .. } => 0,
-            IncrementalKind::StandardDeviation { .. } => 0,
-            IncrementalKind::Cci { .. } => 0,
-            IncrementalKind::WilliamsR { .. } => 0,
+            | IncrementalKind::Vwma { .. }
+            | IncrementalKind::Cci { .. }
+            | IncrementalKind::Donchian { .. } => 0,
             IncrementalKind::StochasticRsi { state, .. } => {
                 state.bytes_with(|saved| saved.window.capacity() * std::mem::size_of::<f64>())
             }
-            IncrementalKind::Momentum { .. } | IncrementalKind::RateOfChange { .. } => 0,
-            IncrementalKind::Donchian { .. } => 0,
             IncrementalKind::PivotPoints { state, .. } => state.bytes(),
-            IncrementalKind::ZigZag { state, .. } => state.bytes(),
         }
     }
 
@@ -5771,147 +2891,6 @@ impl IncrementalState {
         }
 
         match &mut self.kind {
-            IncrementalKind::Aroon {
-                period,
-                high_deque,
-                low_deque,
-            } => {
-                let start = self.output_from[0];
-                let repair = start.saturating_sub(*period);
-                high_deque.clear();
-                low_deque.clear();
-                let mut invalid_count = 0_usize;
-                self.last_work_rows = n - repair;
-                for row in repair..n {
-                    if row > repair + *period {
-                        let expired = row - *period - 1;
-                        invalid_count -= usize::from(
-                            !input.high[expired].is_finite() || !input.low[expired].is_finite(),
-                        );
-                    }
-                    let high = input.high[row];
-                    let low = input.low[row];
-                    if !high.is_finite() || !low.is_finite() {
-                        invalid_count += 1;
-                    } else {
-                        while high_deque
-                            .back()
-                            .is_some_and(|&index| high >= input.high[index])
-                        {
-                            high_deque.pop_back();
-                        }
-                        while low_deque
-                            .back()
-                            .is_some_and(|&index| low <= input.low[index])
-                        {
-                            low_deque.pop_back();
-                        }
-                        high_deque.push_back(row);
-                        low_deque.push_back(row);
-                    }
-                    while high_deque
-                        .front()
-                        .is_some_and(|&index| index + *period < row)
-                    {
-                        high_deque.pop_front();
-                    }
-                    while low_deque
-                        .front()
-                        .is_some_and(|&index| index + *period < row)
-                    {
-                        low_deque.pop_front();
-                    }
-                    if row >= start {
-                        let value = |index: Option<usize>| {
-                            if invalid_count != 0 {
-                                f64::NAN
-                            } else {
-                                index.map_or(f64::NAN, |index| {
-                                    (*period - (row - index)) as f64 * 100.0 / *period as f64
-                                })
-                            }
-                        };
-                        self.outputs[0].push(value(high_deque.front().copied()));
-                        self.outputs[1].push(value(low_deque.front().copied()));
-                    }
-                }
-            }
-            IncrementalKind::Alma {
-                period,
-                weights,
-                weight_sum,
-            } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    let window = &input.close[row + 1 - *period..=row];
-                    self.outputs[0].push(if *weight_sum == 0.0 {
-                        f64::NAN
-                    } else {
-                        window
-                            .iter()
-                            .zip(weights.iter())
-                            .map(|(value, weight)| value * weight)
-                            .sum::<f64>()
-                            / *weight_sum
-                    });
-                }
-            }
-            IncrementalKind::AwesomeOscillator => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    let median = |index| (input.high[index] + input.low[index]) / 2.0;
-                    let short = (row - 4..=row).map(median).sum::<f64>() / 5.0;
-                    let long = (row - 33..=row).map(median).sum::<f64>() / 34.0;
-                    self.outputs[0].push(short - long);
-                }
-            }
-            IncrementalKind::Dpo { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                let lag = *period / 2 + 1;
-                for row in start..n {
-                    let window = &input.close[row + 1 - *period..=row];
-                    self.outputs[0].push(
-                        if window.iter().all(|value| value.is_finite())
-                            && input.close[row - lag].is_finite()
-                        {
-                            input.close[row - lag] - window.iter().sum::<f64>() / *period as f64
-                        } else {
-                            f64::NAN
-                        },
-                    );
-                }
-            }
-            IncrementalKind::ChandeMomentum { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    let mut signed = 0.0;
-                    let mut absolute = 0.0;
-                    let mut valid = true;
-                    // A fresh bounded window cannot retain roundoff from a
-                    // movement that has already left it (especially when
-                    // the current window is flat).
-                    for pair in input.close[row - *period..=row].windows(2) {
-                        if !pair[0].is_finite() || !pair[1].is_finite() {
-                            valid = false;
-                            break;
-                        }
-                        let change = pair[1] - pair[0];
-                        signed += change;
-                        absolute += change.abs();
-                    }
-                    self.outputs[0].push(if !valid {
-                        f64::NAN
-                    } else if absolute == 0.0 {
-                        0.0
-                    } else {
-                        100.0 * signed / absolute
-                    });
-                }
-            }
             IncrementalKind::Sma { period } => {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
@@ -5939,71 +2918,6 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::Dema { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = dema_step(&mut accumulator, input.close[row], *period);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Tema { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = tema_step(&mut accumulator, input.close[row], *period);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Smma { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = smma_step(&mut accumulator, input.close[row], *period);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Hma { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    self.outputs[0]
-                        .push(hma_at(&input.close[..n], row, *period).expect("HMA after warmup"));
-                }
-            }
             IncrementalKind::Vwma { period } => {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
@@ -6014,31 +2928,11 @@ impl IncrementalState {
                     );
                 }
             }
-            IncrementalKind::StandardDeviation { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = window_work_rows(n, start, *period);
-                for row in start..n {
-                    self.outputs[0].push(standard_deviation_at(input.close, row, *period));
-                }
-            }
             IncrementalKind::Cci { period } => {
                 let start = self.output_from[0];
                 self.last_work_rows = window_work_rows(n, start, *period);
                 for row in start..n {
                     self.outputs[0].push(cci_at(input.high, input.low, input.close, row, *period));
-                }
-            }
-            IncrementalKind::WilliamsR { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = window_work_rows(n, start, *period);
-                for row in start..n {
-                    self.outputs[0].push(williams_r_at(
-                        input.high,
-                        input.low,
-                        input.close,
-                        row,
-                        *period,
-                    ));
                 }
             }
             IncrementalKind::StochasticRsi {
@@ -6070,23 +2964,6 @@ impl IncrementalState {
                     }
                 }
                 state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Momentum { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = window_work_rows(n, start, *period + 1);
-                for_each_lag_pair(&input.close[..n], *period, start, |_, pair| {
-                    self.outputs[0]
-                        .push(pair.map_or(f64::NAN, |(current, previous)| current - previous));
-                });
-            }
-            IncrementalKind::RateOfChange { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = window_work_rows(n, start, *period + 1);
-                for_each_lag_pair(&input.close[..n], *period, start, |_, pair| {
-                    self.outputs[0].push(pair.map_or(f64::NAN, |(current, previous)| {
-                        rate_of_change_value(current, previous)
-                    }));
-                });
             }
             IncrementalKind::Donchian { period } => {
                 let start = self.output_from[0];
@@ -6130,68 +3007,6 @@ impl IncrementalState {
                     }
                 }
                 state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::ZigZag {
-                deviation_percent,
-                state,
-            } => {
-                let threshold = if deviation_percent.is_finite() && *deviation_percent > 0.0 {
-                    *deviation_percent / 100.0
-                } else {
-                    // `high_at_least`/`low_at_most` never hold, matching dense's empty output.
-                    f64::NAN
-                };
-                let emitted_reversal = state.tail.is_some_and(|tail| tail.direction != 0);
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut confirmed = Vec::new();
-                let mut tail = None;
-                let mut before_tail = None;
-                let mut before_requested = None;
-                for row in start..n {
-                    if row == requested {
-                        before_requested = Some(accumulator);
-                    }
-                    let previous = accumulator;
-                    zigzag_step(
-                        &mut accumulator,
-                        row,
-                        input.high[row],
-                        input.low[row],
-                        threshold,
-                        |index, value| {
-                            if row >= requested {
-                                confirmed.push((index, value));
-                            }
-                        },
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-                let before_requested = before_requested.unwrap_or(accumulator);
-                if accumulator.direction != 0 {
-                    confirmed.push((accumulator.extreme_index, accumulator.extreme));
-                }
-                // Rows before the provisional extreme of the scan just before `requested` are
-                // final. Before the first reversal every row is empty, so row 0 changes only when
-                // this update makes that reversal or undoes one the previous update emitted.
-                let from = if before_requested.direction != 0 {
-                    before_requested.extreme_index
-                } else if accumulator.direction != 0 || emitted_reversal {
-                    0
-                } else {
-                    requested
-                };
-                self.output_from[0] = from;
-                self.outputs[0].clear();
-                self.outputs[0].resize(n - from, f64::NAN);
-                for (index, value) in confirmed {
-                    self.outputs[0][index - from] = value;
-                }
             }
             IncrementalKind::Ichimoku => {
                 let start = self.output_from[..self.output_count]
@@ -6357,75 +3172,6 @@ impl IncrementalState {
                     self.outputs[0].push(mean + spread);
                     self.outputs[1].push(mean);
                     self.outputs[2].push(mean - spread);
-                }
-            }
-            IncrementalKind::BollingerMetrics { period, deviation } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                let factor = deviation.max(0.0);
-                for row in start..n {
-                    let window = &input.close[row + 1 - *period..=row];
-                    let mean = window.iter().sum::<f64>() / *period as f64;
-                    let variance = window
-                        .iter()
-                        .map(|value| (value - mean).powi(2))
-                        .sum::<f64>()
-                        / *period as f64;
-                    let spread = variance.sqrt() * factor;
-                    // The dense metrics use the rounded band endpoints, not
-                    // 2*spread. Near-flat bands can be only a few ULPs wide.
-                    let upper = mean + spread;
-                    let lower = mean - spread;
-                    let width = upper - lower;
-                    self.outputs[0].push(if width == 0.0 {
-                        f64::NAN
-                    } else {
-                        (input.close[row] - lower) / width
-                    });
-                    self.outputs[1].push(if mean == 0.0 {
-                        f64::NAN
-                    } else {
-                        width / mean * 100.0
-                    });
-                }
-            }
-            IncrementalKind::Envelopes {
-                period,
-                percent,
-                ema_state,
-            } => {
-                let fraction = *percent / 100.0;
-                if let Some(state) = ema_state {
-                    let (start, mut accumulator) = state.begin(n, requested);
-                    self.last_work_rows = n - start;
-                    let mut tail = None;
-                    let mut before_tail = None;
-                    for row in start..n {
-                        let previous = accumulator;
-                        let value = ema_step(&mut accumulator, input.close[row], *period);
-                        state.checkpoint(row, accumulator);
-                        if row >= self.output_from[0] {
-                            let basis = value.unwrap_or(f64::NAN);
-                            self.outputs[0].push(basis * (1.0 + fraction));
-                            self.outputs[1].push(basis);
-                            self.outputs[2].push(basis * (1.0 - fraction));
-                        }
-                        if row + 1 == n {
-                            tail = Some(accumulator);
-                            before_tail = (row > 0).then_some(previous);
-                        }
-                    }
-                    state.finish(n, tail, before_tail);
-                } else {
-                    let start = self.output_from[0];
-                    self.last_work_rows = n - start;
-                    for row in start..n {
-                        let basis = input.close[row + 1 - *period..=row].iter().sum::<f64>()
-                            / *period as f64;
-                        self.outputs[0].push(basis * (1.0 + fraction));
-                        self.outputs[1].push(basis);
-                        self.outputs[2].push(basis * (1.0 - fraction));
-                    }
                 }
             }
             IncrementalKind::Rsi { period, state } => {
@@ -6630,82 +3376,6 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::AccumulationDistribution { state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = accumulation_distribution_step(
-                        &mut accumulator,
-                        input.high[row],
-                        input.low[row],
-                        input.close[row],
-                        input.volume.get(row).copied().unwrap_or(0.0),
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value);
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::PriceVolumeTrend { state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = price_volume_trend_step(
-                        &mut accumulator,
-                        input.close[row],
-                        input.volume.get(row).copied().unwrap_or(0.0),
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value);
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::ChaikinOscillator { fast, slow, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let adl = accumulation_distribution_step(
-                        &mut accumulator.cumulative,
-                        input.high[row],
-                        input.low[row],
-                        input.close[row],
-                        input.volume.get(row).copied().unwrap_or(0.0),
-                    );
-                    let fast_value = ema_step(&mut accumulator.fast, adl, *fast);
-                    let slow_value = ema_step(&mut accumulator.slow, adl, *slow);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0]
-                            .push(fast_value.zip(slow_value).map_or(f64::NAN, |(a, b)| a - b));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
             IncrementalKind::RelativeVolume { period } => {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
@@ -6725,437 +3395,6 @@ impl IncrementalState {
                             f64::NAN
                         },
                     );
-                }
-            }
-            IncrementalKind::VolumeOscillator {
-                fast_period,
-                slow_period,
-                signal_period,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let point = volume_oscillator_step(
-                        &mut accumulator,
-                        if input.close[row].is_finite() {
-                            input.volume.get(row).copied().unwrap_or(0.0).max(0.0)
-                        } else {
-                            f64::NAN
-                        },
-                        *fast_period,
-                        *slow_period,
-                        *signal_period,
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(point.line.unwrap_or(f64::NAN));
-                    }
-                    if row >= self.output_from[1] {
-                        self.outputs[1].push(point.signal.unwrap_or(f64::NAN));
-                        self.outputs[2].push(point.histogram.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::ElderForce { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let close = input.close[row];
-                    if close.is_finite() {
-                        if let Some(previous_close) = accumulator.previous_close {
-                            let force = (close - previous_close)
-                                * input.volume.get(row).copied().unwrap_or(0.0).max(0.0);
-                            let value = ema_step(&mut accumulator.ema, force, *period);
-                            if row >= self.output_from[0] {
-                                self.outputs[0].push(value.unwrap_or(f64::NAN));
-                            }
-                        } else if row >= self.output_from[0] {
-                            self.outputs[0].push(f64::NAN);
-                        }
-                        accumulator.previous_close = Some(close);
-                    } else if row >= self.output_from[0] {
-                        self.outputs[0].push(f64::NAN);
-                    }
-                    state.checkpoint(row, accumulator);
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::EaseOfMovement { period, divisor } => {
-                let start = self.output_from[0]
-                    .saturating_sub(period.saturating_sub(1))
-                    .max(1);
-                self.last_work_rows = n.saturating_sub(start);
-                for row in self.output_from[0]..n {
-                    self.outputs[0].push(ease_of_movement_at(
-                        input.high,
-                        input.low,
-                        input.volume,
-                        row,
-                        *period,
-                        *divisor,
-                    ));
-                }
-            }
-            IncrementalKind::HistoricalVolatility {
-                period,
-                annualization,
-                window,
-            } => {
-                let from = self.output_from[0];
-                let start = if from < n { from + 1 - *period } else { n };
-                self.last_work_rows = n - start;
-                window.clear();
-                for row in start..n {
-                    push_log_return(window, input.close, row, *period);
-                    if row >= from {
-                        self.outputs[0].push(historical_volatility_window(window, *annualization));
-                    }
-                }
-            }
-            IncrementalKind::Trix {
-                period,
-                signal_period,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let (line, signal) =
-                        trix_step(&mut accumulator, input.close[row], *period, *signal_period);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(line.unwrap_or(f64::NAN));
-                    }
-                    if row >= self.output_from[1] {
-                        self.outputs[1].push(signal.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Kst {
-                roc_periods,
-                sma_periods,
-                signal_period,
-            } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    self.outputs[0].push(kst_at(input.close, row, *roc_periods, *sma_periods));
-                    if row >= self.output_from[1] {
-                        let signal = (row + 1 - *signal_period..=row)
-                            .map(|index| kst_at(input.close, index, *roc_periods, *sma_periods))
-                            .fold(0.0, |sum, value| sum + value);
-                        self.outputs[1].push(signal / *signal_period as f64);
-                    }
-                }
-            }
-            IncrementalKind::Tsi {
-                long,
-                short,
-                signal_period,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let (line, signal) = tsi_step(
-                        &mut accumulator,
-                        input.close[row],
-                        *long,
-                        *short,
-                        *signal_period,
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(line.unwrap_or(f64::NAN));
-                    }
-                    if row >= self.output_from[1] {
-                        self.outputs[1].push(signal.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::MassIndex {
-                ema_period,
-                sum_period,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = (row + 1 == n && row > 0).then(|| accumulator.clone());
-                    let value = mass_index_step(
-                        &mut accumulator,
-                        input.high[row],
-                        input.low[row],
-                        *ema_period,
-                        *sum_period,
-                    );
-                    if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
-                        state.checkpoint(row, accumulator.clone());
-                    }
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator.clone());
-                        before_tail = previous;
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Klinger {
-                fast,
-                slow,
-                signal,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let (line, signal_value) = klinger_step(
-                        &mut accumulator,
-                        input.high[row],
-                        input.low[row],
-                        input.close[row],
-                        input.volume.get(row).copied().unwrap_or(f64::NAN),
-                        [*fast, *slow, *signal],
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(line.unwrap_or(f64::NAN));
-                    }
-                    if row >= self.output_from[1] {
-                        self.outputs[1].push(signal_value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::Kama {
-                period,
-                fast,
-                slow,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = (row + 1 == n && row > 0).then(|| accumulator.clone());
-                    let value =
-                        kama_step(&mut accumulator, input.close, row, *period, *fast, *slow);
-                    if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
-                        state.checkpoint(row, accumulator.clone());
-                    }
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator.clone());
-                        before_tail = previous;
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::McGinley { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let value = mcginley_step(&mut accumulator, input.close[row], *period);
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(value.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::LinearRegression { period, deviation } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    let (curve, upper, lower) =
-                        linear_regression_at(input.close, row, *period, *deviation);
-                    self.outputs[0].push(curve);
-                    self.outputs[1].push(upper);
-                    self.outputs[2].push(lower);
-                }
-            }
-            IncrementalKind::Choppiness { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    self.outputs[0].push(choppiness_at(
-                        input.high,
-                        input.low,
-                        input.close,
-                        row,
-                        *period,
-                    ));
-                }
-            }
-            IncrementalKind::AtrBands {
-                period,
-                multiplier,
-                state,
-            } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = accumulator;
-                    let atr = atr_bands_step(
-                        &mut accumulator,
-                        input.high[row],
-                        input.low[row],
-                        input.close[row],
-                        *period,
-                    );
-                    state.checkpoint(row, accumulator);
-                    if row >= self.output_from[0] {
-                        let point = if atr.is_some() {
-                            atr_bands_point(input.close[row], atr, *multiplier)
-                        } else {
-                            AtrBandsPoint {
-                                basis: None,
-                                upper: None,
-                                lower: None,
-                            }
-                        };
-                        self.outputs[0].push(point.upper.unwrap_or(f64::NAN));
-                        self.outputs[1].push(point.basis.unwrap_or(f64::NAN));
-                        self.outputs[2].push(point.lower.unwrap_or(f64::NAN));
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator);
-                        before_tail = (row > 0).then_some(previous);
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::CoppockCurve {
-                long_period,
-                short_period,
-                smoothing,
-            } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    self.outputs[0].push(coppock_at(
-                        input.close,
-                        row,
-                        *long_period,
-                        *short_period,
-                        *smoothing,
-                    ));
-                }
-            }
-            IncrementalKind::FisherTransform { period, state } => {
-                let (start, mut accumulator) = state.begin(n, requested);
-                self.last_work_rows = n - start;
-                let mut tail = None;
-                let mut before_tail = None;
-                for row in start..n {
-                    let previous = (row + 1 == n && row > 0).then(|| accumulator.clone());
-                    let FisherCarry {
-                        state: fisher,
-                        window,
-                    } = &mut accumulator;
-                    window.advance(input.high, input.low, row, *period);
-                    let (line, trigger) = if window.valid_rows.len() == *period
-                        && valid_range(input.high[row], input.low[row])
-                    {
-                        fisher_step(fisher, window, input.high, input.low, row)
-                    } else {
-                        (f64::NAN, f64::NAN)
-                    };
-                    if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
-                        state.checkpoint(row, accumulator.clone());
-                    }
-                    if row >= self.output_from[0] {
-                        self.outputs[0].push(line);
-                    }
-                    if row >= self.output_from[1] {
-                        self.outputs[1].push(trigger);
-                    }
-                    if row + 1 == n {
-                        tail = Some(accumulator.clone());
-                        before_tail = previous;
-                    }
-                }
-                state.finish(n, tail, before_tail);
-            }
-            IncrementalKind::UltimateOscillator {
-                short,
-                medium,
-                long,
-            } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    self.outputs[0].push(ultimate_at(
-                        input.high,
-                        input.low,
-                        input.close,
-                        row,
-                        [*short, *medium, *long],
-                    ));
-                }
-            }
-            IncrementalKind::Vortex { period } => {
-                let start = self.output_from[0];
-                self.last_work_rows = n - start;
-                for row in start..n {
-                    let (plus, minus) = vortex_at(input.high, input.low, input.close, row, *period);
-                    self.outputs[0].push(plus);
-                    self.outputs[1].push(minus);
                 }
             }
             IncrementalKind::Cmf { period } => {
@@ -7302,19 +3541,6 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::Wma { period } => {
-                self.last_work_rows = n - self.output_from[0];
-                let denominator = (*period * (*period + 1)) as f64 / 2.0;
-                for row in self.output_from[0]..n {
-                    let value = input.close[row + 1 - *period..=row]
-                        .iter()
-                        .enumerate()
-                        .map(|(weight, value)| (weight + 1) as f64 * value)
-                        .sum::<f64>()
-                        / denominator;
-                    self.outputs[0].push(value);
-                }
-            }
         }
     }
 }
@@ -7330,39 +3556,11 @@ fn window_work_rows(n: usize, start: usize, span: usize) -> usize {
 
 fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
     match kind {
-        IncrementalKind::Aroon { period, .. } => [*period, *period, 0, 0, 0],
-        IncrementalKind::AwesomeOscillator => [33, 0, 0, 0, 0],
-        IncrementalKind::Dpo { period } => {
-            [period.saturating_sub(1).max(period / 2 + 1), 0, 0, 0, 0]
-        }
-        IncrementalKind::ChandeMomentum { period } => [*period, 0, 0, 0, 0],
         IncrementalKind::Sma { period }
         | IncrementalKind::Ema { period, .. }
-        | IncrementalKind::Wma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::Dema { period, .. } => {
-            [period.saturating_mul(2).saturating_sub(2), 0, 0, 0, 0]
-        }
-        IncrementalKind::Tema { period, .. } => {
-            [period.saturating_mul(3).saturating_sub(3), 0, 0, 0, 0]
-        }
-        IncrementalKind::Smma { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::Hma { period } => {
-            let smoothing = ((*period as f64).sqrt() as usize).max(1);
-            [
-                period
-                    .saturating_sub(1)
-                    .saturating_add(smoothing)
-                    .saturating_sub(1),
-                0,
-                0,
-                0,
-                0,
-            ]
-        }
-        IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::Cci { period } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::WilliamsR { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        | IncrementalKind::Vwma { period }
+        | IncrementalKind::Cci { period }
+        | IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::StochasticRsi {
             rsi_period,
             stochastic_period,
@@ -7376,9 +3574,6 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
-        IncrementalKind::Momentum { period } | IncrementalKind::RateOfChange { period } => {
-            [*period, 0, 0, 0, 0]
-        }
         IncrementalKind::Donchian { period } => [
             period.saturating_sub(1),
             period.saturating_sub(1),
@@ -7387,7 +3582,6 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
         ],
         IncrementalKind::PivotPoints { .. } => [0; MAX_OUTPUTS],
-        IncrementalKind::ZigZag { .. } => [0; MAX_OUTPUTS],
         IncrementalKind::Keltner { period, .. } => [*period, *period, *period, 0, 0],
         IncrementalKind::AdxDmi { period, .. } => {
             let start = period.saturating_add(period.saturating_sub(1));
@@ -7401,114 +3595,10 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             starts[..3].fill(period.saturating_sub(1));
             starts
         }
-        IncrementalKind::BollingerMetrics { period, .. } => {
-            let mut starts = [0; MAX_OUTPUTS];
-            starts[..2].fill(period.saturating_sub(1));
-            starts
-        }
-        IncrementalKind::Envelopes { period, .. } => {
-            let mut starts = [0; MAX_OUTPUTS];
-            starts[..3].fill(period.saturating_sub(1));
-            starts
-        }
-        IncrementalKind::Alma { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::ChaikinOscillator { slow, .. } => [slow.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::RelativeVolume { period } => [*period, 0, 0, 0, 0],
-        IncrementalKind::VolumeOscillator {
-            slow_period,
-            signal_period,
-            ..
-        } => {
-            let line = slow_period.saturating_sub(1);
-            let signal = line.saturating_add(signal_period.saturating_sub(1));
-            [line, signal, signal, 0, 0]
-        }
-        IncrementalKind::ElderForce { period, .. } => [*period, 0, 0, 0, 0],
-        IncrementalKind::EaseOfMovement { period, .. } => [*period, 0, 0, 0, 0],
-        IncrementalKind::HistoricalVolatility { period, .. } => [*period, 0, 0, 0, 0],
-        IncrementalKind::Trix {
-            period,
-            signal_period,
-            ..
-        } => {
-            let line = trix_line_start(*period);
-            [
-                line,
-                line.saturating_add(signal_period.saturating_sub(1)),
-                0,
-                0,
-                0,
-            ]
-        }
-        IncrementalKind::Kst {
-            roc_periods,
-            sma_periods,
-            signal_period,
-        } => {
-            let line = kst_line_start(*roc_periods, *sma_periods);
-            [
-                line,
-                line.saturating_add(signal_period.saturating_sub(1)),
-                0,
-                0,
-                0,
-            ]
-        }
-        IncrementalKind::Tsi {
-            long,
-            short,
-            signal_period,
-            ..
-        } => {
-            let line = long.saturating_add(*short).saturating_sub(1);
-            [
-                line,
-                line.saturating_add(signal_period.saturating_sub(1)),
-                0,
-                0,
-                0,
-            ]
-        }
-        IncrementalKind::MassIndex {
-            ema_period,
-            sum_period,
-            ..
-        } => [mass_start(*ema_period, *sum_period), 0, 0, 0, 0],
-        IncrementalKind::Klinger { slow, signal, .. } => {
-            let line = slow.saturating_sub(1);
-            [line, line.saturating_add(signal.saturating_sub(1)), 0, 0, 0]
-        }
-        IncrementalKind::Kama { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::McGinley { .. } => [0; MAX_OUTPUTS],
-        IncrementalKind::LinearRegression { period, .. } => {
-            let start = period.saturating_sub(1);
-            [start, start, start, 0, 0]
-        }
-        IncrementalKind::Choppiness { period } => [*period, 0, 0, 0, 0],
-        IncrementalKind::AtrBands { period, .. } => [*period, *period, *period, 0, 0],
-        IncrementalKind::CoppockCurve {
-            long_period,
-            short_period,
-            smoothing,
-        } => [
-            coppock_start(*long_period, *short_period, *smoothing),
-            0,
-            0,
-            0,
-            0,
-        ],
-        IncrementalKind::FisherTransform { period, .. } => {
-            [period.saturating_sub(1), *period, 0, 0, 0]
-        }
-        IncrementalKind::UltimateOscillator {
-            short,
-            medium,
-            long,
-        } => [short.max(medium).max(long).saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::Vortex { period } => [*period, *period, 0, 0, 0],
-        IncrementalKind::Rsi { period, .. } | IncrementalKind::Atr { period, .. } => {
-            [*period, 0, 0, 0, 0]
-        }
+        IncrementalKind::RelativeVolume { period }
+        | IncrementalKind::Rsi { period, .. }
+        | IncrementalKind::Atr { period, .. }
+        | IncrementalKind::Mfi { period, .. } => [*period, 0, 0, 0, 0],
         IncrementalKind::Macd {
             slow_period,
             signal_period,
@@ -7527,13 +3617,9 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
-        IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
-        IncrementalKind::Mfi { period, .. } => [*period, 0, 0, 0, 0],
         IncrementalKind::Volume { period, .. } => [0, period.saturating_sub(1), 0, 0, 0],
         IncrementalKind::Vwap { .. }
         | IncrementalKind::Obv { .. }
-        | IncrementalKind::AccumulationDistribution { .. }
-        | IncrementalKind::PriceVolumeTrend { .. }
         | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
     }
 }
@@ -7562,51 +3648,6 @@ mod tests {
     }
 
     #[test]
-    fn dema_uses_two_sma_seeded_ema_stages() {
-        assert_eq!(
-            dema(&[1.0, 2.0, 3.0, 5.0, 8.0], 3),
-            vec![None, None, None, None, Some(7.75)]
-        );
-    }
-
-    #[test]
-    fn tema_uses_three_sma_seeded_ema_stages() {
-        assert_eq!(
-            tema(&[1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0], 3),
-            vec![None, None, None, None, None, None, Some(20.0)]
-        );
-    }
-
-    #[test]
-    fn smma_uses_wilder_smoothing_and_rma_aliases_it() {
-        let values = [1.0, 2.0, 4.0, 8.0, 16.0];
-        let actual = smma(&values, 3);
-        let expected = [
-            None,
-            None,
-            Some(7.0 / 3.0),
-            Some(38.0 / 9.0),
-            Some(220.0 / 27.0),
-        ];
-        for (actual, expected) in actual.into_iter().zip(expected) {
-            match (actual, expected) {
-                (None, None) => {}
-                (Some(actual), Some(expected)) => assert!((actual - expected).abs() < 1e-12),
-                other => panic!("unexpected SMMA result: {other:?}"),
-            }
-        }
-        assert_eq!(rma(&values, 3), smma(&values, 3));
-    }
-
-    #[test]
-    fn hma_combines_half_full_and_smoothing_wmas() {
-        assert_eq!(
-            hma(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 4),
-            vec![None, None, None, None, Some(5.0), Some(6.0), Some(7.0)]
-        );
-    }
-
-    #[test]
     fn vwma_weights_the_window_and_falls_back_for_missing_or_zero_volume() {
         assert_eq!(
             vwma(&[10.0, 20.0, 30.0], &[1.0, 2.0, 3.0], 2),
@@ -7619,19 +3660,6 @@ mod tests {
         assert_eq!(
             vwma(&[10.0, 20.0, 30.0], &[0.0, 0.0, 0.0], 2),
             vec![None, Some(15.0), Some(25.0)]
-        );
-    }
-
-    #[test]
-    fn standard_deviation_uses_population_window_variance() {
-        assert_eq!(
-            standard_deviation(&[1.0, 2.0, 3.0, 5.0], 3),
-            vec![
-                None,
-                None,
-                Some((2.0_f64 / 3.0).sqrt()),
-                Some((14.0_f64 / 9.0).sqrt())
-            ]
         );
     }
 
@@ -7710,28 +3738,6 @@ mod tests {
     }
 
     #[test]
-    fn zigzag_confirms_reversals_at_the_requested_percentage() {
-        let values = zigzag(
-            &[100.0, 101.0, 106.0, 105.0, 99.0, 100.0, 108.0],
-            &[99.0, 100.0, 105.0, 104.0, 98.0, 99.0, 107.0],
-            5.0,
-        );
-        assert_eq!(
-            values,
-            vec![
-                Some(99.0),
-                None,
-                Some(106.0),
-                None,
-                Some(98.0),
-                None,
-                Some(108.0)
-            ]
-        );
-        assert!(zigzag(&[1.0], &[1.0], 0.0).iter().all(Option::is_none));
-    }
-
-    #[test]
     fn ichimoku_reports_conventional_warmups_and_aligned_lagging_close() {
         let highs = (0..60).map(|value| value as f64 + 10.0).collect::<Vec<_>>();
         let lows = (0..60).map(|value| value as f64).collect::<Vec<_>>();
@@ -7764,21 +3770,6 @@ mod tests {
     }
 
     #[test]
-    fn williams_r_uses_rolling_extremes_and_zero_for_flat_window() {
-        let highs = [10.0, 11.0, 12.0, 13.0];
-        let lows = [0.0, 0.0, 0.0, 0.0];
-        let closes = [5.0, 6.0, 9.0, 12.0];
-        let points = williams_r(&highs, &lows, &closes, 3);
-        assert_eq!(points[..2], [None, None]);
-        assert!((points[2].unwrap() + 25.0).abs() < 1e-12);
-        assert!((points[3].unwrap() + 7.692307692307692).abs() < 1e-12);
-        assert_eq!(
-            williams_r(&[5.0, 5.0], &[5.0, 5.0], &[5.0, 5.0], 2),
-            vec![None, Some(0.0)]
-        );
-    }
-
-    #[test]
     fn stochastic_rsi_warms_up_both_windows_and_normalizes_the_range() {
         let values = (0..12).map(|index| index as f64).collect::<Vec<_>>();
         let points = stochastic_rsi(&values, 3, 3);
@@ -7786,17 +3777,6 @@ mod tests {
         assert_eq!(points[5], Some(0.0));
         assert!(points[6..].iter().all(|value| *value == Some(0.0)));
         assert!(stochastic_rsi(&values, 0, 3).iter().all(Option::is_none));
-    }
-
-    #[test]
-    fn momentum_and_rate_of_change_use_lagged_values() {
-        let values = [10.0, 12.0, 15.0, 20.0];
-        assert_eq!(momentum(&values, 2), vec![None, None, Some(5.0), Some(8.0)]);
-        assert_eq!(
-            rate_of_change(&values, 2),
-            vec![None, None, Some(50.0), Some(66.66666666666667)]
-        );
-        assert_eq!(rate_of_change(&[0.0, 1.0], 1), vec![None, Some(0.0)]);
     }
 
     #[test]
@@ -8442,15 +4422,6 @@ mod tests {
     }
 
     #[test]
-    fn wma_weights_recent_bars_heaviest() {
-        // window [1,2,3]: (1*1 + 2*2 + 3*3) / 6 = 14/6; window [2,3,4]: (2 + 6 + 12) / 6 = 20/6
-        assert_eq!(
-            wma(&[1.0, 2.0, 3.0, 4.0], 3),
-            vec![None, None, Some(14.0 / 6.0), Some(20.0 / 6.0)]
-        );
-    }
-
-    #[test]
     fn rsi_follows_wilder_smoothing() {
         // changes: +2, -1, +2, -1 → seed (period 2): gain 2/2 = 1.0, loss 1/2 = 0.5 → RS 2 → 66.67
         let r = rsi(&[1.0, 3.0, 2.0, 4.0, 3.0], 2);
@@ -8658,36 +4629,19 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TestKind {
-        Aroon,
-        AwesomeOscillator,
-        Dpo,
-        ChandeMomentum,
         Sma,
         Ema,
-        Dema,
-        Tema,
-        Smma,
-        Hma,
         Vwma,
-        StandardDeviation,
         Cci,
-        WilliamsR,
         StochasticRsi,
-        Momentum,
-        RateOfChange,
         Donchian,
         PivotPoints,
-        ZigZag,
         Keltner,
         AdxDmi,
         ParabolicSar,
         SuperTrend,
         Ichimoku,
         Bollinger,
-        BollingerMetrics,
-        EnvelopesSma,
-        EnvelopesEma,
-        Alma,
         Rsi,
         Macd,
         Stochastic,
@@ -8695,59 +4649,19 @@ mod tests {
         Vwap,
         VwapBands,
         Obv,
-        AccumulationDistribution,
-        PriceVolumeTrend,
-        ChaikinOscillator,
         RelativeVolume,
-        VolumeOscillator,
-        ElderForce,
-        EaseOfMovement,
-        HistoricalVolatility,
-        Trix,
-        Kst,
-        Tsi,
-        MassIndex,
-        Klinger,
-        Kama,
-        McGinley,
-        LinearRegression,
-        Choppiness,
-        AtrBands,
-        CoppockCurve,
-        FisherTransform,
-        UltimateOscillator,
-        Vortex,
         Cmf,
         Mfi,
         Volume,
-        Wma,
     }
 
     fn expected(kind: TestKind, input: IndicatorInput<'_>) -> Vec<Vec<Option<f64>>> {
         match kind {
-            TestKind::Aroon => {
-                let points = aroon(input.high, input.low, 5);
-                vec![
-                    points.iter().map(|point| point.0).collect(),
-                    points.iter().map(|point| point.1).collect(),
-                ]
-            }
-            TestKind::AwesomeOscillator => vec![awesome_oscillator(input.high, input.low)],
-            TestKind::Dpo => vec![dpo(input.close, 5)],
-            TestKind::ChandeMomentum => vec![chande_momentum(input.close, 5)],
             TestKind::Sma => vec![sma(input.close, 5)],
             TestKind::Ema => vec![ema(input.close, 5)],
-            TestKind::Dema => vec![dema(input.close, 5)],
-            TestKind::Tema => vec![tema(input.close, 5)],
-            TestKind::Smma => vec![smma(input.close, 5)],
-            TestKind::Hma => vec![hma(input.close, 5)],
             TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
-            TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
             TestKind::Cci => vec![cci(input.high, input.low, input.close, 5)],
-            TestKind::WilliamsR => vec![williams_r(input.high, input.low, input.close, 5)],
             TestKind::StochasticRsi => vec![stochastic_rsi(input.close, 5, 5)],
-            TestKind::Momentum => vec![momentum(input.close, 5)],
-            TestKind::RateOfChange => vec![rate_of_change(input.close, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
                 vec![
@@ -8773,7 +4687,6 @@ mod tests {
                     points.iter().map(|point| point.support_2).collect(),
                 ]
             }
-            TestKind::ZigZag => vec![zigzag(input.high, input.low, 5.0)],
             TestKind::Keltner => {
                 let points = keltner(input.high, input.low, input.close, 5, 2.0);
                 vec![
@@ -8810,23 +4723,6 @@ mod tests {
                     points.iter().map(|point| point.lower).collect(),
                 ]
             }
-            TestKind::BollingerMetrics => {
-                let points = bollinger_metrics(input.close, 5, 2.0);
-                vec![
-                    points.iter().map(|point| point.0).collect(),
-                    points.iter().map(|point| point.1).collect(),
-                ]
-            }
-            TestKind::EnvelopesSma | TestKind::EnvelopesEma => {
-                let points =
-                    envelopes(input.close, 5, 10.0, matches!(kind, TestKind::EnvelopesEma));
-                vec![
-                    points.iter().map(|point| point.0).collect(),
-                    points.iter().map(|point| point.1).collect(),
-                    points.iter().map(|point| point.2).collect(),
-                ]
-            }
-            TestKind::Alma => vec![alma(input.close, 5, 0.85, 6.0)],
             TestKind::Rsi => vec![rsi(input.close, 5)],
             TestKind::Macd => {
                 let points = macd(input.close, 3, 6, 4);
@@ -8873,21 +4769,6 @@ mod tests {
                 ]
             }
             TestKind::Obv => vec![obv(input.close, input.volume)],
-            TestKind::AccumulationDistribution => vec![accumulation_distribution(
-                input.high,
-                input.low,
-                input.close,
-                input.volume,
-            )],
-            TestKind::PriceVolumeTrend => vec![price_volume_trend(input.close, input.volume)],
-            TestKind::ChaikinOscillator => vec![chaikin_oscillator(
-                input.high,
-                input.low,
-                input.close,
-                input.volume,
-                3,
-                7,
-            )],
             // Volume-only formulas receive source-aligned volume with whitespace masked.
             TestKind::RelativeVolume => vec![relative_volume(
                 &input
@@ -8898,102 +4779,6 @@ mod tests {
                     .collect::<Vec<_>>(),
                 5,
             )],
-            TestKind::VolumeOscillator => {
-                let volume = input
-                    .volume
-                    .iter()
-                    .zip(input.close)
-                    .map(|(&volume, &close)| if close.is_finite() { volume } else { f64::NAN })
-                    .collect::<Vec<_>>();
-                let points = volume_oscillator(&volume, 3, 7, 4);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.signal).collect(),
-                    points.iter().map(|point| point.histogram).collect(),
-                ]
-            }
-            TestKind::ElderForce => vec![elder_force(input.close, input.volume, 5)],
-            TestKind::EaseOfMovement => vec![ease_of_movement(
-                input.high,
-                input.low,
-                input.volume,
-                5,
-                100.0,
-            )],
-            TestKind::HistoricalVolatility => {
-                vec![historical_volatility(input.close, 5, 252.0)]
-            }
-            TestKind::Trix => {
-                let points = trix(input.close, 3, 4);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.signal).collect(),
-                ]
-            }
-            TestKind::Kst => {
-                let points = kst(input.close, [2, 3, 4, 5], [2, 2, 2, 3], 3);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.signal).collect(),
-                ]
-            }
-            TestKind::Tsi => {
-                let points = tsi(input.close, 5, 3, 3);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.signal).collect(),
-                ]
-            }
-            TestKind::MassIndex => vec![mass_index(input.high, input.low, 3, 5)],
-            TestKind::Klinger => {
-                let points = klinger(input.high, input.low, input.close, input.volume, 3, 7, 4);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.signal).collect(),
-                ]
-            }
-            TestKind::Kama => vec![kama(input.close, 5, 2, 10)],
-            TestKind::McGinley => vec![mcginley(input.close, 5)],
-            TestKind::LinearRegression => {
-                let points = linear_regression(input.close, 5, 2.0);
-                vec![
-                    points.iter().map(|point| point.curve).collect(),
-                    points.iter().map(|point| point.upper).collect(),
-                    points.iter().map(|point| point.lower).collect(),
-                ]
-            }
-            TestKind::Choppiness => vec![choppiness(input.high, input.low, input.close, 5)],
-            TestKind::AtrBands => {
-                let points = atr_bands(input.high, input.low, input.close, 5, 2.0);
-                vec![
-                    points.iter().map(|point| point.upper).collect(),
-                    points.iter().map(|point| point.basis).collect(),
-                    points.iter().map(|point| point.lower).collect(),
-                ]
-            }
-            TestKind::CoppockCurve => vec![coppock_curve(input.close, 7, 5, 3)],
-            TestKind::FisherTransform => {
-                let points = fisher_transform(input.high, input.low, 5);
-                vec![
-                    points.iter().map(|point| point.line).collect(),
-                    points.iter().map(|point| point.trigger).collect(),
-                ]
-            }
-            TestKind::UltimateOscillator => vec![ultimate_oscillator(
-                input.high,
-                input.low,
-                input.close,
-                3,
-                5,
-                7,
-            )],
-            TestKind::Vortex => {
-                let points = vortex(input.high, input.low, input.close, 5);
-                vec![
-                    points.iter().map(|point| point.plus).collect(),
-                    points.iter().map(|point| point.minus).collect(),
-                ]
-            }
             TestKind::Cmf => vec![cmf(input.high, input.low, input.close, input.volume, 5)],
             TestKind::Mfi => vec![mfi(input.high, input.low, input.close, input.volume, 5)],
             TestKind::Volume => {
@@ -9018,7 +4803,6 @@ mod tests {
                     .collect();
                 vec![values, average]
             }
-            TestKind::Wma => vec![wma(input.close, 5)],
         }
     }
 
@@ -9072,19 +4856,13 @@ mod tests {
             .filter(|&row| {
                 let range = input.high[row].is_finite() && input.low[row].is_finite();
                 match kind {
-                    TestKind::MassIndex | TestKind::FisherTransform | TestKind::ParabolicSar => {
-                        range
-                    }
+                    TestKind::ParabolicSar => range,
                     TestKind::Atr
                     | TestKind::AdxDmi
                     | TestKind::SuperTrend
-                    | TestKind::AtrBands
                     | TestKind::Keltner
-                    | TestKind::Klinger
                     | TestKind::Vwap
-                    | TestKind::VwapBands
-                    | TestKind::AccumulationDistribution
-                    | TestKind::ChaikinOscillator => range && input.close[row].is_finite(),
+                    | TestKind::VwapBands => range && input.close[row].is_finite(),
                     _ => input.close[row].is_finite(),
                 }
             })
@@ -9147,17 +4925,8 @@ mod tests {
     fn ema_family_deleted_rows_oracle() {
         gap_family_oracle(&[
             (TestKind::Ema, IncrementalState::ema(5)),
-            (TestKind::Smma, IncrementalState::smma(5)),
-            (TestKind::Dema, IncrementalState::dema(5)),
-            (TestKind::Tema, IncrementalState::tema(5)),
-            (
-                TestKind::EnvelopesEma,
-                IncrementalState::envelopes(5, 10.0, true),
-            ),
             (TestKind::Macd, IncrementalState::macd(3, 6, 4)),
-            (TestKind::Trix, IncrementalState::trix(3, 4)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
-            (TestKind::ElderForce, IncrementalState::elder_force(5)),
         ]);
     }
 
@@ -9180,7 +4949,6 @@ mod tests {
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
-            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
         ]);
     }
 
@@ -9188,38 +4956,11 @@ mod tests {
     fn cumulative_family_deleted_rows_oracle() {
         gap_family_oracle(&[
             (TestKind::Obv, IncrementalState::obv()),
-            (
-                TestKind::AccumulationDistribution,
-                IncrementalState::accumulation_distribution(),
-            ),
-            (
-                TestKind::ChaikinOscillator,
-                IncrementalState::chaikin_oscillator(3, 7),
-            ),
-            (
-                TestKind::PriceVolumeTrend,
-                IncrementalState::price_volume_trend(),
-            ),
             (TestKind::Vwap, IncrementalState::vwap()),
             (
                 TestKind::VwapBands,
                 IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
             ),
-        ]);
-    }
-
-    #[test]
-    fn formerly_reset_family_deleted_rows_oracle() {
-        gap_family_oracle(&[
-            (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
-            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
-            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
-            (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
-            (
-                TestKind::FisherTransform,
-                IncrementalState::fisher_transform(5),
-            ),
-            (TestKind::McGinley, IncrementalState::mcginley(5)),
         ]);
     }
 
@@ -9261,53 +5002,16 @@ mod tests {
 
     #[test]
     fn window_kinds_blank_until_their_input_windows_clear() {
-        // All 26 window-rule entries from VAL-KI-008. ZigZag has no fixed window;
-        // its historical confirmations retain their existing sparse-point rule.
         let kinds = [
             TestKind::Sma,
-            TestKind::Wma,
-            TestKind::ChandeMomentum,
-            TestKind::Momentum,
-            TestKind::RateOfChange,
-            TestKind::Kst,
-            TestKind::CoppockCurve,
-            TestKind::HistoricalVolatility,
-            TestKind::Dpo,
-            TestKind::StandardDeviation,
             TestKind::Bollinger,
-            TestKind::BollingerMetrics,
-            TestKind::LinearRegression,
-            TestKind::Hma,
-            TestKind::Alma,
-            TestKind::EnvelopesSma,
-            TestKind::WilliamsR,
             TestKind::Stochastic,
-            TestKind::UltimateOscillator,
-            TestKind::Vortex,
-            TestKind::Aroon,
-            TestKind::Choppiness,
             TestKind::Cmf,
-            TestKind::EaseOfMovement,
             TestKind::Vwma,
-            TestKind::ZigZag,
         ];
-        // Lookback is the greatest number of preceding physical rows a formula reads,
-        // including nested ROC/smoothing and preceding-close references. In particular
-        // Coppock uses a 7-row ROC followed by a 3-row WMA (7 + 3 - 1).
         let lookback = |kind, output| match kind {
-            TestKind::Momentum | TestKind::RateOfChange | TestKind::ChandeMomentum => 5,
-            TestKind::CoppockCurve => 9,
-            TestKind::Kst if output == 0 => 7, // ROC 5 + smoothing 3 - 1
-            TestKind::Kst => 9,                // plus signal 3 - 1
             TestKind::Stochastic if output == 0 => 4,
             TestKind::Stochastic => 6,
-            TestKind::UltimateOscillator => 7,
-            TestKind::HistoricalVolatility
-            | TestKind::Hma
-            | TestKind::EaseOfMovement
-            | TestKind::Vortex
-            | TestKind::Choppiness
-            | TestKind::Aroon => 5,
             _ => 4,
         };
         for (n, gap) in [
@@ -9380,9 +5084,6 @@ mod tests {
                             );
                         }
                     }
-                    if matches!(kind, TestKind::ZigZag) {
-                        continue; // historical confirmations have no fixed window
-                    }
                     let lag = lookback(kind, output);
                     for (row, value) in values
                         .iter()
@@ -9422,85 +5123,6 @@ mod tests {
                             "{kind:?} incremental gap {gap:?} row {row}: {actual:?} != {want:?}"
                         );
                     }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn kst_noncontiguous_lag_windows_follow_deleted_rows_oracle() {
-        let roc = [10, 15, 20, 30];
-        let smooth = [2; 4];
-        let signal = 3;
-        for gap in [3..5, 75..77] {
-            let mut close = (0..130)
-                .map(|row| 100.0 + row as f64 * 0.13 + (row as f64 * 0.33).sin() * 2.0)
-                .collect::<Vec<_>>();
-            for row in gap.clone() {
-                close[row] = f64::NAN;
-            }
-            let compact = close
-                .iter()
-                .copied()
-                .filter(|v| v.is_finite())
-                .collect::<Vec<_>>();
-            let oracle = kst(&compact, roc, smooth, signal);
-            let dense = kst(&close, roc, smooth, signal);
-            let times = (0..close.len() as i64).collect::<Vec<_>>();
-            let volume = vec![1.0; close.len()];
-            let mut incremental = IncrementalState::kst(roc, smooth, signal);
-            incremental.rebuild_from(
-                IndicatorInput {
-                    times: &times,
-                    open: &close,
-                    high: &close,
-                    low: &close,
-                    close: &close,
-                    volume: &volume,
-                },
-                0,
-            );
-            for (row, point) in dense.iter().enumerate() {
-                let compact_row = row - (gap.end - gap.start).min(row.saturating_sub(gap.start));
-                for (output, actual) in [point.line, point.signal].into_iter().enumerate() {
-                    let want = if gap.contains(&row) {
-                        None
-                    } else {
-                        let lookback = roc
-                            .into_iter()
-                            .zip(smooth)
-                            .map(|(lag, width)| lag + width - 1)
-                            .max()
-                            .unwrap()
-                            + if output == 1 { signal - 1 } else { 0 };
-                        if row >= gap.end && row - gap.end < lookback {
-                            None
-                        } else {
-                            let point = oracle[compact_row];
-                            if output == 0 {
-                                point.line
-                            } else {
-                                point.signal
-                            }
-                        }
-                    };
-                    let check = |value: Option<f64>, path: &str| {
-                        let observed = value.filter(|v| v.is_finite());
-                        let expected = want.filter(|v| v.is_finite());
-                        assert!(
-                            matches!((observed, expected), (None, None) | (Some(_), Some(_)))
-                                && observed
-                                    .zip(expected)
-                                    .is_none_or(|(a, b)| (a - b).abs() <= 1e-9 * b.abs().max(1.0)),
-                            "KST {path} gap {gap:?} row {row} output {output}: {observed:?} != {expected:?}"
-                        );
-                    };
-                    check(actual, "dense");
-                    let from = incremental.output_from(output);
-                    check(
-                        (row >= from).then(|| incremental.output(output)[row - from]),
-                        "incremental",
-                    );
                 }
             }
         }
@@ -9600,7 +5222,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_volume_cmf_gap_and_flat_historical_volatility_recover() {
+    fn zero_volume_cmf_gap_recovers() {
         let high = [12.0, 12.0, f64::NAN, 12.0, 12.0, 12.0, 12.0];
         let low = [8.0, 8.0, f64::NAN, 8.0, 8.0, 8.0, 8.0];
         let close = [10.0, 10.0, f64::NAN, 10.0, 10.0, 10.0, 10.0];
@@ -9609,24 +5231,6 @@ mod tests {
         assert!(cmf_values[3].unwrap().is_nan());
         assert!(cmf_values[4].unwrap().is_nan());
         assert_eq!(cmf_values[5], Some(0.0));
-        let hv = historical_volatility(&close, 3, 252.0);
-        assert!(hv[4].unwrap().is_nan());
-        assert_eq!(hv[6], Some(0.0));
-        // A constant *nonzero* log return has zero variance too. Without the
-        // centered-window calculation, the subtraction of two large sums
-        // leaves a spurious positive historical volatility after the gap.
-        let mut growing = (0..32)
-            .map(|row| (0.001 * row as f64).exp())
-            .collect::<Vec<_>>();
-        growing[8] = f64::NAN;
-        let recovered = historical_volatility(&growing, 5, 252.0);
-        for (row, value) in recovered.iter().enumerate().skip(14) {
-            assert!(
-                value.is_some_and(|value| value < 1e-10),
-                "row {row}: {:?}",
-                value
-            );
-        }
     }
 
     #[test]
@@ -9636,36 +5240,14 @@ mod tests {
         // gaps. Check every physical row, not just the final recovered row.
         let window_kinds = [
             TestKind::Sma,
-            TestKind::Wma,
-            TestKind::AwesomeOscillator,
-            TestKind::Dpo,
-            TestKind::ChandeMomentum,
-            TestKind::Hma,
             TestKind::Vwma,
-            TestKind::StandardDeviation,
             TestKind::Cci,
-            TestKind::WilliamsR,
             TestKind::StochasticRsi,
             TestKind::Donchian,
             TestKind::Ichimoku,
             TestKind::Bollinger,
-            TestKind::BollingerMetrics,
-            TestKind::EnvelopesSma,
-            TestKind::Alma,
             TestKind::Stochastic,
             TestKind::RelativeVolume,
-            TestKind::EaseOfMovement,
-            TestKind::HistoricalVolatility,
-            TestKind::Kst,
-            TestKind::MassIndex,
-            TestKind::Kama,
-            TestKind::LinearRegression,
-            TestKind::Choppiness,
-            TestKind::CoppockCurve,
-            TestKind::FisherTransform,
-            TestKind::UltimateOscillator,
-            TestKind::Vortex,
-            TestKind::Aroon,
             TestKind::Cmf,
             TestKind::Mfi,
             TestKind::Volume,
@@ -9739,97 +5321,6 @@ mod tests {
     }
 
     #[test]
-    fn live_bollinger_metrics_and_cmo_do_not_retain_flat_window_residue() {
-        let n = 1_280;
-        let times = (0..n as i64).collect::<Vec<_>>();
-        let mut close = (0..n)
-            .map(|row| {
-                if (350..700).contains(&row) || (900..n).contains(&row) {
-                    100.0
-                } else if (700..900).contains(&row) {
-                    100.0 + (row % 3) as f64 * 1e-8
-                } else {
-                    100.0 + ((row * 13 % 37) as f64 - 18.0) * 0.01
-                }
-            })
-            .collect::<Vec<_>>();
-        let volume = vec![1.0; n];
-        for gaps in [false, true] {
-            if gaps {
-                close[750] = f64::NAN;
-                close[1022] = f64::NAN;
-            }
-            for (mut state, dense) in [
-                (IncrementalState::bollinger_metrics(3, 1.35), {
-                    let points = bollinger_metrics(&close, 3, 1.35);
-                    [
-                        points.iter().map(|point| point.0).collect::<Vec<_>>(),
-                        points.iter().map(|point| point.1).collect(),
-                    ]
-                }),
-                (
-                    IncrementalState::chande_momentum(7),
-                    [chande_momentum(&close, 7), vec![]],
-                ),
-            ] {
-                for row in 0..n {
-                    let input = IndicatorInput {
-                        times: &times[..=row],
-                        open: &close[..=row],
-                        high: &close[..=row],
-                        low: &close[..=row],
-                        close: &close[..=row],
-                        volume: &volume[..=row],
-                    };
-                    state.rebuild_from(input, row);
-                    for (column, expected) in dense.iter().enumerate().take(state.output_count()) {
-                        if row < state.output_from(column) {
-                            continue;
-                        }
-                        let actual = state.output(column)[row - state.output_from(column)];
-                        if let Some(expected) = expected[row].filter(|value| value.is_finite()) {
-                            assert!(
-                                actual.is_finite()
-                                    && (actual - expected).abs()
-                                        <= 1e-12_f64.max(1e-9 * expected.abs()),
-                                "{gaps} row={row} col={column}: {actual} != {expected}"
-                            );
-                        } else {
-                            assert!(actual.is_nan(), "{gaps} row={row} col={column}: {actual}");
-                        }
-                    }
-                }
-                // A historical edit overlapping a sparse checkpoint has the
-                // same value as a fresh dense rebuild, not a stale tail sum.
-                state.rebuild_from(
-                    IndicatorInput {
-                        times: &times,
-                        open: &close,
-                        high: &close,
-                        low: &close,
-                        close: &close,
-                        volume: &volume,
-                    },
-                    1021,
-                );
-                for (column, expected) in dense.iter().enumerate().take(state.output_count()) {
-                    for row in 1021..n {
-                        let actual = state.output(column)[row - state.output_from(column)];
-                        if let Some(expected) = expected[row].filter(|value| value.is_finite()) {
-                            assert!(
-                                (actual - expected).abs() <= 1e-12_f64.max(1e-9 * expected.abs()),
-                                "repair {gaps} row={row} col={column}: {actual} != {expected}"
-                            );
-                        } else {
-                            assert!(actual.is_nan());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn stochastic_flat_carry_survives_sparse_checkpoint_repair() {
         let n = 2200;
         let period = 14;
@@ -9888,7 +5379,7 @@ mod tests {
         // A compact (gap rows deleted) run is independent of whitespace handling.
         // Fixed seeds and small bounded series keep the complete catalog inexpensive.
         let kinds = all_test_states();
-        assert_eq!(kinds.len(), 63, "update the oracle when a kind is added");
+        assert_eq!(kinds.len(), 24, "update the oracle when a kind is added");
         for seed in [0x4b53_5421_u64, 0x8acd_2026] {
             let mut random = seed;
             let mut next = || {
@@ -10072,10 +5563,9 @@ mod tests {
         output: usize,
         period: usize,
         second: usize,
-        third: usize,
+        _third: usize,
     ) -> Option<usize> {
         Some(match kind {
-            TestKind::AwesomeOscillator => 34,
             TestKind::Ichimoku => [9, 26, 26, 52, 1][output],
             TestKind::Volume => {
                 if output == 0 {
@@ -10084,35 +5574,15 @@ mod tests {
                     period
                 }
             }
-            TestKind::RelativeVolume
-            | TestKind::Aroon
-            | TestKind::ChandeMomentum
-            | TestKind::Momentum
-            | TestKind::RateOfChange
-            | TestKind::HistoricalVolatility
-            | TestKind::Vortex
-            | TestKind::Choppiness
-            | TestKind::EaseOfMovement => period + 1,
-            TestKind::UltimateOscillator => period + second + third + 1,
-            TestKind::CoppockCurve => period + second + third,
-            TestKind::Kst => period + 12 + (2 + second % 3) + if output == 1 { third } else { 0 },
-            TestKind::Dpo => period,
-            TestKind::Hma => period + (period as f64).sqrt() as usize - 1,
+            TestKind::RelativeVolume => period + 1,
             TestKind::Stochastic if output == 1 => period + second - 1,
-            TestKind::PivotPoints | TestKind::ZigZag => return None,
+            TestKind::PivotPoints => return None,
             TestKind::Sma
-            | TestKind::Wma
             | TestKind::Vwma
-            | TestKind::StandardDeviation
             | TestKind::Cci
-            | TestKind::WilliamsR
             | TestKind::Donchian
             | TestKind::Bollinger
-            | TestKind::BollingerMetrics
-            | TestKind::EnvelopesSma
-            | TestKind::Alma
             | TestKind::Stochastic
-            | TestKind::LinearRegression
             | TestKind::Cmf
             | TestKind::Mfi => period,
             _ => return None, // Recursive/cumulative kinds use every compact row.
@@ -10140,27 +5610,9 @@ mod tests {
         }
         match kind {
             TestKind::Sma => single!(sma(c, p), IncrementalState::sma(p)),
-            TestKind::Wma => single!(wma(c, p), IncrementalState::wma(p)),
             TestKind::Vwma => single!(vwma(c, v, p), IncrementalState::vwma(p)),
             TestKind::Ema => single!(ema(c, p), IncrementalState::ema(p)),
-            TestKind::Smma => single!(smma(c, p), IncrementalState::smma(p)),
-            TestKind::Dema => single!(dema(c, p), IncrementalState::dema(p)),
-            TestKind::Tema => single!(tema(c, p), IncrementalState::tema(p)),
-            TestKind::Hma => single!(hma(c, p), IncrementalState::hma(p)),
-            TestKind::Dpo => single!(dpo(c, p), IncrementalState::dpo(p)),
-            TestKind::ChandeMomentum => {
-                single!(chande_momentum(c, p), IncrementalState::chande_momentum(p))
-            }
-            TestKind::Momentum => single!(momentum(c, p), IncrementalState::momentum(p)),
-            TestKind::RateOfChange => {
-                single!(rate_of_change(c, p), IncrementalState::rate_of_change(p))
-            }
-            TestKind::StandardDeviation => single!(
-                standard_deviation(c, p),
-                IncrementalState::standard_deviation(p)
-            ),
             TestKind::Cci => single!(cci(h, l, c, p), IncrementalState::cci(p)),
-            TestKind::WilliamsR => single!(williams_r(h, l, c, p), IncrementalState::williams_r(p)),
             TestKind::Rsi => single!(rsi(c, p), IncrementalState::rsi(p)),
             TestKind::StochasticRsi => single!(
                 stochastic_rsi(c, p, q),
@@ -10182,17 +5634,6 @@ mod tests {
                 supertrend(h, l, c, p, 3.0),
                 IncrementalState::supertrend(p, 3.0)
             ),
-            TestKind::AtrBands => {
-                let points = atr_bands(h, l, c, p, 2.0);
-                (
-                    vec![
-                        points.iter().map(|point| point.upper).collect(),
-                        points.iter().map(|point| point.basis).collect(),
-                        points.iter().map(|point| point.lower).collect(),
-                    ],
-                    IncrementalState::atr_bands(p, 2.0),
-                )
-            }
             TestKind::Keltner => {
                 let points = keltner(h, l, c, p, 2.0);
                 (
@@ -10215,43 +5656,17 @@ mod tests {
                     IncrementalState::donchian(p),
                 )
             }
-            TestKind::Bollinger | TestKind::BollingerMetrics => {
-                let points = if kind == TestKind::Bollinger {
-                    bollinger(c, p, 2.0)
-                        .iter()
-                        .map(|point| [point.upper, point.middle, point.lower])
-                        .collect::<Vec<_>>()
-                } else {
-                    bollinger_metrics(c, p, 2.0)
-                        .iter()
-                        .map(|point| [point.0, point.1, None])
-                        .collect::<Vec<_>>()
-                };
-                let count = if kind == TestKind::Bollinger { 3 } else { 2 };
-                (
-                    (0..count)
-                        .map(|output| points.iter().map(|point| point[output]).collect())
-                        .collect(),
-                    if count == 3 {
-                        IncrementalState::bollinger(p, 2.0)
-                    } else {
-                        IncrementalState::bollinger_metrics(p, 2.0)
-                    },
-                )
-            }
-            TestKind::EnvelopesSma | TestKind::EnvelopesEma => {
-                let exponential = kind == TestKind::EnvelopesEma;
-                let points = envelopes(c, p, 10.0, exponential);
+            TestKind::Bollinger => {
+                let points = bollinger(c, p, 2.0);
                 (
                     vec![
-                        points.iter().map(|point| point.0).collect(),
-                        points.iter().map(|point| point.1).collect(),
-                        points.iter().map(|point| point.2).collect(),
+                        points.iter().map(|point| point.upper).collect(),
+                        points.iter().map(|point| point.middle).collect(),
+                        points.iter().map(|point| point.lower).collect(),
                     ],
-                    IncrementalState::envelopes(p, 10.0, exponential),
+                    IncrementalState::bollinger(p, 2.0),
                 )
             }
-            TestKind::Alma => single!(alma(c, p, 0.85, 6.0), IncrementalState::alma(p, 0.85, 6.0)),
             TestKind::Macd => {
                 let points = macd(c, q, p + q, s);
                 (
@@ -10271,16 +5686,6 @@ mod tests {
                         points.iter().map(|point| point.d).collect(),
                     ],
                     IncrementalState::stochastic(p, q),
-                )
-            }
-            TestKind::Aroon => {
-                let points = aroon(h, l, p);
-                (
-                    vec![
-                        points.iter().map(|point| point.0).collect(),
-                        points.iter().map(|point| point.1).collect(),
-                    ],
-                    IncrementalState::aroon(p),
                 )
             }
             TestKind::RelativeVolume => {
@@ -10316,126 +5721,8 @@ mod tests {
                     .collect();
                 (vec![values, average], IncrementalState::volume(p, false))
             }
-            TestKind::ElderForce => single!(elder_force(c, v, p), IncrementalState::elder_force(p)),
-            TestKind::ChaikinOscillator => single!(
-                chaikin_oscillator(h, l, c, v, q, p + q),
-                IncrementalState::chaikin_oscillator(q, p + q)
-            ),
-            TestKind::VolumeOscillator => {
-                let masked = v
-                    .iter()
-                    .zip(c)
-                    .map(|(&volume, &close)| if close.is_finite() { volume } else { f64::NAN })
-                    .collect::<Vec<_>>();
-                let points = volume_oscillator(&masked, q, p + q, s);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.signal).collect(),
-                        points.iter().map(|point| point.histogram).collect(),
-                    ],
-                    IncrementalState::volume_oscillator(q, p + q, s),
-                )
-            }
-            TestKind::EaseOfMovement => single!(
-                ease_of_movement(h, l, v, p, 100.0),
-                IncrementalState::ease_of_movement(p, 100.0)
-            ),
-            TestKind::HistoricalVolatility => single!(
-                historical_volatility(c, p, 252.0),
-                IncrementalState::historical_volatility(p, 252.0)
-            ),
-            TestKind::MassIndex => {
-                single!(mass_index(h, l, q, p), IncrementalState::mass_index(q, p))
-            }
-            TestKind::Trix => {
-                let points = trix(c, q, s);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.signal).collect(),
-                    ],
-                    IncrementalState::trix(q, s),
-                )
-            }
-            TestKind::Tsi => {
-                let points = tsi(c, p, q, s);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.signal).collect(),
-                    ],
-                    IncrementalState::tsi(p, q, s),
-                )
-            }
-            TestKind::Klinger => {
-                let points = klinger(h, l, c, v, q, p + q, s);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.signal).collect(),
-                    ],
-                    IncrementalState::klinger(q, p + q, s),
-                )
-            }
-            TestKind::FisherTransform => {
-                let points = fisher_transform(h, l, p);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.trigger).collect(),
-                    ],
-                    IncrementalState::fisher_transform(p),
-                )
-            }
-            TestKind::Kama => single!(kama(c, p, 2, p + q), IncrementalState::kama(p, 2, p + q)),
-            TestKind::McGinley => single!(mcginley(c, p), IncrementalState::mcginley(p)),
-            TestKind::LinearRegression => {
-                let points = linear_regression(c, p, 2.0);
-                (
-                    vec![
-                        points.iter().map(|point| point.curve).collect(),
-                        points.iter().map(|point| point.upper).collect(),
-                        points.iter().map(|point| point.lower).collect(),
-                    ],
-                    IncrementalState::linear_regression(p, 2.0),
-                )
-            }
-            TestKind::Choppiness => {
-                single!(choppiness(h, l, c, p), IncrementalState::choppiness(p))
-            }
             TestKind::Cmf => single!(cmf(h, l, c, v, p), IncrementalState::cmf(p)),
             TestKind::Mfi => single!(mfi(h, l, c, v, p), IncrementalState::mfi(p)),
-            TestKind::Vortex => {
-                let points = vortex(h, l, c, p);
-                (
-                    vec![
-                        points.iter().map(|point| point.plus).collect(),
-                        points.iter().map(|point| point.minus).collect(),
-                    ],
-                    IncrementalState::vortex(p),
-                )
-            }
-            TestKind::UltimateOscillator => single!(
-                ultimate_oscillator(h, l, c, q, q + s, p + q + s),
-                IncrementalState::ultimate_oscillator(q, q + s, p + q + s)
-            ),
-            TestKind::CoppockCurve => single!(
-                coppock_curve(c, p + q, p, s),
-                IncrementalState::coppock_curve(p + q, p, s)
-            ),
-            TestKind::Kst => {
-                let roc = [p, p + 4, p + 8, p + 12];
-                let smooth = [2 + q % 3; 4];
-                let points = kst(c, roc, smooth, s + 1);
-                (
-                    vec![
-                        points.iter().map(|point| point.line).collect(),
-                        points.iter().map(|point| point.signal).collect(),
-                    ],
-                    IncrementalState::kst(roc, smooth, s + 1),
-                )
-            }
             _ => {
                 let state = all_test_states()
                     .into_iter()
@@ -10449,25 +5736,20 @@ mod tests {
 
     #[test]
     fn previously_unlisted_kinds_follow_declared_gap_rules() {
-        // Awesome Oscillator: two median-price SMA windows (maximum 34 rows).
         // Ichimoku: 9/26/52-row extrema windows and instantaneous lagging close.
         // Pivot Points: session state continues over missing rows, never seeds
         // from a missing row; current gap output is blank.
         // Relative Volume: current volume plus the previous 5-row window.
-        // Volume Oscillator: recursive EMAs continue using valid volume observations.
         // Volume: instantaneous volume, and a 5-row volume-average window.
         #[derive(Clone, Copy)]
         enum GapRule {
-            Continue,
             Window { width: usize },
             Session,
         }
         let kinds = [
-            (TestKind::AwesomeOscillator, GapRule::Window { width: 34 }),
             (TestKind::Ichimoku, GapRule::Window { width: 52 }),
             (TestKind::PivotPoints, GapRule::Session),
             (TestKind::RelativeVolume, GapRule::Window { width: 6 }),
-            (TestKind::VolumeOscillator, GapRule::Continue),
             (TestKind::Volume, GapRule::Window { width: 5 }),
         ];
         let n = 225;
@@ -10518,7 +5800,7 @@ mod tests {
                     );
                 }
                 let first = match rule {
-                    GapRule::Continue | GapRule::Session => 77,
+                    GapRule::Session => 77,
                     GapRule::Window { width } => 76 + width,
                 };
                 for row in first..n {
@@ -10642,29 +5924,15 @@ mod tests {
             TestKind::AdxDmi,
             TestKind::SuperTrend,
             TestKind::ParabolicSar,
-            TestKind::AtrBands,
             TestKind::Cci,
-            TestKind::WilliamsR,
             TestKind::Stochastic,
             TestKind::Donchian,
             TestKind::Vwap,
             TestKind::VwapBands,
-            TestKind::AccumulationDistribution,
-            TestKind::ChaikinOscillator,
-            TestKind::Klinger,
-            TestKind::MassIndex,
-            TestKind::FisherTransform,
-            TestKind::UltimateOscillator,
-            TestKind::Vortex,
             TestKind::Mfi,
             TestKind::Cmf,
-            TestKind::Choppiness,
-            TestKind::EaseOfMovement,
-            TestKind::Aroon,
-            TestKind::ZigZag,
             TestKind::PivotPoints,
             TestKind::Ichimoku,
-            TestKind::AwesomeOscillator,
         ];
         states.retain(|(kind, _)| {
             kinds
@@ -10686,7 +5954,6 @@ mod tests {
             TestKind::AdxDmi,
             TestKind::SuperTrend,
             TestKind::ParabolicSar,
-            TestKind::AtrBands,
         ] {
             assert!(
                 expected(kind, input)[0][8].is_some_and(f64::is_finite),
@@ -10698,21 +5965,13 @@ mod tests {
     #[test]
     fn ohlc_windows_match_deleted_required_fields_after_recovery() {
         let kinds = [
-            TestKind::Aroon,
-            TestKind::AwesomeOscillator,
             TestKind::Cci,
-            TestKind::WilliamsR,
             TestKind::Stochastic,
             TestKind::Donchian,
-            TestKind::Choppiness,
-            TestKind::UltimateOscillator,
-            TestKind::Vortex,
             TestKind::Cmf,
             TestKind::Mfi,
-            TestKind::EaseOfMovement,
             TestKind::PivotPoints,
             TestKind::Ichimoku,
-            TestKind::ZigZag,
         ];
         let n = 160;
         let times = (0..n as i64).map(|row| row * 3_600).collect::<Vec<_>>();
@@ -10735,14 +5994,7 @@ mod tests {
             volume: &volume,
         };
         for kind in kinds {
-            let needs_close = !matches!(
-                kind,
-                TestKind::Aroon
-                    | TestKind::AwesomeOscillator
-                    | TestKind::Donchian
-                    | TestKind::EaseOfMovement
-                    | TestKind::ZigZag
-            );
+            let needs_close = !matches!(kind, TestKind::Donchian);
             let kept = (0..n)
                 .filter(|&row| {
                     high[row].is_finite()
@@ -10873,60 +6125,25 @@ mod tests {
 
     fn all_test_states() -> Vec<(TestKind, IncrementalState)> {
         vec![
-            (TestKind::Aroon, IncrementalState::aroon(5)),
-            (
-                TestKind::AwesomeOscillator,
-                IncrementalState::awesome_oscillator(),
-            ),
-            (TestKind::Dpo, IncrementalState::dpo(5)),
-            (
-                TestKind::ChandeMomentum,
-                IncrementalState::chande_momentum(5),
-            ),
             (TestKind::Sma, IncrementalState::sma(5)),
             (TestKind::Ema, IncrementalState::ema(5)),
-            (TestKind::Dema, IncrementalState::dema(5)),
-            (TestKind::Tema, IncrementalState::tema(5)),
-            (TestKind::Smma, IncrementalState::smma(5)),
-            (TestKind::Hma, IncrementalState::hma(5)),
             (TestKind::Vwma, IncrementalState::vwma(5)),
-            (
-                TestKind::StandardDeviation,
-                IncrementalState::standard_deviation(5),
-            ),
             (TestKind::Cci, IncrementalState::cci(5)),
-            (TestKind::WilliamsR, IncrementalState::williams_r(5)),
             (
                 TestKind::StochasticRsi,
                 IncrementalState::stochastic_rsi(5, 5),
             ),
-            (TestKind::Momentum, IncrementalState::momentum(5)),
-            (TestKind::RateOfChange, IncrementalState::rate_of_change(5)),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (
                 TestKind::PivotPoints,
                 IncrementalState::pivot_points(PivotKind::Standard),
             ),
-            (TestKind::ZigZag, IncrementalState::zigzag(5.0)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
             (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
             (TestKind::Ichimoku, IncrementalState::ichimoku()),
             (TestKind::Bollinger, IncrementalState::bollinger(5, 2.0)),
-            (
-                TestKind::BollingerMetrics,
-                IncrementalState::bollinger_metrics(5, 2.0),
-            ),
-            (
-                TestKind::EnvelopesSma,
-                IncrementalState::envelopes(5, 10.0, false),
-            ),
-            (
-                TestKind::EnvelopesEma,
-                IncrementalState::envelopes(5, 10.0, true),
-            ),
-            (TestKind::Alma, IncrementalState::alma(5, 0.85, 6.0)),
             (TestKind::Rsi, IncrementalState::rsi(5)),
             (TestKind::Macd, IncrementalState::macd(3, 6, 4)),
             (TestKind::Stochastic, IncrementalState::stochastic(5, 3)),
@@ -10938,67 +6155,12 @@ mod tests {
             ),
             (TestKind::Obv, IncrementalState::obv()),
             (
-                TestKind::AccumulationDistribution,
-                IncrementalState::accumulation_distribution(),
-            ),
-            (
-                TestKind::PriceVolumeTrend,
-                IncrementalState::price_volume_trend(),
-            ),
-            (
-                TestKind::ChaikinOscillator,
-                IncrementalState::chaikin_oscillator(3, 7),
-            ),
-            (
                 TestKind::RelativeVolume,
                 IncrementalState::relative_volume(5),
             ),
-            (
-                TestKind::VolumeOscillator,
-                IncrementalState::volume_oscillator(3, 7, 4),
-            ),
-            (TestKind::ElderForce, IncrementalState::elder_force(5)),
-            (
-                TestKind::EaseOfMovement,
-                IncrementalState::ease_of_movement(5, 100.0),
-            ),
-            (
-                TestKind::HistoricalVolatility,
-                IncrementalState::historical_volatility(5, 252.0),
-            ),
-            (TestKind::Trix, IncrementalState::trix(3, 4)),
-            (
-                TestKind::Kst,
-                IncrementalState::kst([2, 3, 4, 5], [2, 2, 2, 3], 3),
-            ),
-            (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
-            (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
-            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
-            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
-            (TestKind::McGinley, IncrementalState::mcginley(5)),
-            (
-                TestKind::LinearRegression,
-                IncrementalState::linear_regression(5, 2.0),
-            ),
-            (TestKind::Choppiness, IncrementalState::choppiness(5)),
-            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
-            (
-                TestKind::CoppockCurve,
-                IncrementalState::coppock_curve(7, 5, 3),
-            ),
-            (
-                TestKind::FisherTransform,
-                IncrementalState::fisher_transform(5),
-            ),
-            (
-                TestKind::UltimateOscillator,
-                IncrementalState::ultimate_oscillator(3, 5, 7),
-            ),
-            (TestKind::Vortex, IncrementalState::vortex(5)),
             (TestKind::Cmf, IncrementalState::cmf(5)),
             (TestKind::Mfi, IncrementalState::mfi(5)),
             (TestKind::Volume, IncrementalState::volume(5, false)),
-            (TestKind::Wma, IncrementalState::wma(5)),
         ]
     }
 
@@ -11143,119 +6305,6 @@ mod tests {
     }
 
     #[test]
-    fn new_studies_handle_empty_short_gap_and_historical_correction() {
-        let mut states = [
-            (
-                TestKind::Kst,
-                IncrementalState::kst([2, 3, 4, 5], [2, 2, 2, 3], 3),
-            ),
-            (TestKind::Klinger, IncrementalState::klinger(3, 7, 4)),
-            (
-                TestKind::LinearRegression,
-                IncrementalState::linear_regression(5, 2.0),
-            ),
-            (TestKind::MassIndex, IncrementalState::mass_index(3, 5)),
-            (TestKind::Tsi, IncrementalState::tsi(5, 3, 3)),
-            (TestKind::Vortex, IncrementalState::vortex(5)),
-            (TestKind::Kama, IncrementalState::kama(5, 2, 10)),
-            (TestKind::McGinley, IncrementalState::mcginley(5)),
-            (TestKind::Choppiness, IncrementalState::choppiness(5)),
-            (TestKind::AtrBands, IncrementalState::atr_bands(5, 2.0)),
-        ];
-        let times = (0..48).map(i64::from).collect::<Vec<_>>();
-        let mut close = (0..48)
-            .map(|row| 100.0 + (row as f64 * 0.41).sin() * 3.0 + row as f64 * 0.1)
-            .collect::<Vec<_>>();
-        let mut high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
-        let mut low = close.iter().map(|value| value - 1.5).collect::<Vec<_>>();
-        let mut volume = (0..48).map(|row| (row % 7 + 1) as f64).collect::<Vec<_>>();
-        let check = |states: &mut [(TestKind, IncrementalState)],
-                     len: usize,
-                     close: &[f64],
-                     high: &[f64],
-                     low: &[f64],
-                     volume: &[f64],
-                     from: usize| {
-            assert_incremental_matches_full(
-                states,
-                IndicatorInput {
-                    times: &times[..len],
-                    open: &close[..len],
-                    high: &high[..len],
-                    low: &low[..len],
-                    close: &close[..len],
-                    volume: &volume[..len],
-                },
-                from,
-            );
-        };
-
-        check(&mut states, 0, &close, &high, &low, &volume, 0);
-        for (_, state) in &states {
-            for output in 0..state.output_count() {
-                assert!(state.output(output).is_empty());
-            }
-        }
-
-        check(&mut states, 1, &close, &high, &low, &volume, 0);
-        for (kind, state) in &states {
-            for output in 0..state.output_count() {
-                if matches!(kind, TestKind::McGinley) {
-                    assert!(
-                        state.output(output)[0].is_finite(),
-                        "McGinley seeds at the first close"
-                    );
-                } else {
-                    assert!(
-                        state.output(output).iter().all(|value| value.is_nan()),
-                        "one-bar warmup must be blank"
-                    );
-                }
-            }
-        }
-
-        check(&mut states, 4, &close, &high, &low, &volume, 1);
-        for (kind, state) in &states {
-            for output in 0..state.output_count() {
-                if matches!(kind, TestKind::McGinley) {
-                    assert!(state.output(output).iter().all(|value| value.is_finite()));
-                } else {
-                    assert!(state.output(output).iter().all(|value| value.is_nan()));
-                }
-            }
-        }
-
-        check(&mut states, 48, &close, &high, &low, &volume, 4);
-        let gap = 24;
-        close[gap] = f64::NAN;
-        high[gap] = f64::NAN;
-        low[gap] = f64::NAN;
-        volume[gap] = f64::NAN;
-        check(&mut states, 48, &close, &high, &low, &volume, gap);
-        for (_, state) in &states {
-            for output in 0..state.output_count() {
-                let from = state.output_from(output);
-                assert!(
-                    state.output(output)[gap - from].is_nan(),
-                    "gap row must be blank"
-                );
-            }
-        }
-
-        close[7] += 5.0;
-        high[7] = close[7] + 2.0;
-        low[7] = close[7] - 1.5;
-        volume[7] += 4.0;
-        check(&mut states, 48, &close, &high, &low, &volume, 7);
-
-        close[gap] = 102.0;
-        high[gap] = 104.0;
-        low[gap] = 100.5;
-        volume[gap] = 6.0;
-        check(&mut states, 48, &close, &high, &low, &volume, gap);
-    }
-
-    #[test]
     fn every_study_handles_short_inputs_and_gap_repair() {
         let mut states = all_test_states();
         let times = (0..80).map(i64::from).collect::<Vec<_>>();
@@ -11363,269 +6412,7 @@ mod tests {
             };
 
         // Independently calculated from the fixture OHLCV rows (not from dense indicator
-        // implementations). Short KST windows keep both its line and signal within 60 rows.
-        assert_final("Aroon up", IncrementalState::aroon(5), 0, 0.0);
-        assert_final("Aroon down", IncrementalState::aroon(5), 1, 60.0);
-        assert_final(
-            "Awesome Oscillator",
-            IncrementalState::awesome_oscillator(),
-            0,
-            -1.536797362138088,
-        );
-        assert_final(
-            "Chande Momentum",
-            IncrementalState::chande_momentum(5),
-            0,
-            -48.19370754205317,
-        );
-        assert_final(
-            "Chaikin Oscillator",
-            IncrementalState::chaikin_oscillator(3, 6),
-            0,
-            -8.099183009038654,
-        );
-        assert_final(
-            "Coppock Curve",
-            IncrementalState::coppock_curve(6, 3, 4),
-            0,
-            -9.41909313330223,
-        );
-        assert_final("DPO", IncrementalState::dpo(5), 0, -0.2351633003471107);
-        assert_final(
-            "Elder Force",
-            IncrementalState::elder_force(5),
-            0,
-            31.96442399619355,
-        );
-        assert_final(
-            "Ease of Movement",
-            IncrementalState::ease_of_movement(5, 1.0),
-            0,
-            -0.1166970104225895,
-        );
-        assert_final(
-            "Fisher line",
-            IncrementalState::fisher_transform(5),
-            0,
-            -0.6891408918939269,
-        );
-        assert_final(
-            "Fisher trigger",
-            IncrementalState::fisher_transform(5),
-            1,
-            -0.7700306869497627,
-        );
-        assert_final(
-            "Historical Volatility",
-            IncrementalState::historical_volatility(5, 252.0),
-            0,
-            33.55558767101923,
-        );
-        assert_final(
-            "KST line",
-            IncrementalState::kst([2, 3, 4, 5], [2, 3, 4, 5], 3),
-            0,
-            -45.15601171260293,
-        );
-        assert_final(
-            "KST signal",
-            IncrementalState::kst([2, 3, 4, 5], [2, 3, 4, 5], 3),
-            1,
-            -40.42890476968924,
-        );
-        assert_final(
-            "Klinger line",
-            IncrementalState::klinger(3, 6, 4),
-            0,
-            376.5561190129093,
-        );
-        assert_final(
-            "Klinger signal",
-            IncrementalState::klinger(3, 6, 4),
-            1,
-            -185.2666012083956,
-        );
-        assert_final(
-            "Regression curve",
-            IncrementalState::linear_regression(5, 2.0),
-            0,
-            100.4888887275999,
-        );
-        assert_final(
-            "Regression upper",
-            IncrementalState::linear_regression(5, 2.0),
-            1,
-            103.2854271400926,
-        );
-        assert_final(
-            "Regression lower",
-            IncrementalState::linear_regression(5, 2.0),
-            2,
-            97.69235031510719,
-        );
-        assert_final("Mass Index", IncrementalState::mass_index(5, 5), 0, 5.0);
-        assert_final(
-            "Ultimate Oscillator",
-            IncrementalState::ultimate_oscillator(3, 5, 7),
-            0,
-            45.65847840650458,
-        );
-        assert_final(
-            "TRIX line",
-            IncrementalState::trix(5, 3),
-            0,
-            -0.409962754833737,
-        );
-        assert_final(
-            "TRIX signal",
-            IncrementalState::trix(5, 3),
-            1,
-            -0.280666792016231,
-        );
-        assert_final(
-            "TSI line",
-            IncrementalState::tsi(5, 3, 3),
-            0,
-            -26.580720443143,
-        );
-        assert_final(
-            "TSI signal",
-            IncrementalState::tsi(5, 3, 3),
-            1,
-            -36.46784062557349,
-        );
-        assert_final(
-            "Vortex +VI",
-            IncrementalState::vortex(5),
-            0,
-            0.5579692505882866,
-        );
-        assert_final(
-            "Vortex -VI",
-            IncrementalState::vortex(5),
-            1,
-            1.038943112552389,
-        );
-        assert_final(
-            "Envelope SMA upper",
-            IncrementalState::envelopes(5, 2.0, false),
-            0,
-            103.4371031507486,
-        );
-        assert_final(
-            "Envelope SMA basis",
-            IncrementalState::envelopes(5, 2.0, false),
-            1,
-            101.4089246575966,
-        );
-        assert_final(
-            "Envelope SMA lower",
-            IncrementalState::envelopes(5, 2.0, false),
-            2,
-            99.38074616444469,
-        );
-        assert_final(
-            "Envelope EMA upper",
-            IncrementalState::envelopes(5, 2.0, true),
-            0,
-            104.0025555497179,
-        );
-        assert_final(
-            "Envelope EMA basis",
-            IncrementalState::envelopes(5, 2.0, true),
-            1,
-            101.9632897546254,
-        );
-        assert_final(
-            "Envelope EMA lower",
-            IncrementalState::envelopes(5, 2.0, true),
-            2,
-            99.92402395953289,
-        );
-        assert_final(
-            "ALMA",
-            IncrementalState::alma(5, 0.85, 6.0),
-            0,
-            100.8775648482768,
-        );
-        assert_final(
-            "KAMA",
-            IncrementalState::kama(5, 2, 30),
-            0,
-            101.9160311331937,
-        );
-        assert_final(
-            "McGinley",
-            IncrementalState::mcginley(5),
-            0,
-            102.2960315743182,
-        );
-        assert_final(
-            "Choppiness",
-            IncrementalState::choppiness(5),
-            0,
-            55.5975026457025,
-        );
-        assert_final(
-            "Bollinger %B",
-            IncrementalState::bollinger_metrics(5, 2.0),
-            0,
-            0.6276163411758227,
-        );
-        assert_final(
-            "Bollinger BandWidth",
-            IncrementalState::bollinger_metrics(5, 2.0),
-            1,
-            6.083105287510145,
-        );
-        assert_final(
-            "ATR bands upper",
-            IncrementalState::atr_bands(5, 2.0),
-            0,
-            108.6787277996608,
-        );
-        assert_final(
-            "ATR bands basis",
-            IncrementalState::atr_bands(5, 2.0),
-            1,
-            102.19616583077465,
-        );
-        assert_final(
-            "ATR bands lower",
-            IncrementalState::atr_bands(5, 2.0),
-            2,
-            95.71360386188844,
-        );
-        assert_final(
-            "Accumulation/Distribution",
-            IncrementalState::accumulation_distribution(),
-            0,
-            -349.2000000000132,
-        );
-        assert_final(
-            "Price Volume Trend",
-            IncrementalState::price_volume_trend(),
-            0,
-            -4.062813009843773,
-        );
-        assert_final(
-            "Volume Oscillator line",
-            IncrementalState::volume_oscillator(3, 6, 4),
-            0,
-            8.09094542282349,
-        );
-        assert_final(
-            "Volume Oscillator signal",
-            IncrementalState::volume_oscillator(3, 6, 4),
-            1,
-            -1.079470318694398,
-        );
-        assert_final(
-            "Volume Oscillator histogram",
-            IncrementalState::volume_oscillator(3, 6, 4),
-            2,
-            9.170415741517887,
-        );
+        // implementations).
         assert_final(
             "Relative Volume",
             IncrementalState::relative_volume(5),
@@ -11686,42 +6473,13 @@ mod tests {
             1,
             26.065449201630944,
         );
-        assert_final("HMA", IncrementalState::hma(5), 0, 100.81322452527017);
         assert_final("VWMA", IncrementalState::vwma(5), 0, 101.17891567509746);
-        assert_final("DEMA", IncrementalState::dema(5), 0, 100.93821390320514);
-        assert_final("TEMA", IncrementalState::tema(5), 0, 100.76808077358208);
-        assert_final("SMMA/RMA", IncrementalState::smma(5), 0, 102.71390487376016);
-        assert_final(
-            "standard deviation",
-            IncrementalState::standard_deviation(5),
-            0,
-            1.54220291446336,
-        );
-        assert_final("WMA", IncrementalState::wma(5), 0, 101.1022460142644);
         assert_final("CCI", IncrementalState::cci(5), 0, 39.56099529637163);
-        assert_final(
-            "Williams %R",
-            IncrementalState::williams_r(5),
-            0,
-            -46.483541222125595,
-        );
         assert_final(
             "Stochastic RSI",
             IncrementalState::stochastic_rsi(5, 5),
             0,
             100.0,
-        );
-        assert_final(
-            "Momentum",
-            IncrementalState::momentum(5),
-            0,
-            -4.6838671643187695,
-        );
-        assert_final(
-            "ROC",
-            IncrementalState::rate_of_change(5),
-            0,
-            -4.382359392173651,
         );
         assert_final(
             "Donchian upper",
@@ -11848,12 +6606,6 @@ mod tests {
             IncrementalState::vwap_bands(VwapReset::Monthly, 1.0, 5.0),
             4,
             97.18135753923592,
-        );
-        assert_final(
-            "ZigZag",
-            IncrementalState::zigzag(5.0),
-            0,
-            103.59616583077465,
         );
 
         for (kind, expected) in [
