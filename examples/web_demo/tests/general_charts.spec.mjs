@@ -2281,9 +2281,11 @@ test("general dashboard keeps rendering when WebGPU has no adapter and does not 
     backend === "canvas2d" && backend_status.reason === "adapter_unavailable")).toBe(true);
   expect(before.badge).toContain("WebGPU fallback (adapter_unavailable)");
 
-  const last = page.locator("#general_workspace .general-chart-card:not([data-complete-only=\"true\"])").last();
-  await last.scrollIntoViewIfNeeded();
-  await expect(last).toHaveAttribute("data-mounted", "true");
+  // Scroll well down into the standard-build cards without entering the IntersectionObserver
+  // pre-mount margin of the trailing complete-only cards (which instantiate a separate WASM build).
+  const target = page.locator("#general_workspace .general-chart-card:not([data-complete-only=\"true\"])").nth(45);
+  await target.scrollIntoViewIfNeeded();
+  await expect(target).toHaveAttribute("data-mounted", "true");
   expect(await page.evaluate(() => window.__adapter_requests)).toBe(before.requests);
   expect(fallback_warnings).toHaveLength(1);
   expect(page_errors).toEqual([]);
