@@ -2413,7 +2413,10 @@ impl ChartEngine {
                 let Some(index) = plot.index_at(row) else {
                     continue;
                 };
-                let cx = (self.time_scale.index_to_coordinate(index) * hpr) as f32;
+                let cx = (self
+                    .time_scale
+                    .index_to_coordinate(index + i64::from(series.bar_offset))
+                    * hpr) as f32;
                 let value = if series.kind == SeriesKind::Candlestick {
                     (plot.value_at(row, PlotValueIndex::Open)
                         + plot.value_at(row, PlotValueIndex::Close))

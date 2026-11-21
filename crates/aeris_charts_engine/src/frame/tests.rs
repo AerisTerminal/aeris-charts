@@ -24267,3 +24267,158 @@ fn v6_oscillator_reference_lines_and_mfi_threshold_emit_in_frame() {
         "MFI pane must emit its 20/80 threshold band fill"
     );
 }
+
+#[test]
+fn p3_supertrend_parabolic_sar_ichimoku_cmf_rvol_vwap_terminal_upgrades() {
+    let mut chart = ChartEngine::new(900.0, 600.0, 1.0);
+    // 100 hourly bars across 5 UTC days with a strong rally then strong sell-off.
+    let n = 100usize;
+    let mut times = Vec::with_capacity(n);
+    let mut opens = Vec::with_capacity(n);
+    let mut highs = Vec::with_capacity(n);
+    let mut lows = Vec::with_capacity(n);
+    let mut closes = Vec::with_capacity(n);
+    let mut vols = Vec::with_capacity(n);
+    for i in 0..n {
+        times.push(1_700_006_400.0 + i as f64 * 3600.0);
+        let base = if i < 55 {
+            100.0 + i as f64 * 2.0
+        } else {
+            210.0 - (i - 55) as f64 * 3.0
+        };
+        let up_bar = i < 55;
+        opens.push(if up_bar { base - 1.0 } else { base + 1.0 });
+        highs.push(base + 3.0);
+        lows.push(base - 3.0);
+        closes.push(if up_bar { base + 2.0 } else { base - 2.0 });
+        // Spike volume on bar 90 so RVOL >= 1.5, moderate on 89, low on 88.
+        vols.push(match i {
+            90 => 500.0,
+            88 => 20.0,
+            _ => 100.0,
+        });
+    }
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    let vol = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(vol, &times, &vols, &vols, &vols, &vols)
+        .unwrap();
+
+    let st = chart.add_supertrend(0, 5, 1.5).unwrap();
+    let sar = chart.add_parabolic_sar(0).unwrap();
+    let ichi = chart.add_ichimoku(0);
+    let cmf = chart.add_cmf(0, vol, 5).unwrap();
+    let rvol = chart.add_relative_volume(0, vol, 5).unwrap();
+    let vwap = chart.add_vwap(0, Some(vol)).unwrap();
+
+    assert_eq!(
+        chart.series_entry(st).unwrap().line_break_mode,
+        crate::LineBreakMode::OnColorChange
+    );
+    let sar_entry = chart.series_entry(sar).unwrap();
+    assert!(!sar_entry.line_visible && sar_entry.point_markers);
+    assert_eq!(chart.series_entry(ichi[2]).unwrap().bar_offset, 26);
+    assert_eq!(chart.series_entry(ichi[3]).unwrap().bar_offset, 26);
+    assert_eq!(chart.series_entry(ichi[4]).unwrap().bar_offset, -26);
+    assert_eq!(chart.series_entry(cmf).unwrap().kind, SeriesKind::Baseline);
+    assert_eq!(chart.series_entry(cmf).unwrap().baseline, Some(0.0));
+    assert_eq!(
+        chart.series_entry(rvol).unwrap().kind,
+        SeriesKind::Histogram
+    );
+    assert_eq!(
+        chart.series_entry(vwap).unwrap().line_break_mode,
+        crate::LineBreakMode::OnSegmentBreak
+    );
+    assert!(
+        !chart.series_segment_break_times(vwap).is_empty(),
+        "VWAP tracks UTC day breaks across multi-day data"
+    );
+
+    chart.time_scale.set_width(900.0);
+    chart.fit_content();
+    chart.set_visible_logical_range(0.0, (n + 30) as f64);
+    let frame = chart.build_frame();
+    let market = chart.market_colors();
+
+    // SuperTrend & Parabolic SAR paint bullish up and bearish down colors.
+    let st_has_up = frame.panes[0]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::Polyline { color, .. } if *color == market.up));
+    let st_has_down = frame.panes[0]
+        .main
+        .iter()
+        .any(|p| matches!(p, Prim::Polyline { color, .. } if *color == market.down));
+    assert!(
+        st_has_up && st_has_down,
+        "SuperTrend must flip between market up and down colors"
+    );
+    let sar_dots_up = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { fill, .. } if *fill == market.up))
+        .count();
+    let sar_dots_down = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { fill, .. } if *fill == market.down))
+        .count();
+    assert!(
+        sar_dots_up > 0 && sar_dots_down > 0,
+        "Parabolic SAR must emit bullish & bearish dots"
+    );
+
+    // VWAP emits separate segments per UTC day (5 days -> >= 4 disjoint polylines in VWAP gold).
+    let vwap_color = series_stroke_color(
+        chart.series_entry(vwap).unwrap(),
+        market,
+        chart.surface_theme(),
+    );
+    let vwap_polylines = frame.panes[0]
+        .main
+        .iter()
+        .filter(|p| matches!(p, Prim::Polyline { color, .. } if *color == vwap_color))
+        .count();
+    assert!(
+        vwap_polylines >= 4,
+        "VWAP must split into separate UTC-day segments (got {vwap_polylines})"
+    );
+
+    // CMF Baseline emits zero-baseline area fills.
+    let cmf_pane = chart.series_entry(cmf).unwrap().pane_index;
+    assert!(
+        frame.panes[cmf_pane]
+            .main
+            .iter()
+            .any(|p| matches!(p, Prim::AreaFill { .. })),
+        "CMF must paint zero-baseline area fills"
+    );
+
+    // RVOL Histogram emits surge amber (>=1.5) and muted (<1.0) columns.
+    let rvol_pane = chart.series_entry(rvol).unwrap().pane_index;
+    let amber = Color::rgb(0xff, 0x98, 0x00);
+    let muted = Color::rgba(0x78, 0x7b, 0x86, 0x8c);
+    assert!(
+        frame.panes[rvol_pane]
+            .main
+            .iter()
+            .any(|p| matches!(p, Prim::Rect { color, .. } if *color == amber)),
+        "RVOL must highlight >=1.5x surge bars in amber"
+    );
+    assert!(
+        frame.panes[rvol_pane]
+            .main
+            .iter()
+            .any(|p| matches!(p, Prim::Rect { color, .. } if *color == muted)),
+        "RVOL must paint <1.0x below-average bars in muted slate"
+    );
+
+    // reset_style_to_defaults preserves Parabolic SAR dots mode & CMF zero baseline.
+    chart.reset_style_to_defaults();
+    let sar_after = chart.series_entry(sar).unwrap();
+    assert!(!sar_after.line_visible && sar_after.point_markers);
+    assert_eq!(chart.series_entry(cmf).unwrap().baseline, Some(0.0));
+}

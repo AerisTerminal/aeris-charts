@@ -217,15 +217,35 @@ fn pivot_levels(session: Session, kind: PivotKind) -> PivotPoint {
     }
 }
 
-/// Parabolic SAR with the conventional 0.02 acceleration step and 0.20 cap.
+/// Parabolic SAR with the conventional 0.02 acceleration start/increment and 0.20 cap.
 pub fn parabolic_sar(highs: &[f64], lows: &[f64]) -> Vec<Option<f64>> {
+    parabolic_sar_with_params(highs, lows, 0.02, 0.02, 0.20)
+}
+
+/// Parabolic SAR with configurable acceleration `start`, `increment`, and `max` cap.
+pub fn parabolic_sar_with_params(
+    highs: &[f64],
+    lows: &[f64],
+    start: f64,
+    increment: f64,
+    max: f64,
+) -> Vec<Option<f64>> {
     let n = highs.len().min(lows.len());
     let mut out = vec![None; n];
+    if !start.is_finite()
+        || !increment.is_finite()
+        || !max.is_finite()
+        || start <= 0.0
+        || increment < 0.0
+        || max < start
+    {
+        return out;
+    }
     let mut state = ParabolicSarState::default();
     for row in 0..n {
         if valid_range(highs[row], lows[row]) {
             out[row] = Some(parabolic_sar_step(
-                &mut state, highs[row], lows[row], 0.02, 0.20,
+                &mut state, highs[row], lows[row], start, increment, max,
             ));
         }
     }
@@ -274,21 +294,60 @@ pub struct IchimokuPoint {
 }
 
 /// Ichimoku cloud with the conventional 9/26/52 periods. Values are aligned to the source row;
-/// hosts that need visual displacement can apply it without changing canonical study data.
+/// the engine applies horizontal bar displacement (+26 Kumo / -26 Chikou) during frame & hit build.
 pub fn ichimoku(highs: &[f64], lows: &[f64], closes: &[f64]) -> Vec<IchimokuPoint> {
+    ichimoku_with_periods(highs, lows, closes, 9, 26, 52)
+}
+
+/// Ichimoku cloud with configurable conversion (Tenkan), base (Kijun), and span B periods.
+pub fn ichimoku_with_periods(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    conversion_period: usize,
+    base_period: usize,
+    span_b_period: usize,
+) -> Vec<IchimokuPoint> {
     let n = highs.len().min(lows.len()).min(closes.len());
+    if conversion_period == 0 || base_period == 0 || span_b_period == 0 {
+        return vec![
+            IchimokuPoint {
+                conversion: None,
+                base: None,
+                leading_a: None,
+                leading_b: None,
+                lagging: None,
+            };
+            n
+        ];
+    }
     (0..n)
-        .map(|row| ichimoku_at(highs, lows, closes, row))
+        .map(|row| {
+            ichimoku_at(
+                highs,
+                lows,
+                closes,
+                row,
+                conversion_period,
+                base_period,
+                span_b_period,
+            )
+        })
         .collect()
 }
 
-/// Rows before and including `row` that one Ichimoku point reads (the leading span B window).
-const ICHIMOKU_LOOKBACK: usize = 52;
-
-fn ichimoku_at(highs: &[f64], lows: &[f64], closes: &[f64], row: usize) -> IchimokuPoint {
-    let conversion = rolling_midpoint(highs, lows, row, 9);
-    let base = rolling_midpoint(highs, lows, row, 26);
-    let leading_b = rolling_midpoint(highs, lows, row, ICHIMOKU_LOOKBACK);
+fn ichimoku_at(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    row: usize,
+    conversion_period: usize,
+    base_period: usize,
+    span_b_period: usize,
+) -> IchimokuPoint {
+    let conversion = rolling_midpoint(highs, lows, row, conversion_period);
+    let base = rolling_midpoint(highs, lows, row, base_period);
+    let leading_b = rolling_midpoint(highs, lows, row, span_b_period);
     let leading_a = conversion
         .zip(base)
         .map(|(conversion, base)| (conversion + base) * 0.5);
@@ -314,6 +373,44 @@ mod volume_reference_tests {
         let zero_baseline = relative_volume(&[0.0, 0.0, 5.0], 2);
         assert_eq!(zero_baseline[..2], [None; 2]);
         assert!(zero_baseline[2].unwrap().is_nan());
+    }
+
+    #[test]
+    fn parabolic_sar_and_ichimoku_custom_parameters_match_incremental() {
+        let n = 40usize;
+        let times: Vec<i64> = (0..n).map(|i| 1_700_000_000 + i as i64 * 60).collect();
+        let closes: Vec<f64> = (0..n)
+            .map(|i| 100.0 + (i as f64 * 0.25).sin() * 8.0 + i as f64 * 0.2)
+            .collect();
+        let highs: Vec<f64> = closes.iter().map(|c| c + 2.0).collect();
+        let lows: Vec<f64> = closes.iter().map(|c| c - 2.0).collect();
+        let input = IndicatorInput {
+            times: &times,
+            open: &closes,
+            high: &highs,
+            low: &lows,
+            close: &closes,
+            volume: &[],
+        };
+
+        let batch_sar = parabolic_sar_with_params(&highs, &lows, 0.01, 0.03, 0.15);
+        let mut inc_sar = IncrementalState::parabolic_sar_with_params(0.01, 0.03, 0.15);
+        inc_sar.rebuild_from(input, 0);
+        for (i, expected) in batch_sar.iter().enumerate() {
+            assert_eq!(inc_sar.output(0)[i], expected.unwrap());
+        }
+
+        let batch_ichi = ichimoku_with_periods(&highs, &lows, &closes, 5, 10, 20);
+        let mut inc_ichi = IncrementalState::ichimoku_with_periods(5, 10, 20);
+        inc_ichi.rebuild_from(input, 0);
+        assert_eq!(inc_ichi.output_from(0), 4);
+        assert_eq!(inc_ichi.output_from(1), 9);
+        assert_eq!(inc_ichi.output_from(2), 9);
+        assert_eq!(inc_ichi.output_from(3), 19);
+        assert_eq!(inc_ichi.output_from(4), 0);
+        for (row, point) in batch_ichi.iter().enumerate().take(n).skip(19) {
+            assert_eq!(inc_ichi.output(3)[row - 19], point.leading_b.unwrap());
+        }
     }
 
     #[test]
@@ -2226,7 +2323,8 @@ fn parabolic_sar_step(
     state: &mut ParabolicSarState,
     high: f64,
     low: f64,
-    step: f64,
+    start: f64,
+    increment: f64,
     max_step: f64,
 ) -> f64 {
     if !state.initialized {
@@ -2235,7 +2333,7 @@ fn parabolic_sar_step(
         state.previous_low = low;
         state.sar = low;
         state.extreme = high;
-        state.acceleration = step;
+        state.acceleration = start;
         return state.sar;
     }
     let mut candidate = state.sar + state.acceleration * (state.extreme - state.sar);
@@ -2248,10 +2346,10 @@ fn parabolic_sar_step(
             state.rising = false;
             candidate = state.extreme;
             state.extreme = low;
-            state.acceleration = step;
+            state.acceleration = start;
         } else if high > state.extreme {
             state.extreme = high;
-            state.acceleration = (state.acceleration + step).min(max_step);
+            state.acceleration = (state.acceleration + increment).min(max_step);
         }
     } else {
         candidate = candidate.max(state.previous_high);
@@ -2262,10 +2360,10 @@ fn parabolic_sar_step(
             state.rising = true;
             candidate = state.extreme;
             state.extreme = high;
-            state.acceleration = step;
+            state.acceleration = start;
         } else if low < state.extreme {
             state.extreme = low;
-            state.acceleration = (state.acceleration + step).min(max_step);
+            state.acceleration = (state.acceleration + increment).min(max_step);
         }
     }
     state.before_previous_high = Some(state.previous_high);
@@ -2500,6 +2598,9 @@ enum IncrementalKind {
         state: RecursiveHistory<AdxDmiState>,
     },
     ParabolicSar {
+        start: f64,
+        increment: f64,
+        max: f64,
         state: RecursiveHistory<ParabolicSarState>,
     },
     SuperTrend {
@@ -2507,7 +2608,11 @@ enum IncrementalKind {
         multiplier: f64,
         state: RecursiveHistory<SuperTrendState>,
     },
-    Ichimoku,
+    Ichimoku {
+        conversion_period: usize,
+        base_period: usize,
+        span_b_period: usize,
+    },
     Bollinger {
         period: usize,
         deviation: f64,
@@ -2654,8 +2759,15 @@ impl IncrementalState {
     }
 
     pub fn parabolic_sar() -> Self {
+        Self::parabolic_sar_with_params(0.02, 0.02, 0.20)
+    }
+
+    pub fn parabolic_sar_with_params(start: f64, increment: f64, max: f64) -> Self {
         Self::new(
             IncrementalKind::ParabolicSar {
+                start,
+                increment,
+                max,
                 state: RecursiveHistory::new(),
             },
             1,
@@ -2674,7 +2786,22 @@ impl IncrementalState {
     }
 
     pub fn ichimoku() -> Self {
-        Self::new(IncrementalKind::Ichimoku, 5)
+        Self::ichimoku_with_periods(9, 26, 52)
+    }
+
+    pub fn ichimoku_with_periods(
+        conversion_period: usize,
+        base_period: usize,
+        span_b_period: usize,
+    ) -> Self {
+        Self::new(
+            IncrementalKind::Ichimoku {
+                conversion_period,
+                base_period,
+                span_b_period,
+            },
+            5,
+        )
     }
 
     pub fn bollinger(period: usize, deviation: f64) -> Self {
@@ -2834,9 +2961,9 @@ impl IncrementalState {
             IncrementalKind::Atr { state, .. } => state.bytes(),
             IncrementalKind::Keltner { state, .. } => state.bytes(),
             IncrementalKind::AdxDmi { state, .. } => state.bytes(),
-            IncrementalKind::ParabolicSar { state } => state.bytes(),
+            IncrementalKind::ParabolicSar { state, .. } => state.bytes(),
             IncrementalKind::SuperTrend { state, .. } => state.bytes(),
-            IncrementalKind::Ichimoku => 0,
+            IncrementalKind::Ichimoku { .. } => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::Obv { state } => state.bytes(),
             IncrementalKind::RelativeVolume { .. } => 0,
@@ -3008,15 +3135,28 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::Ichimoku => {
+            IncrementalKind::Ichimoku {
+                conversion_period,
+                base_period,
+                span_b_period,
+            } => {
                 let start = self.output_from[..self.output_count]
                     .iter()
                     .copied()
                     .min()
                     .unwrap_or(n);
-                self.last_work_rows = window_work_rows(n, start, ICHIMOKU_LOOKBACK);
+                let lookback = (*conversion_period).max(*base_period).max(*span_b_period);
+                self.last_work_rows = window_work_rows(n, start, lookback);
                 for row in start..n {
-                    let point = ichimoku_at(input.high, input.low, input.close, row);
+                    let point = ichimoku_at(
+                        input.high,
+                        input.low,
+                        input.close,
+                        row,
+                        *conversion_period,
+                        *base_period,
+                        *span_b_period,
+                    );
                     let values = [
                         point.conversion,
                         point.base,
@@ -3026,8 +3166,7 @@ impl IncrementalState {
                     ];
                     for (output_index, value) in values.into_iter().enumerate() {
                         if row >= self.output_from[output_index] {
-                            self.outputs[output_index]
-                                .push(value.expect("Ichimoku output after warmup"));
+                            self.outputs[output_index].push(value.unwrap_or(f64::NAN));
                         }
                     }
                 }
@@ -3097,7 +3236,12 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
-            IncrementalKind::ParabolicSar { state } => {
+            IncrementalKind::ParabolicSar {
+                start: af_start,
+                increment,
+                max,
+                state,
+            } => {
                 let (start, mut accumulator) = state.begin(n, requested);
                 self.last_work_rows = n - start;
                 let mut tail = None;
@@ -3109,8 +3253,9 @@ impl IncrementalState {
                             &mut accumulator,
                             input.high[row],
                             input.low[row],
-                            0.02,
-                            0.20,
+                            *af_start,
+                            *increment,
+                            *max,
                         )
                     });
                     state.checkpoint(row, accumulator);
@@ -3589,7 +3734,17 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         }
         IncrementalKind::ParabolicSar { .. } => [0, 0, 0, 0, 0],
         IncrementalKind::SuperTrend { period, .. } => [*period, 0, 0, 0, 0],
-        IncrementalKind::Ichimoku => [8, 25, 25, 51, 0],
+        IncrementalKind::Ichimoku {
+            conversion_period,
+            base_period,
+            span_b_period,
+        } => [
+            conversion_period.saturating_sub(1),
+            base_period.saturating_sub(1),
+            (*conversion_period).max(*base_period).saturating_sub(1),
+            span_b_period.saturating_sub(1),
+            0,
+        ],
         IncrementalKind::Bollinger { period, .. } => {
             let mut starts = [0; MAX_OUTPUTS];
             starts[..3].fill(period.saturating_sub(1));

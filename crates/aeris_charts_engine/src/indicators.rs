@@ -822,12 +822,25 @@ fn indicator_default_line_style(kind: &IndicatorKind, output_index: usize) -> u8
 
 fn indicator_default_line_break_mode(kind: &IndicatorKind) -> LineBreakMode {
     match kind {
+        IndicatorKind::SuperTrend { .. } => LineBreakMode::OnColorChange,
         IndicatorKind::PivotPoints { .. }
         | IndicatorKind::SessionLevels { .. }
         | IndicatorKind::PreviousPeriodLevels { .. }
         | IndicatorKind::OpeningRange { .. }
+        | IndicatorKind::Vwap
         | IndicatorKind::VwapBands { .. } => LineBreakMode::OnSegmentBreak,
         _ => LineBreakMode::Continuous,
+    }
+}
+
+fn indicator_default_bar_offset(kind: &IndicatorKind, output_index: usize) -> i32 {
+    match kind {
+        IndicatorKind::Ichimoku => match output_index {
+            2 | 3 => 26,
+            4 => -26,
+            _ => 0,
+        },
+        _ => 0,
     }
 }
 
@@ -948,6 +961,7 @@ fn segment_period_key(
             PreviousPeriod::Week => Some(utc_week(time)),
             PreviousPeriod::Month => Some(utc_month_key(time)),
         },
+        IndicatorKind::Vwap => Some(utc_day(time)),
         IndicatorKind::VwapBands { reset, .. } => match reset {
             VwapReset::Session => Some(utc_day(time)),
             VwapReset::Weekly => Some(utc_week(time)),
@@ -1079,6 +1093,15 @@ impl ChartEngine {
                 series.line_width = Some(indicator_default_line_width(&kind, output_index));
                 series.line_style = indicator_default_line_style(&kind, output_index);
                 series.line_color = None;
+                if matches!(kind, IndicatorKind::ParabolicSar) {
+                    series.line_visible = false;
+                    series.point_markers = true;
+                    series.point_marker_shape = PointMarkerShape::Circle;
+                    series.point_markers_radius = Some(2.5);
+                }
+                if matches!(kind, IndicatorKind::Cmf { .. }) {
+                    series.baseline = Some(0.0);
+                }
                 if let Some(style) = custom_style {
                     series.visible = style.visible;
                     series.line_width = style.line_width;
@@ -1116,20 +1139,60 @@ impl ChartEngine {
         self.set_series_point_colors(id, Some(colors), None, None)
     }
 
-    /// Momentum palettes are stored per point, so a market-color change recolors every built-in
-    /// and external momentum histogram from its values.
+    /// Per-point palettes are stored on the data layer, so a market-color change recolors every
+    /// built-in momentum histogram, directional trend/SAR overlay, RVOL histogram, and external
+    /// momentum histogram from its values.
     pub(crate) fn refresh_momentum_histogram_colors(&mut self) {
-        let mut ids = self
-            .indicators
-            .iter()
-            .filter_map(|binding| match binding.kind {
-                IndicatorKind::Macd { .. } => binding.outputs.get(2).copied(),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        ids.extend(self.external_momentum_histogram_series());
-        for id in ids {
+        let mut macd_ids = Vec::new();
+        let mut rvol_ids = Vec::new();
+        let mut directional_pairs = Vec::new();
+        for binding in &self.indicators {
+            match binding.kind {
+                IndicatorKind::Macd { .. } => {
+                    if let Some(&id) = binding.outputs.get(2) {
+                        macd_ids.push(id);
+                    }
+                }
+                IndicatorKind::RelativeVolume { .. } => {
+                    if let Some(&id) = binding.outputs.first() {
+                        rvol_ids.push(id);
+                    }
+                }
+                IndicatorKind::SuperTrend { .. } | IndicatorKind::ParabolicSar => {
+                    if let Some(&id) = binding.outputs.first() {
+                        directional_pairs.push((id, binding.source));
+                    }
+                }
+                _ => {}
+            }
+        }
+        macd_ids.extend(self.external_momentum_histogram_series());
+        for id in macd_ids {
             self.apply_momentum_histogram_colors(id);
+        }
+        let market = self.market_colors();
+        for id in rvol_ids {
+            if let Some((_, values)) = self.data.series_data(id) {
+                let colors = rvol_histogram_colors(values[3], market);
+                self.set_series_point_colors(id, Some(colors), None, None);
+            }
+        }
+        for (output_id, source_id) in directional_pairs {
+            if let (Some((out_times, out_vals)), Some((src_times, src_vals))) = (
+                self.data.series_data(output_id),
+                self.data.series_data(source_id),
+            ) {
+                let src_start = out_times
+                    .first()
+                    .and_then(|first| src_times.binary_search(first).ok())
+                    .unwrap_or(0);
+                let colors = directional_vs_close_colors(
+                    out_vals[3],
+                    src_vals[3].get(src_start..).unwrap_or(&[]),
+                    market,
+                );
+                self.set_series_point_colors(output_id, Some(colors), None, None);
+            }
         }
     }
 
@@ -2071,6 +2134,24 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::RelativeVolume { .. } => {
+                if let Some(&histogram) = ids.first() {
+                    self.convert_series_kind(histogram, SeriesKind::Histogram);
+                    if let Some(series) = self.series_entry_mut(histogram) {
+                        series.base = 0.0;
+                    }
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::Cmf { .. } => {
+                if let Some(&baseline_series) = ids.first() {
+                    self.convert_series_kind(baseline_series, SeriesKind::Baseline);
+                    if let Some(series) = self.series_entry_mut(baseline_series) {
+                        series.baseline = Some(0.0);
+                    }
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::Rsi { .. }
             | IndicatorKind::Stochastic { .. }
             | IndicatorKind::Atr { .. }
@@ -2078,8 +2159,6 @@ impl ChartEngine {
             | IndicatorKind::Cci { .. }
             | IndicatorKind::StochasticRsi { .. }
             | IndicatorKind::Obv
-            | IndicatorKind::RelativeVolume { .. }
-            | IndicatorKind::Cmf { .. }
             | IndicatorKind::Mfi { .. } => {
                 if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
@@ -2503,6 +2582,14 @@ impl ChartEngine {
                         companion,
                         mode: BandFillMode::Uniform { alpha: 0.12 },
                     }),
+                IndicatorKind::VwapBands { .. } if binding.outputs.get(3) == Some(&id) => binding
+                    .outputs
+                    .get(4)
+                    .copied()
+                    .map(|companion| BandFillSpec {
+                        companion,
+                        mode: BandFillMode::Uniform { alpha: 0.07 },
+                    }),
                 IndicatorKind::Ichimoku if binding.outputs.get(2) == Some(&id) => binding
                     .outputs
                     .get(3)
@@ -2696,8 +2783,15 @@ impl ChartEngine {
                 s.market_tone = tone;
                 s.default_line_color = default_color;
                 s.line_break_mode = indicator_default_line_break_mode(&kind);
+                s.bar_offset = indicator_default_bar_offset(&kind, output_index);
                 s.level_tag = indicator_default_level_tag(&kind, output_index);
                 s.reference_lines = indicator_default_reference_lines(&kind, output_index);
+                if matches!(kind, IndicatorKind::ParabolicSar) {
+                    s.line_visible = false;
+                    s.point_markers = true;
+                    s.point_marker_shape = PointMarkerShape::Circle;
+                    s.point_markers_radius = Some(2.5);
+                }
                 if matches!(
                     kind,
                     IndicatorKind::SwingPoints { .. }
@@ -3219,6 +3313,31 @@ impl ChartEngine {
                 {
                     full_histogram_colors =
                         Some(momentum_histogram_colors(&values, self.market_colors()));
+                } else if output_index == 0
+                    && matches!(
+                        self.indicators[index].kind,
+                        IndicatorKind::RelativeVolume { .. }
+                    )
+                {
+                    full_histogram_colors =
+                        Some(rvol_histogram_colors(&values, self.market_colors()));
+                } else if output_index == 0
+                    && matches!(
+                        self.indicators[index].kind,
+                        IndicatorKind::SuperTrend { .. } | IndicatorKind::ParabolicSar
+                    )
+                {
+                    let aligned_start = source_from + first;
+                    let src_close = self
+                        .data
+                        .series_data(source)
+                        .and_then(|(_, vals)| vals[3].get(aligned_start..))
+                        .unwrap_or(&[]);
+                    full_histogram_colors = Some(directional_vs_close_colors(
+                        &values,
+                        src_close,
+                        self.market_colors(),
+                    ));
                 }
                 self.data
                     .set_single_data_aligned(output, source, source_from + first, values);
@@ -3244,22 +3363,26 @@ impl ChartEngine {
             }
         }
 
-        let histogram = match self.indicators[index].kind {
-            IndicatorKind::Macd { .. } => Some((outputs[2].unwrap(), 2)),
+        let point_colored = match self.indicators[index].kind {
+            IndicatorKind::Macd { .. } => Some((outputs[2].unwrap(), 2, 0u8)),
+            IndicatorKind::RelativeVolume { .. } => Some((outputs[0].unwrap(), 0, 1u8)),
+            IndicatorKind::SuperTrend { .. } | IndicatorKind::ParabolicSar => {
+                Some((outputs[0].unwrap(), 0, 2u8))
+            }
             _ => None,
         };
-        if let Some((histogram_id, output_index)) = histogram {
+        if let Some((colored_id, output_index, mode)) = point_colored {
             if let Some(colors) = full_histogram_colors {
                 self.data
-                    .set_point_colors(histogram_id, [Some(colors), None, None]);
+                    .set_point_colors(colored_id, [Some(colors), None, None]);
             } else {
                 let market = self.market_colors();
                 let runtime = self.indicators[index].runtime.built_in();
-                let histogram = runtime.output(output_index);
+                let slice = runtime.output(output_index);
                 let source_from = leading_source + runtime.output_from(output_index);
                 let output_start = source_from.saturating_sub(
                     self.data
-                        .series_data(histogram_id)
+                        .series_data(colored_id)
                         .and_then(|(output_times, _)| output_times.first().copied())
                         .and_then(|first| {
                             self.data
@@ -3268,20 +3391,54 @@ impl ChartEngine {
                         })
                         .unwrap_or(source_from),
                 );
-                let mut previous = output_start.checked_sub(1).and_then(|row| {
-                    self.data
-                        .series_data(histogram_id)
-                        .and_then(|(_, values)| values[3].get(row).copied())
-                });
-                for (offset, &value) in histogram.iter().enumerate() {
-                    let color = momentum_histogram_color(value, previous, market);
-                    self.data.set_point_color(
-                        histogram_id,
-                        PointColorChannel::Body,
-                        output_start + offset,
-                        color,
-                    );
-                    previous = Some(value);
+                match mode {
+                    0 => {
+                        let mut previous = output_start.checked_sub(1).and_then(|row| {
+                            self.data
+                                .series_data(colored_id)
+                                .and_then(|(_, values)| values[3].get(row).copied())
+                        });
+                        for (offset, &value) in slice.iter().enumerate() {
+                            let color = momentum_histogram_color(value, previous, market);
+                            self.data.set_point_color(
+                                colored_id,
+                                PointColorChannel::Body,
+                                output_start + offset,
+                                color,
+                            );
+                            previous = Some(value);
+                        }
+                    }
+                    1 => {
+                        for (offset, &value) in slice.iter().enumerate() {
+                            let color = rvol_histogram_color(value, market);
+                            self.data.set_point_color(
+                                colored_id,
+                                PointColorChannel::Body,
+                                output_start + offset,
+                                color,
+                            );
+                        }
+                    }
+                    _ => {
+                        let closes: Vec<f64> = self
+                            .data
+                            .series_data(source)
+                            .and_then(|(_, values)| {
+                                values[3].get(source_from..source_from + slice.len())
+                            })
+                            .map_or_else(Vec::new, |s| s.to_vec());
+                        for (offset, &value) in slice.iter().enumerate() {
+                            let close = closes.get(offset).copied().unwrap_or(f64::NAN);
+                            let color = directional_vs_close_color(value, close, market);
+                            self.data.set_point_color(
+                                colored_id,
+                                PointColorChannel::Body,
+                                output_start + offset,
+                                color,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -3291,6 +3448,46 @@ impl ChartEngine {
             .release_transfer_capacity();
         changes
     }
+}
+
+fn rvol_histogram_color(value: f64, market: crate::frame::MarketColors) -> u32 {
+    if !value.is_finite() || value < 1.0 {
+        Color::rgba(0x78, 0x7b, 0x86, 0x8c).0
+    } else if value >= 1.5 {
+        Color::rgb(0xff, 0x98, 0x00).0
+    } else {
+        market.up.0
+    }
+}
+
+fn rvol_histogram_colors(values: &[f64], market: crate::frame::MarketColors) -> Vec<u32> {
+    values
+        .iter()
+        .map(|&value| rvol_histogram_color(value, market))
+        .collect()
+}
+
+fn directional_vs_close_color(value: f64, close: f64, market: crate::frame::MarketColors) -> u32 {
+    if value.is_finite() && close.is_finite() && value <= close {
+        market.up.0
+    } else {
+        market.down.0
+    }
+}
+
+fn directional_vs_close_colors(
+    values: &[f64],
+    closes: &[f64],
+    market: crate::frame::MarketColors,
+) -> Vec<u32> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| {
+            let close = closes.get(i).copied().unwrap_or(f64::NAN);
+            directional_vs_close_color(value, close, market)
+        })
+        .collect()
 }
 
 fn momentum_histogram_colors(values: &[f64], market: crate::frame::MarketColors) -> Vec<u32> {

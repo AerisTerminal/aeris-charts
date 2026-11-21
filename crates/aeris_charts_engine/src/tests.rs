@@ -3262,9 +3262,10 @@ fn painted_indicator_points(chart: &ChartEngine, outputs: &[SeriesId]) -> Vec<(f
                 }
             }
         }
+        let offset = i64::from(series.bar_offset);
         let plot = chart.data.plot(id);
         let rows = plot
-            .visible_rows(from, to)
+            .visible_rows(from.saturating_sub(offset), to.saturating_sub(offset))
             .filter(|&row| !plot.is_whitespace_row(row))
             .collect::<Vec<_>>();
         let Some(&row) = rows.get(rows.len() / 2) else {
@@ -3276,7 +3277,7 @@ fn painted_indicator_points(chart: &ChartEngine, outputs: &[SeriesId]) -> Vec<(f
         );
         let point = (
             chart
-                .logical_to_coordinate(plot.index_at(row).unwrap() as f64)
+                .logical_to_coordinate((plot.index_at(row).unwrap() + offset) as f64)
                 .unwrap(),
             chart
                 .series_price_to_coordinate(id, value)
