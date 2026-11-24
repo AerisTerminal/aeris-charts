@@ -41,6 +41,16 @@ const SUMMARY_FONT: f64 = 0.9;
 const SUMMARY_LINE: f64 = 1.2;
 /// Gap (CSS px) between a cluster's low row and its summary.
 const SUMMARY_GAP: f64 = 3.0;
+/// Maximum historical bars scanned rightward for naked POCs, stacked imbalance zones, and unfinished auctions.
+const MAX_EXTENSION_LOOKBACK: usize = 512;
+/// Maximum active extended zones/lines emitted per frame so large series remain strictly bounded.
+const MAX_EXTENSION_PRIMITIVES: usize = 64;
+/// Subtle alpha for extended stacked imbalance support/resistance zones.
+const STACKED_ZONE_ALPHA: u8 = 38;
+/// Subtle alpha for extended naked POC dashed lines.
+const NAKED_POC_ALPHA: u8 = 185;
+/// Subtle alpha for extended unfinished auction dotted lines.
+const UNFINISHED_AUCTION_ALPHA: u8 = 160;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FootprintLod {
@@ -146,9 +156,9 @@ pub(crate) fn legible_row_px(font: f64) -> f64 {
     font * TEXT_HEIGHT + DETAIL_ROW_PADDING
 }
 
-/// CSS px the two-line bar summary takes under a cluster, or 0 when it is off or the pane is too
-/// short to spare it. Autoscale reserves the same height below the lowest bar so its summary stays
-/// on screen.
+/// CSS px the bar summary takes under a cluster (2 lines standard, 4 lines extended), or 0 when
+/// it is off or the pane is too short to spare it. Autoscale reserves the same height below the
+/// lowest bar so its summary stays on screen.
 pub(crate) fn footprint_summary_height(
     visual: &crate::FootprintVisualOptions,
     pane_height: f64,
@@ -156,7 +166,12 @@ pub(crate) fn footprint_summary_height(
     if !visual.show_bar_summary {
         return 0.0;
     }
-    let height = (SUMMARY_GAP + 2.0 * visual.font_size * SUMMARY_FONT * SUMMARY_LINE).ceil();
+    let lines = if visual.show_extended_summary {
+        4.0
+    } else {
+        2.0
+    };
+    let height = (SUMMARY_GAP + lines * visual.font_size * SUMMARY_FONT * SUMMARY_LINE).ceil();
     if pane_height >= height * 4.0 {
         height
     } else {
@@ -169,6 +184,22 @@ fn summary_lines(bar: &FootprintBar) -> [String; 2] {
     [
         format!("Δ {}", compact_volume(bar.delta)),
         format!("V {}", compact_volume(bar.total_volume)),
+    ]
+}
+
+/// Extended four-line ExoCharts-style footer: `Δ delta`, `delta%`, `V volume`, and `Σ cvd`.
+fn extended_summary_lines(bar: &FootprintBar, cvd: f64) -> [String; 4] {
+    let pct = if bar.total_volume > 0.0 {
+        (bar.delta / bar.total_volume) * 100.0
+    } else {
+        0.0
+    };
+    let sign = if pct > 0.0 { "+" } else { "" };
+    [
+        format!("Δ {}", compact_volume(bar.delta)),
+        format!("{sign}{pct:.0}%"),
+        format!("V {}", compact_volume(bar.total_volume)),
+        format!("Σ {}", compact_volume(cvd)),
     ]
 }
 
@@ -278,6 +309,25 @@ impl ChartEngine {
         };
         let poc_color = visual.poc_color.solid();
 
+        if visual.show_naked_pocs
+            || visual.show_stacked_imbalance_zones
+            || visual.show_unfinished_auctions
+        {
+            self.push_footprint_extensions(
+                rs.id,
+                stream.bars(),
+                spacing,
+                hpr,
+                vpr,
+                scale,
+                rs.base_value,
+                visual,
+                &aggregation,
+                poc_color,
+                out,
+            );
+        }
+
         if lod == FootprintLod::Summary {
             for (_, x, source) in &bars {
                 let poc_price = merged_poc_price(source, stored.ticks_per_row, stored.row_size());
@@ -298,7 +348,7 @@ impl ChartEngine {
             // Stored levels are per tick; display rows group `ticks_per_row` of them.
             let presented = bars
                 .iter()
-                .map(|(_, x, source)| {
+                .map(|(row, x, source)| {
                     let mut bar = if aggregation.ticks_per_row > 1 {
                         Cow::Owned(merged_footprint_bar(
                             source,
@@ -312,7 +362,7 @@ impl ChartEngine {
                     if visual.cell_mode == FootprintCellMode::HorizontalImbalance {
                         bar = Cow::Owned(horizontal_imbalance_bar(&bar, stored.imbalance));
                     }
-                    (*x, bar)
+                    (*row, *x, bar)
                 })
                 .collect::<Vec<_>>();
             let numbers_bars = matches!(
@@ -327,7 +377,7 @@ impl ChartEngine {
             if lod == FootprintLod::Detailed && numbers_bars {
                 let widest = presented
                     .iter()
-                    .flat_map(|(_, bar)| &bar.levels)
+                    .flat_map(|(_, _, bar)| &bar.levels)
                     .flat_map(|level| [level.bid_volume, level.ask_volume])
                     .filter(|volume| *volume > 0.0)
                     .map(|volume| compact_volume(volume).chars().count())
@@ -345,6 +395,24 @@ impl ChartEngine {
                     lod = FootprintLod::Cells;
                 }
             }
+            // Running cumulative delta up to each visible bar when extended summary is active.
+            let first_row = presented.first().map_or(0, |(row, _, _)| *row);
+            let mut running_cvd: f64 = if visual.show_extended_summary {
+                stream.bars().iter().take(first_row).map(|b| b.delta).sum()
+            } else {
+                0.0
+            };
+            let cvds: Vec<f64> = presented
+                .iter()
+                .map(|(_, _, bar)| {
+                    if visual.show_extended_summary {
+                        running_cvd += bar.delta;
+                        running_cvd
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
             // The summary prints with the numbers, and on every cluster or none of them.
             let summary_style = FootprintTextStyle {
                 size: (font_size * SUMMARY_FONT * vpr) as f32,
@@ -356,12 +424,21 @@ impl ChartEngine {
                     let column = ClusterColumn::new(0.0, spacing, hpr, false);
                     let widest = presented
                         .iter()
-                        .flat_map(|(_, bar)| summary_lines(bar))
+                        .zip(&cvds)
+                        .flat_map(|((_, _, bar), cvd)| {
+                            if visual.show_extended_summary {
+                                extended_summary_lines(bar, *cvd)
+                                    .into_iter()
+                                    .collect::<Vec<_>>()
+                            } else {
+                                summary_lines(bar).into_iter().collect::<Vec<_>>()
+                            }
+                        })
                         .map(|line| text_width(&line, &summary_style))
                         .fold(0.0_f32, f32::max);
                     widest + 2.0 * summary_style.pad <= (column.right - column.left) as f32
                 };
-            for (x, bar) in &presented {
+            for ((_, x, bar), cvd) in presented.iter().zip(&cvds) {
                 let column = ClusterColumn::new(*x, spacing, hpr, histogram);
                 push_bar_frame(
                     out,
@@ -381,6 +458,7 @@ impl ChartEngine {
                     push_bar_summary(
                         out,
                         bar,
+                        *cvd,
                         column,
                         scale,
                         rs.base_value,
@@ -401,6 +479,233 @@ impl ChartEngine {
             _ => 1,
         });
     }
+
+    /// Emits bounded ExoCharts-style footprint extensions behind the clusters:
+    /// - Naked bar POCs (dashed lines extended rightward until tested by a subsequent bar)
+    /// - Stacked bid/ask imbalance zones (translucent bands extended rightward until tested)
+    /// - Unfinished auctions (dotted lines at bar extremes with non-zero opposing volume)
+    #[allow(clippy::too_many_arguments)]
+    fn push_footprint_extensions(
+        &self,
+        series_id: u32,
+        all_bars: &[FootprintBar],
+        spacing: f64,
+        hpr: f64,
+        vpr: f64,
+        scale: &PriceScaleCore,
+        base_value: f64,
+        visual: &crate::FootprintVisualOptions,
+        aggregation: &FootprintAggregationOptions,
+        poc_color: Color,
+        out: &mut Vec<Prim>,
+    ) {
+        if all_bars.len() < 2 {
+            return;
+        }
+        let plot = self.data.plot(series_id);
+        let plot_right = (self.time_scale.width() * hpr).round() as i32;
+        if plot_right <= 0 {
+            return;
+        }
+        let scan_start = all_bars.len().saturating_sub(MAX_EXTENSION_LOOKBACK);
+        let completed_end = all_bars.len().saturating_sub(1);
+        let line_width = (1.0 * vpr).round().max(1.0) as i32;
+        let with_alpha = |c: Color, alpha: u8| Color::rgba(c.r(), c.g(), c.b(), alpha);
+        let naked_poc_color = with_alpha(poc_color, NAKED_POC_ALPHA);
+        let ask_zone_color = with_alpha(visual.stacked_ask_color, STACKED_ZONE_ALPHA);
+        let bid_zone_color = with_alpha(visual.stacked_bid_color, STACKED_ZONE_ALPHA);
+        let unfinished_high_color =
+            with_alpha(visual.positive_delta_color, UNFINISHED_AUCTION_ALPHA);
+        let unfinished_low_color =
+            with_alpha(visual.negative_delta_color, UNFINISHED_AUCTION_ALPHA);
+        let mut emitted = 0usize;
+
+        for idx in (scan_start..completed_end).rev() {
+            if emitted >= MAX_EXTENSION_PRIMITIVES {
+                break;
+            }
+            let Some(logical) = plot.index_at(idx) else {
+                continue;
+            };
+            let source = &all_bars[idx];
+            let x_start = ClusterColumn::new(
+                self.time_scale.index_to_coordinate(logical),
+                spacing,
+                hpr,
+                false,
+            )
+            .right
+            .max(0);
+            if x_start >= plot_right {
+                continue;
+            }
+            let subsequent = &all_bars[idx + 1..];
+
+            // 1. Naked bar POC: untested by every subsequent bar's [low, high].
+            if visual.show_naked_pocs && emitted < MAX_EXTENSION_PRIMITIVES {
+                let poc_price =
+                    merged_poc_price(source, aggregation.ticks_per_row, aggregation.row_size());
+                let tested = subsequent
+                    .iter()
+                    .any(|b| b.low <= poc_price && poc_price <= b.high);
+                if !tested {
+                    let y = (scale.price_to_coordinate(poc_price, base_value) * vpr).round() as i32;
+                    out.push(Prim::HLine {
+                        y,
+                        x0: x_start,
+                        x1: plot_right,
+                        width: line_width,
+                        style: LineStyle::Dashed,
+                        color: naked_poc_color,
+                    });
+                    emitted += 1;
+                }
+            }
+
+            // 2. Unfinished auctions: non-zero bid at bar high or non-zero ask at bar low.
+            if visual.show_unfinished_auctions
+                && source.levels.len() >= 2
+                && emitted < MAX_EXTENSION_PRIMITIVES
+            {
+                if let Some(top) = source.levels.last()
+                    && top.bid_volume > 0.0
+                    && !subsequent.iter().any(|b| b.high >= source.high)
+                {
+                    let y =
+                        (scale.price_to_coordinate(source.high, base_value) * vpr).round() as i32;
+                    out.push(Prim::HLine {
+                        y,
+                        x0: x_start,
+                        x1: plot_right,
+                        width: line_width,
+                        style: LineStyle::Dotted,
+                        color: unfinished_high_color,
+                    });
+                    emitted += 1;
+                }
+                if emitted < MAX_EXTENSION_PRIMITIVES
+                    && let Some(bottom) = source.levels.first()
+                    && bottom.ask_volume > 0.0
+                    && !subsequent.iter().any(|b| b.low <= source.low)
+                {
+                    let y =
+                        (scale.price_to_coordinate(source.low, base_value) * vpr).round() as i32;
+                    out.push(Prim::HLine {
+                        y,
+                        x0: x_start,
+                        x1: plot_right,
+                        width: line_width,
+                        style: LineStyle::Dotted,
+                        color: unfinished_low_color,
+                    });
+                    emitted += 1;
+                }
+            }
+
+            // 3. Stacked imbalance zones: contiguous stacked bid/ask runs extended until tested.
+            if visual.show_stacked_imbalance_zones && emitted < MAX_EXTENSION_PRIMITIVES {
+                let merged = if aggregation.ticks_per_row > 1 {
+                    Cow::Owned(merged_footprint_bar(
+                        source,
+                        aggregation.ticks_per_row,
+                        aggregation.imbalance,
+                        aggregation.row_size(),
+                    ))
+                } else {
+                    Cow::Borrowed(source)
+                };
+                for (is_ask, low_price, high_price) in
+                    stacked_imbalance_zones(&merged, aggregation.row_size())
+                {
+                    if emitted >= MAX_EXTENSION_PRIMITIVES {
+                        break;
+                    }
+                    let test_idx = subsequent.iter().position(|b| {
+                        if is_ask {
+                            b.low <= high_price
+                        } else {
+                            b.high >= low_price
+                        }
+                    });
+                    let x_end = match test_idx {
+                        Some(offset) => {
+                            plot.index_at(idx + 1 + offset)
+                                .map_or(plot_right, |test_logical| {
+                                    ClusterColumn::new(
+                                        self.time_scale.index_to_coordinate(test_logical),
+                                        spacing,
+                                        hpr,
+                                        false,
+                                    )
+                                    .left
+                                    .clamp(x_start, plot_right)
+                                })
+                        }
+                        None => plot_right,
+                    };
+                    if x_end <= x_start {
+                        continue;
+                    }
+                    let top =
+                        (scale.price_to_coordinate(high_price, base_value) * vpr).round() as i32;
+                    let bottom =
+                        (scale.price_to_coordinate(low_price, base_value) * vpr).round() as i32;
+                    let rect_top = top.min(bottom);
+                    let rect_height = (bottom - top).abs().max(2);
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: x_start,
+                            y: rect_top,
+                            w: x_end - x_start,
+                            h: rect_height,
+                        },
+                        color: if is_ask {
+                            ask_zone_color
+                        } else {
+                            bid_zone_color
+                        },
+                    });
+                    emitted += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Extracts contiguous stacked imbalance runs from a footprint bar as `(is_ask, low_price, high_price)`.
+fn stacked_imbalance_zones(bar: &FootprintBar, row_size: f64) -> Vec<(bool, f64, f64)> {
+    let mut zones = Vec::new();
+    let half_row = row_size * 0.5;
+    for is_ask in [true, false] {
+        let mut run_start: Option<f64> = None;
+        let mut run_end: f64 = 0.0;
+        for level in &bar.levels {
+            let flagged = if is_ask {
+                level.stacked_ask_imbalance
+            } else {
+                level.stacked_bid_imbalance
+            };
+            if flagged {
+                let low = level.price - half_row;
+                let high = level.price + half_row;
+                match run_start {
+                    None => {
+                        run_start = Some(low);
+                        run_end = high;
+                    }
+                    Some(_) => {
+                        run_end = high;
+                    }
+                }
+            } else if let Some(start) = run_start.take() {
+                zones.push((is_ask, start, run_end));
+            }
+        }
+        if let Some(start) = run_start {
+            zones.push((is_ask, start, run_end));
+        }
+    }
+    zones
 }
 
 #[derive(Clone, Copy)]
@@ -1166,11 +1471,14 @@ fn push_cell_text(
     });
 }
 
-/// `Δ delta` in its sign color over `V volume`, centered under the cluster's low row.
+/// Bar summary footer centered under the cluster's low row:
+/// - Standard: `Δ delta` and `V volume` (2 lines)
+/// - Extended: `Δ delta`, `delta%`, `V volume`, and `Σ cvd` (4 lines)
 #[allow(clippy::too_many_arguments)]
 fn push_bar_summary(
     out: &mut Vec<Prim>,
     bar: &FootprintBar,
+    cvd: f64,
     column: ClusterColumn,
     scale: &PriceScaleCore,
     base_value: f64,
@@ -1189,12 +1497,35 @@ fn push_bar_summary(
     } else {
         visual.negative_delta_color
     };
-    let [delta, volume] = summary_lines(bar);
+    let cvd_color = if cvd >= 0.0 {
+        visual.positive_delta_color
+    } else {
+        visual.negative_delta_color
+    };
     let volume_color = visual.summary_text_color.unwrap_or(style.fallback_color);
-    for (y, text, color, weight) in [
-        (first, delta, delta_color.solid(), style.strong_weight),
-        (first + line, volume, volume_color, style.weight),
-    ] {
+
+    let rows: Vec<(f32, String, Color, u16)> = if visual.show_extended_summary {
+        let [delta, pct, volume, cvd_text] = extended_summary_lines(bar, cvd);
+        vec![
+            (first, delta, delta_color.solid(), style.strong_weight),
+            (first + line, pct, delta_color.solid(), style.weight),
+            (first + 2.0 * line, volume, volume_color, style.weight),
+            (
+                first + 3.0 * line,
+                cvd_text,
+                cvd_color.solid(),
+                style.weight,
+            ),
+        ]
+    } else {
+        let [delta, volume] = summary_lines(bar);
+        vec![
+            (first, delta, delta_color.solid(), style.strong_weight),
+            (first + line, volume, volume_color, style.weight),
+        ]
+    };
+
+    for (y, text, color, weight) in rows {
         out.push(Prim::Text {
             x,
             y,
@@ -1264,5 +1595,66 @@ mod tests {
             ..visual
         };
         assert_eq!(footprint_summary_height(&off, 600.0), 0.0);
+    }
+
+    #[test]
+    fn extended_summary_reserves_four_lines_and_formats_delta_pct_and_cvd() {
+        let visual = crate::FootprintVisualOptions {
+            show_extended_summary: true,
+            ..crate::FootprintVisualOptions::default()
+        };
+        let height = footprint_summary_height(&visual, 600.0);
+        assert_eq!(
+            height,
+            (SUMMARY_GAP + 4.0 * visual.font_size * SUMMARY_FONT * SUMMARY_LINE).ceil()
+        );
+        let bar = FootprintBar {
+            open: 100.0,
+            high: 102.0,
+            low: 99.0,
+            close: 101.0,
+            bid_volume: 25.0,
+            ask_volume: 75.0,
+            total_volume: 100.0,
+            delta: 50.0,
+            poc_level: 100,
+            poc_price: 100.0,
+            ..FootprintBar::default()
+        };
+        let lines = extended_summary_lines(&bar, 250.0);
+        assert_eq!(lines, ["Δ 50", "+50%", "V 100", "Σ 250"]);
+    }
+
+    #[test]
+    fn stacked_imbalance_zones_extracts_contiguous_ask_and_bid_runs() {
+        let level = |price: f64, stacked_ask: bool, stacked_bid: bool| FootprintLevel {
+            level: price as i64,
+            price,
+            bid_volume: 10.0,
+            ask_volume: 10.0,
+            total_volume: 20.0,
+            bid_imbalance: stacked_bid,
+            ask_imbalance: stacked_ask,
+            stacked_bid_imbalance: stacked_bid,
+            stacked_ask_imbalance: stacked_ask,
+            ..FootprintLevel::default()
+        };
+        let bar = FootprintBar {
+            open: 100.0,
+            high: 105.0,
+            low: 100.0,
+            close: 104.0,
+            levels: vec![
+                level(100.0, true, false),
+                level(101.0, true, false),
+                level(102.0, true, false),
+                level(103.0, false, false),
+                level(104.0, false, true),
+                level(105.0, false, true),
+            ],
+            ..FootprintBar::default()
+        };
+        let zones = stacked_imbalance_zones(&bar, 1.0);
+        assert_eq!(zones, vec![(true, 99.5, 102.5), (false, 103.5, 105.5)]);
     }
 }

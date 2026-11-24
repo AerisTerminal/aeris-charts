@@ -247,6 +247,10 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
     set_flag!(show_poc);
     set_flag!(show_imbalances);
     set_flag!(show_range_strip);
+    set_flag!(show_naked_pocs);
+    set_flag!(show_stacked_imbalance_zones);
+    set_flag!(show_unfinished_auctions);
+    set_flag!(show_extended_summary);
     Ok(options)
 }
 
@@ -291,6 +295,10 @@ pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
         "show_poc": options.visual.show_poc,
         "show_imbalances": options.visual.show_imbalances,
         "show_range_strip": options.visual.show_range_strip,
+        "show_naked_pocs": options.visual.show_naked_pocs,
+        "show_stacked_imbalance_zones": options.visual.show_stacked_imbalance_zones,
+        "show_unfinished_auctions": options.visual.show_unfinished_auctions,
+        "show_extended_summary": options.visual.show_extended_summary,
     });
     let fields = match options.aggregation.bars {
         FootprintBarAggregation::Time {

@@ -324,6 +324,14 @@ pub struct FootprintVisualOptions {
     pub show_imbalances: bool,
     /// Draw the traded-range strip on each cluster's left edge.
     pub show_range_strip: bool,
+    /// Extend untested completed bar POCs rightward as dashed lines until price revisits them.
+    pub show_naked_pocs: bool,
+    /// Extend stacked bid/ask imbalance runs rightward as translucent zones until price tests them.
+    pub show_stacked_imbalance_zones: bool,
+    /// Mark and extend unfinished auctions (non-zero bid at bar high or ask at bar low) until tested.
+    pub show_unfinished_auctions: bool,
+    /// Expand the per-bar summary footer from 2 lines (`Δ`, `V`) to 4 aligned lines (`Δ`, `Δ%`, `V`, `Σ`).
+    pub show_extended_summary: bool,
 }
 
 impl Default for FootprintVisualOptions {
@@ -369,6 +377,10 @@ impl Default for FootprintVisualOptions {
             show_poc: true,
             show_imbalances: true,
             show_range_strip: true,
+            show_naked_pocs: false,
+            show_stacked_imbalance_zones: false,
+            show_unfinished_auctions: false,
+            show_extended_summary: false,
         }
     }
 }
