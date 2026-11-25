@@ -5,7 +5,7 @@
 
 use crate::indicators::{indicator_output_style, output_style_is_valid};
 use crate::{
-    ChartEngine, IndicatorChromeOptions, IndicatorOutputStyle, MarketTone, PriceFormatKind,
+    ChartEngine, Color, IndicatorChromeOptions, IndicatorOutputStyle, MarketTone, PriceFormatKind,
     SeriesId, SeriesKind, SeriesThresholdRegion,
 };
 use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, validate_timestamp};
@@ -42,6 +42,38 @@ pub struct OpenInterestBar {
     pub high: Option<f64>,
     pub low: Option<f64>,
     pub close: f64,
+}
+
+/// How an engine-owned Open Interest study renders its sub-pane series.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OpenInterestStyle {
+    #[default]
+    Candles,
+    Bars,
+    Line,
+    Area,
+}
+
+impl OpenInterestStyle {
+    pub(crate) const fn series_kind(self) -> SeriesKind {
+        match self {
+            Self::Candles => SeriesKind::Candlestick,
+            Self::Bars => SeriesKind::Bar,
+            Self::Line => SeriesKind::Line,
+            Self::Area => SeriesKind::Area,
+        }
+    }
+}
+
+/// Presentation options of an engine-owned Open Interest study. Unset colors follow the active
+/// chart theme: bullish/bearish for candles and bars, and the chart's default line color for
+/// line and area.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OpenInterestOptions {
+    pub style: OpenInterestStyle,
+    pub line_color: Option<Color>,
+    pub up_color: Option<Color>,
+    pub down_color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -159,6 +191,7 @@ pub(crate) struct ExternalStudyOutputState {
     momentum_histogram: bool,
     pub(crate) options_volume: bool,
     pub(crate) open_interest: bool,
+    open_interest_options: OpenInterestOptions,
     /// `(bar_second, high_bits, low_bits)` of the newest forming open-interest bar so repeated
     /// snapshots and live updates preserve intra-bar extremes.
     forming_wick: Option<(i64, u64, u64)>,
@@ -296,6 +329,7 @@ impl ChartEngine {
                     == ExternalStudyPointStyle::MomentumHistogram,
                 options_volume,
                 open_interest: false,
+                open_interest_options: OpenInterestOptions::default(),
                 forming_wick: None,
             },
         );
@@ -459,21 +493,35 @@ impl ChartEngine {
             .any(|(&(candidate, _), state)| candidate == study_id && state.options_volume)
     }
 
-    /// Install or replace the candlestick Open Interest study `study_id` from host-supplied
-    /// bar-aligned samples. The engine derives continuous OHLC candles (inheriting each bar's open
-    /// from the previous bar's close when `open` is `None`), preserves intra-bar high/low wicks on
-    /// the newest forming bar across refreshes, trims leading bars older than the primary price
-    /// series without losing the first visible bar's open, formats the right axis as volume, and
-    /// draws candlesticks in the chart's bullish/bearish palette in one dedicated pane.
-    ///
-    /// The study behaves as any external study for visibility, indicator chrome, selection,
-    /// localized OHLC legend, language updates, and removal (`remove_external_studies`).
-    /// Returns `Ok(false)` for a stale `generation`; a rejected push changes nothing.
+    /// Install or replace the Open Interest study `study_id` from host-supplied bar-aligned
+    /// samples, keeping its current [`OpenInterestOptions`] (or defaulting to
+    /// [`OpenInterestStyle::Candles`] when newly created).
     pub fn set_open_interest(
         &mut self,
         study_id: u64,
         generation: u64,
         bars: &[OpenInterestBar],
+    ) -> Result<bool, ExternalStudyError> {
+        let options = self.open_interest_options(study_id).unwrap_or_default();
+        self.set_open_interest_with_options(study_id, generation, bars, options)
+    }
+
+    /// Install or replace the Open Interest study `study_id` with explicit presentation `options`
+    /// (candles, OHLC bars, line, or filled area plus optional custom colors). The engine derives
+    /// continuous OHLC candles (inheriting each bar's open from the previous bar's close when
+    /// `open` is `None`), preserves intra-bar high/low wicks on the newest forming bar across
+    /// refreshes, trims leading bars older than the primary price series without losing the first
+    /// visible bar's open, and formats the right axis as volume in one dedicated pane.
+    ///
+    /// The study behaves as any external study for visibility, indicator chrome, selection,
+    /// localized legend, language updates, and removal (`remove_external_studies`).
+    /// Returns `Ok(false)` for a stale `generation`; a rejected push changes nothing.
+    pub fn set_open_interest_with_options(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bars: &[OpenInterestBar],
+        options: OpenInterestOptions,
     ) -> Result<bool, ExternalStudyError> {
         let existing = self.open_interest_series(study_id);
         if existing.is_none()
@@ -522,6 +570,13 @@ impl ChartEngine {
             }
         }
         let (series_id, output_visible, study_visible) = if let Some(series_id) = existing {
+            let previous_style = self
+                .external_study_outputs
+                .get(&key)
+                .map(|state| state.open_interest_options.style);
+            if previous_style != Some(options.style) {
+                self.convert_series_kind(series_id, options.style.series_kind());
+            }
             self.set_series_data(
                 series_id,
                 &prepared.times,
@@ -542,7 +597,7 @@ impl ChartEngine {
                 return Err(ExternalStudyError::CapacityExceeded);
             }
             let study_visible = self.external_study_visible(study_id).unwrap_or(true);
-            let series_id = self.install_new_open_interest_series(study_id, &prepared)?;
+            let series_id = self.install_new_open_interest_series(study_id, &prepared, options)?;
             self.set_series_visible(series_id, study_visible);
             (series_id, true, study_visible)
         };
@@ -552,12 +607,13 @@ impl ChartEngine {
         if let Some(series) = self.series_entry_mut(series_id) {
             series.title = title;
         }
+        self.apply_open_interest_colors(series_id, options);
         self.external_study_outputs.insert(
             key,
             ExternalStudyOutputState {
                 series_id,
                 generation,
-                settings_available: false,
+                settings_available: true,
                 legend_label: None,
                 input_requirements: ExternalStudyInputRequirements::NONE,
                 output_visible,
@@ -565,10 +621,60 @@ impl ChartEngine {
                 momentum_histogram: false,
                 options_volume: false,
                 open_interest: true,
+                open_interest_options: options,
                 forming_wick: next_forming_wick,
             },
         );
         Ok(true)
+    }
+
+    /// Reconfigure an existing Open Interest study's style (candles, bars, line, area) and colors
+    /// in place, preserving its pane and bar history.
+    pub fn set_open_interest_options(
+        &mut self,
+        study_id: u64,
+        options: OpenInterestOptions,
+    ) -> bool {
+        let Some(series_id) = self.open_interest_series(study_id) else {
+            return false;
+        };
+        let key = (study_id, 0);
+        let Some(previous) = self
+            .external_study_outputs
+            .get(&key)
+            .map(|state| state.open_interest_options)
+        else {
+            return false;
+        };
+        if previous == options {
+            return false;
+        }
+        if let Some(state) = self.external_study_outputs.get_mut(&key) {
+            state.open_interest_options = options;
+        }
+        if previous.style != options.style {
+            self.convert_series_kind(series_id, options.style.series_kind());
+        }
+        self.apply_open_interest_colors(series_id, options);
+        true
+    }
+
+    /// Current presentation options of a live Open Interest study.
+    #[must_use]
+    pub fn open_interest_options(&self, study_id: u64) -> Option<OpenInterestOptions> {
+        self.external_study_outputs
+            .get(&(study_id, 0))
+            .filter(|state| state.open_interest && self.series_entry(state.series_id).is_some())
+            .map(|state| state.open_interest_options)
+    }
+
+    fn apply_open_interest_colors(&mut self, series_id: SeriesId, options: OpenInterestOptions) {
+        if let Some(entry) = self.series_entry_mut(series_id) {
+            entry.line_color = options.line_color.map(|color| color.to_css());
+            entry.up_color = options.up_color.map(|color| color.to_css());
+            entry.down_color = options.down_color.map(|color| color.to_css());
+        }
+        self.invalidate_frame_series(series_id);
     }
 
     /// Append or replace the newest bar of an Open Interest candlestick study, the streaming
@@ -658,9 +764,10 @@ impl ChartEngine {
         &mut self,
         study_id: u64,
         columns: &PreparedOhlcColumns,
+        options: OpenInterestOptions,
     ) -> Result<SeriesId, ExternalStudyError> {
         let chrome = self.indicator_chrome;
-        let series_id = self.add_series(SeriesKind::Candlestick);
+        let series_id = self.add_series(options.style.series_kind());
         if self
             .set_series_data(
                 series_id,
@@ -683,7 +790,9 @@ impl ChartEngine {
             series.title_visible = chrome.name_labels_visible;
             series.last_value_visible = chrome.value_labels_visible;
             series.price_line_visible = chrome.price_lines_visible;
-            series.line_color = None;
+            series.line_color = options.line_color.map(|color| color.to_css());
+            series.up_color = options.up_color.map(|color| color.to_css());
+            series.down_color = options.down_color.map(|color| color.to_css());
             series.price_format.kind = PriceFormatKind::Volume;
             series.price_format.precision = OPEN_INTEREST_PRECISION;
             series.price_format.formatter = None;
@@ -1899,6 +2008,44 @@ mod tests {
             chart.series_entry(oi_id).unwrap().title,
             crate::text::legend::OPEN_INTEREST.text(crate::ChartLanguage::Japanese)
         );
+        chart.set_language(crate::ChartLanguage::English);
+
+        // Switching styles (Bars, Line, Area, Candles) and custom colors reconfigures in place.
+        assert!(row.settings_available);
+        for (style, expected_kind) in [
+            (OpenInterestStyle::Bars, SeriesKind::Bar),
+            (OpenInterestStyle::Line, SeriesKind::Line),
+            (OpenInterestStyle::Area, SeriesKind::Area),
+            (OpenInterestStyle::Candles, SeriesKind::Candlestick),
+        ] {
+            let options = OpenInterestOptions {
+                style,
+                line_color: Some(Color::rgb(0x29, 0x62, 0xFF)),
+                up_color: Some(Color::rgb(0x00, 0xC8, 0x53)),
+                down_color: Some(Color::rgb(0xFF, 0x17, 0x44)),
+            };
+            assert!(chart.set_open_interest_options(11, options));
+            assert_eq!(chart.open_interest_series(11), Some(oi_id));
+            assert_eq!(chart.series_entry(oi_id).unwrap().kind, expected_kind);
+            assert_eq!(chart.open_interest_options(11), Some(options));
+            let mode_legend = chart.financial_legend(crate::FinancialLegendRequest {
+                logical_index: None,
+                primary_title: "BTC",
+                show_primary_ohlc: true,
+                primary_values_series: None,
+                leading_series: &[],
+                trailing_series: &[],
+            });
+            let mode_row = mode_legend
+                .iter()
+                .find(|r| r.identity == crate::FinancialLegendIdentity::ExternalStudy(11))
+                .expect("oi legend row");
+            if matches!(style, OpenInterestStyle::Candles | OpenInterestStyle::Bars) {
+                assert_eq!(mode_row.values.len(), 4);
+            } else {
+                assert_eq!(mode_row.values.len(), 1);
+            }
+        }
 
         // Stale generation, invalid values, and study-id hijacking are rejected cleanly.
         assert_eq!(chart.set_open_interest(11, 4, &bars), Ok(false));

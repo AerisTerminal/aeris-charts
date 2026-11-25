@@ -165,7 +165,8 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar,
+    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar, OpenInterestOptions,
+    OpenInterestStyle,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,

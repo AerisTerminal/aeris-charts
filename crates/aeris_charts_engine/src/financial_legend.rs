@@ -213,20 +213,54 @@ impl ChartEngine {
             let values = if visible {
                 if is_open_interest {
                     if first_series.visible {
-                        oi_snapshot.map_or_else(Vec::new, |snapshot| {
-                            let color = match tone {
-                                FinancialLegendTone::Bullish => Some(market.up.to_css()),
-                                FinancialLegendTone::Bearish => Some(market.down.to_css()),
-                                FinancialLegendTone::Neutral => None,
-                            };
-                            ohlc_values(self.language, snapshot)
-                                .into_iter()
-                                .map(|mut value| {
-                                    value.color = color.clone();
-                                    value
-                                })
-                                .collect()
-                        })
+                        if matches!(
+                            first_series.kind,
+                            crate::SeriesKind::Candlestick | crate::SeriesKind::Bar
+                        ) {
+                            oi_snapshot.map_or_else(Vec::new, |snapshot| {
+                                let color = match tone {
+                                    FinancialLegendTone::Bullish => Some(
+                                        first_series
+                                            .up_color
+                                            .clone()
+                                            .unwrap_or_else(|| market.up.to_css()),
+                                    ),
+                                    FinancialLegendTone::Bearish => Some(
+                                        first_series
+                                            .down_color
+                                            .clone()
+                                            .unwrap_or_else(|| market.down.to_css()),
+                                    ),
+                                    FinancialLegendTone::Neutral => None,
+                                };
+                                ohlc_values(self.language, snapshot)
+                                    .into_iter()
+                                    .map(|mut value| {
+                                        value.color = color.clone();
+                                        value
+                                    })
+                                    .collect()
+                            })
+                        } else {
+                            snapshot_value(&snapshots, first_output.series_id).map_or_else(
+                                Vec::new,
+                                |text| {
+                                    vec![FinancialLegendValue {
+                                        text,
+                                        color: Some(
+                                            first_series.line_color.clone().unwrap_or_else(|| {
+                                                crate::frame::series_stroke_color(
+                                                    first_series,
+                                                    market,
+                                                    self.surface_theme(),
+                                                )
+                                                .to_css()
+                                            }),
+                                        ),
+                                    }]
+                                },
+                            )
+                        }
                     } else {
                         Vec::new()
                     }

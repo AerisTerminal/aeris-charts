@@ -2285,14 +2285,16 @@ painted bullish and bearish colors at frame time until a host style pins a color
 group selection, visibility, and removal are the external-study paths. Generic output pushes cannot
 take over an options-volume study id, and options volume cannot take over a generic study's id.
 Open interest is likewise an engine-owned study on the same transaction (`set_open_interest`,
-`update_open_interest`, `open_interest_series`). The host supplies bar-aligned `OpenInterestBar`
-samples; the engine derives continuous OHLC candles (inheriting each bar's open from the prior close
-when omitted and retaining live intra-bar high/low wicks on the forming bar), installs one
-`SeriesKind::Candlestick` series in a dedicated pane with volume-formatted right scale, exposes
-localized OHLC legend values colored by candle direction, and owns visibility, chrome, language
-re-titling, and pane cleanup through the external-study paths. Generic output pushes cannot take
-over an open-interest study id, and open interest cannot take over a generic or options-volume
-study's id.
+`set_open_interest_with_options`, `set_open_interest_options`, `update_open_interest`,
+`open_interest_series`). The host supplies bar-aligned `OpenInterestBar` samples and
+`OpenInterestOptions` (`OpenInterestStyle`: `Candles`, `Bars`, `Line`, or `Area` plus optional
+line/up/down colors); the engine derives continuous OHLC candles (inheriting each bar's open from
+the prior close when omitted and retaining live intra-bar high/low wicks on the forming bar),
+switches series kinds and colors in place without losing history or pane layout, formats the right
+scale as volume, exposes localized OHLC (candles/bars) or close (line/area) legend values with
+settings enabled, and owns visibility, chrome, language re-titling, and pane cleanup through the
+external-study paths. Generic output pushes cannot take over an open-interest study id, and open
+interest cannot take over a generic or options-volume study's id.
 Order-flow presentation is likewise installed and removed as one engine transaction. The engine
 owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle-to-footprint
 cutover, retained indicator chrome, an optional big-trades indicator on the primary series, and

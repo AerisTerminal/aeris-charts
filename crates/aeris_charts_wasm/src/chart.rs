@@ -2743,6 +2743,51 @@ impl AerisChart {
         inner.remove_series_tracked(id)
     }
 
+    /// Reconfigure an Open Interest study's rendering style (`0 = candles`, `1 = bars`,
+    /// `2 = line`, `3 = area`) and optional CSS colors (empty string follows theme defaults).
+    pub fn set_open_interest_options(
+        &mut self,
+        study_id: u32,
+        style: u32,
+        line_color: &str,
+        up_color: &str,
+        down_color: &str,
+    ) -> bool {
+        let style = match style {
+            0 => aeris_charts_engine::OpenInterestStyle::Candles,
+            1 => aeris_charts_engine::OpenInterestStyle::Bars,
+            2 => aeris_charts_engine::OpenInterestStyle::Line,
+            3 => aeris_charts_engine::OpenInterestStyle::Area,
+            _ => return false,
+        };
+        let parse_opt = |value: &str| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                aeris_charts_render::color::Color::parse_css(trimmed)
+                    .map(Some)
+                    .ok_or(())
+            }
+        };
+        let (Ok(line_color), Ok(up_color), Ok(down_color)) = (
+            parse_opt(line_color),
+            parse_opt(up_color),
+            parse_opt(down_color),
+        ) else {
+            return false;
+        };
+        self.inner.borrow_mut().engine.set_open_interest_options(
+            u64::from(study_id),
+            aeris_charts_engine::OpenInterestOptions {
+                style,
+                line_color,
+                up_color,
+                down_color,
+            },
+        )
+    }
+
     /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",
     /// "output_index"}`), or `null` for a plain/source series — platform chip chrome backing.
     pub fn series_indicator_info_json(&self, id: u32) -> String {
