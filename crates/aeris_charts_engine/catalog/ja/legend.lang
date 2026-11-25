@@ -12,3 +12,4 @@ options_volume = オプション出来高
 calls = コール
 puts = プット
 delta = デルタ
+open_interest = 建玉

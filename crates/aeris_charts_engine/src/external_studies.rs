@@ -26,6 +26,23 @@ const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
     (crate::text::legend::PUTS, MarketTone::Down),
 ];
 const OPTIONS_VOLUME_PRECISION: u32 = 1;
+const OPEN_INTEREST_PRECISION: u32 = 1;
+
+/// One bar-aligned Open Interest sample supplied to [`ChartEngine::set_open_interest`] or
+/// [`ChartEngine::update_open_interest`].
+///
+/// When `open` is `None`, the engine derives continuous candlestick opens from the prior bar's
+/// close (falling back to `close` on the first bar). Optional `high` and `low` supply intra-bar
+/// sub-period extremes; the engine always enforces `low <= open.min(close)` and
+/// `high >= open.max(close)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpenInterestBar {
+    pub timestamp_unix_nanos: i64,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub close: f64,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExternalStudyInputRequirements(u8);
@@ -141,6 +158,10 @@ pub(crate) struct ExternalStudyOutputState {
     study_visible: bool,
     momentum_histogram: bool,
     pub(crate) options_volume: bool,
+    pub(crate) open_interest: bool,
+    /// `(bar_second, high_bits, low_bits)` of the newest forming open-interest bar so repeated
+    /// snapshots and live updates preserve intra-bar extremes.
+    forming_wick: Option<(i64, u64, u64)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +204,16 @@ struct PreparedColumns {
     scalar: Vec<f64>,
 }
 
+struct PreparedOhlcColumns {
+    seconds: Vec<i64>,
+    times: Vec<f64>,
+    open: Vec<f64>,
+    high: Vec<f64>,
+    low: Vec<f64>,
+    close: Vec<f64>,
+    forming_wick: Option<(i64, u64, u64)>,
+}
+
 impl ChartEngine {
     pub fn install_external_study_output(
         &mut self,
@@ -193,7 +224,7 @@ impl ChartEngine {
         timestamps_unix_nanos: &[i64],
         values: &[Option<f64>],
     ) -> Result<bool, ExternalStudyError> {
-        if self.is_options_volume_study(study_id) {
+        if self.is_options_volume_study(study_id) || self.is_open_interest_study(study_id) {
             return Err(ExternalStudyError::InstallationRejected);
         }
         self.install_output(
@@ -264,6 +295,8 @@ impl ChartEngine {
                 momentum_histogram: descriptor.point_style
                     == ExternalStudyPointStyle::MomentumHistogram,
                 options_volume,
+                open_interest: false,
+                forming_wick: None,
             },
         );
         Ok(true)
@@ -424,6 +457,271 @@ impl ChartEngine {
         self.external_study_outputs
             .iter()
             .any(|(&(candidate, _), state)| candidate == study_id && state.options_volume)
+    }
+
+    /// Install or replace the candlestick Open Interest study `study_id` from host-supplied
+    /// bar-aligned samples. The engine derives continuous OHLC candles (inheriting each bar's open
+    /// from the previous bar's close when `open` is `None`), preserves intra-bar high/low wicks on
+    /// the newest forming bar across refreshes, trims leading bars older than the primary price
+    /// series without losing the first visible bar's open, formats the right axis as volume, and
+    /// draws candlesticks in the chart's bullish/bearish palette in one dedicated pane.
+    ///
+    /// The study behaves as any external study for visibility, indicator chrome, selection,
+    /// localized OHLC legend, language updates, and removal (`remove_external_studies`).
+    /// Returns `Ok(false)` for a stale `generation`; a rejected push changes nothing.
+    pub fn set_open_interest(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bars: &[OpenInterestBar],
+    ) -> Result<bool, ExternalStudyError> {
+        let existing = self.open_interest_series(study_id);
+        if existing.is_none()
+            && self.external_study_visible(study_id).is_some()
+            && !self.is_open_interest_study(study_id)
+        {
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        let key = (study_id, 0);
+        if self
+            .external_study_outputs
+            .get(&key)
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        let existing_forming_wick = self
+            .external_study_outputs
+            .get(&key)
+            .and_then(|state| state.forming_wick);
+        let mut prepared = prepare_open_interest_columns(bars, existing_forming_wick)?;
+        let next_forming_wick = prepared.forming_wick;
+        // Trim leading/trailing bars outside the loaded primary price series so Open Interest
+        // never prepends empty price-whitespace columns to the left of the price chart, while
+        // keeping the continuous open computed from the preceding OI bar.
+        if let Some((primary_times, _)) = self.data.series_data(0)
+            && let (Some(&first_primary), Some(&last_primary)) =
+                (primary_times.first(), primary_times.last())
+        {
+            let mut start = 0usize;
+            let mut end = prepared.seconds.len();
+            let candidate_start = prepared.seconds.partition_point(|&sec| sec < first_primary);
+            if candidate_start < end {
+                start = candidate_start;
+            }
+            let candidate_end = prepared.seconds.partition_point(|&sec| sec <= last_primary);
+            if candidate_end > start {
+                end = candidate_end;
+            }
+            if start > 0 || end < prepared.seconds.len() {
+                prepared.times = prepared.times[start..end].to_vec();
+                prepared.open = prepared.open[start..end].to_vec();
+                prepared.high = prepared.high[start..end].to_vec();
+                prepared.low = prepared.low[start..end].to_vec();
+                prepared.close = prepared.close[start..end].to_vec();
+            }
+        }
+        let (series_id, output_visible, study_visible) = if let Some(series_id) = existing {
+            self.set_series_data(
+                series_id,
+                &prepared.times,
+                &prepared.open,
+                &prepared.high,
+                &prepared.low,
+                &prepared.close,
+            )
+            .map_err(|_| ExternalStudyError::InstallationRejected)?;
+            let state = self
+                .external_study_outputs
+                .get(&key)
+                .map(|state| (state.output_visible, state.study_visible))
+                .unwrap_or((true, true));
+            (series_id, state.0, state.1)
+        } else {
+            if self.external_study_outputs.len() >= MAX_EXTERNAL_STUDY_OUTPUTS {
+                return Err(ExternalStudyError::CapacityExceeded);
+            }
+            let study_visible = self.external_study_visible(study_id).unwrap_or(true);
+            let series_id = self.install_new_open_interest_series(study_id, &prepared)?;
+            self.set_series_visible(series_id, study_visible);
+            (series_id, true, study_visible)
+        };
+        let title = crate::text::legend::OPEN_INTEREST
+            .text(self.language)
+            .to_owned();
+        if let Some(series) = self.series_entry_mut(series_id) {
+            series.title = title;
+        }
+        self.external_study_outputs.insert(
+            key,
+            ExternalStudyOutputState {
+                series_id,
+                generation,
+                settings_available: false,
+                legend_label: None,
+                input_requirements: ExternalStudyInputRequirements::NONE,
+                output_visible,
+                study_visible,
+                momentum_histogram: false,
+                options_volume: false,
+                open_interest: true,
+                forming_wick: next_forming_wick,
+            },
+        );
+        Ok(true)
+    }
+
+    /// Append or replace the newest bar of an Open Interest candlestick study, the streaming
+    /// counterpart of [`Self::set_open_interest`]. The bar must not be older than the study's
+    /// newest bar; updates to the forming bar accumulate its intra-bar high/low wicks.
+    pub fn update_open_interest(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bar: OpenInterestBar,
+    ) -> Result<bool, ExternalStudyError> {
+        let series_id = self
+            .open_interest_series(study_id)
+            .ok_or(ExternalStudyError::InstallationRejected)?;
+        let key = (study_id, 0);
+        if self
+            .external_study_outputs
+            .get(&key)
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        let (second, time) = validate_open_interest_timestamp(bar.timestamp_unix_nanos)?;
+        let close = open_interest_value(bar.close)?;
+        let explicit_open = bar.open.map(open_interest_value).transpose()?;
+        let explicit_high = bar.high.map(open_interest_value).transpose()?;
+        let explicit_low = bar.low.map(open_interest_value).transpose()?;
+        let last = self.series_data(series_id).pop();
+        if let Some(ref previous) = last
+            && previous.time > second
+        {
+            return Err(ExternalStudyError::NonIncreasingTimestamp);
+        }
+        let (open, high, low) = match last {
+            Some(previous) if previous.time == second => {
+                let open = explicit_open.unwrap_or(previous.open);
+                let high = open
+                    .max(close)
+                    .max(explicit_high.unwrap_or(close))
+                    .max(previous.high);
+                let low = open
+                    .min(close)
+                    .min(explicit_low.unwrap_or(close))
+                    .min(previous.low);
+                (open, high, low)
+            }
+            Some(previous) => {
+                let open = explicit_open.unwrap_or(previous.close);
+                let high = open.max(close).max(explicit_high.unwrap_or(close));
+                let low = open.min(close).min(explicit_low.unwrap_or(close));
+                (open, high, low)
+            }
+            None => {
+                let open = explicit_open.unwrap_or(close);
+                let high = open.max(close).max(explicit_high.unwrap_or(close));
+                let low = open.min(close).min(explicit_low.unwrap_or(close));
+                (open, high, low)
+            }
+        };
+        if !self.update_series_bar(series_id, time, [open, high, low, close]) {
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        if let Some(state) = self.external_study_outputs.get_mut(&key) {
+            state.generation = generation;
+            state.forming_wick = Some((second, high.to_bits(), low.to_bits()));
+        }
+        Ok(true)
+    }
+
+    /// The candlestick series id of a live Open Interest study.
+    #[must_use]
+    pub fn open_interest_series(&self, study_id: u64) -> Option<SeriesId> {
+        self.external_study_outputs
+            .get(&(study_id, 0))
+            .filter(|state| state.open_interest)
+            .map(|state| state.series_id)
+            .filter(|&id| self.series_entry(id).is_some())
+    }
+
+    pub(crate) fn is_open_interest_study(&self, study_id: u64) -> bool {
+        self.external_study_outputs
+            .iter()
+            .any(|(&(candidate, _), state)| candidate == study_id && state.open_interest)
+    }
+
+    fn install_new_open_interest_series(
+        &mut self,
+        study_id: u64,
+        columns: &PreparedOhlcColumns,
+    ) -> Result<SeriesId, ExternalStudyError> {
+        let chrome = self.indicator_chrome;
+        let series_id = self.add_series(SeriesKind::Candlestick);
+        if self
+            .set_series_data(
+                series_id,
+                &columns.times,
+                &columns.open,
+                &columns.high,
+                &columns.low,
+                &columns.close,
+            )
+            .is_err()
+        {
+            let _ = self.remove_series(series_id);
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        let title = crate::text::legend::OPEN_INTEREST
+            .text(self.language)
+            .to_owned();
+        if let Some(series) = self.series_entry_mut(series_id) {
+            series.title = title;
+            series.title_visible = chrome.name_labels_visible;
+            series.last_value_visible = chrome.value_labels_visible;
+            series.price_line_visible = chrome.price_lines_visible;
+            series.line_color = None;
+            series.price_format.kind = PriceFormatKind::Volume;
+            series.price_format.precision = OPEN_INTEREST_PRECISION;
+            series.price_format.formatter = None;
+        }
+        let pane_key = (study_id, 0);
+        let mut created_pane = None;
+        let pane_index = if let Some(index) = self
+            .external_study_panes
+            .get(&pane_key)
+            .and_then(|pane_id| self.pane_index_for_id(*pane_id))
+        {
+            index
+        } else {
+            self.external_study_panes.remove(&pane_key);
+            let Some(index) = self.add_pane(false) else {
+                let _ = self.remove_series(series_id);
+                return Err(ExternalStudyError::InstallationRejected);
+            };
+            self.panes[index].stretch_factor = self.separate_pane_stretch();
+            let Some(pane_id) = self.pane_stable_id(index) else {
+                let _ = self.remove_series(series_id);
+                let _ = self.remove_pane(index);
+                return Err(ExternalStudyError::InstallationRejected);
+            };
+            created_pane = Some((pane_key, pane_id, index));
+            index
+        };
+        if !self.try_set_series_pane_and_scale(series_id, pane_index, None, "right") {
+            let _ = self.remove_series(series_id);
+            if let Some((_, _, index)) = created_pane {
+                let _ = self.remove_pane(index);
+            }
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        if let Some((key, pane_id, _)) = created_pane {
+            self.external_study_panes.insert(key, pane_id);
+        }
+        Ok(series_id)
     }
 
     fn install_new_external_study_series(
@@ -654,13 +952,11 @@ impl ChartEngine {
         let outputs = self
             .external_study_outputs
             .iter()
-            .map(|(&(_, output_index), state)| (output_index, state.series_id))
+            .map(|(&(_, output_index), state)| (output_index, state.series_id, state.open_interest))
             .collect::<Vec<_>>();
-        for (output_index, series_id) in outputs {
+        for (output_index, series_id, is_open_interest) in outputs {
             if let Some(series) = self.series_entry_mut(series_id) {
-                series.line_color = series
-                    .market_tone
-                    .is_none()
+                series.line_color = (!is_open_interest && series.market_tone.is_none())
                     .then(|| default_output_color(output_index));
                 series.line_width = Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH);
             }
@@ -837,6 +1133,96 @@ fn options_volume_value(value: Option<f64>) -> Result<Option<f64>, ExternalStudy
         }
         value => Ok(value),
     }
+}
+
+fn open_interest_value(value: f64) -> Result<f64, ExternalStudyError> {
+    if value.is_finite() && (0.0..=MAX_SAFE_VALUE).contains(&value) {
+        Ok(value)
+    } else {
+        Err(ExternalStudyError::InvalidValue)
+    }
+}
+
+fn validate_open_interest_timestamp(
+    timestamp_unix_nanos: i64,
+) -> Result<(i64, f64), ExternalStudyError> {
+    if timestamp_unix_nanos.rem_euclid(NANOS_PER_SECOND) != 0 {
+        return Err(ExternalStudyError::UnsupportedTimestampPrecision);
+    }
+    let second = timestamp_unix_nanos.div_euclid(NANOS_PER_SECOND);
+    let time = second as f64;
+    if validate_timestamp(time).is_err() || time as i64 != second {
+        return Err(ExternalStudyError::UnsupportedTimestampPrecision);
+    }
+    Ok((second, time))
+}
+
+fn prepare_open_interest_columns(
+    bars: &[OpenInterestBar],
+    previous_forming_wick: Option<(i64, u64, u64)>,
+) -> Result<PreparedOhlcColumns, ExternalStudyError> {
+    let mut seconds = Vec::with_capacity(bars.len());
+    let mut times = Vec::with_capacity(bars.len());
+    let mut open = Vec::with_capacity(bars.len());
+    let mut high = Vec::with_capacity(bars.len());
+    let mut low = Vec::with_capacity(bars.len());
+    let mut close = Vec::with_capacity(bars.len());
+    let mut previous_second: Option<i64> = None;
+    let mut previous_close: Option<f64> = None;
+
+    for bar in bars {
+        let (second, time) = validate_open_interest_timestamp(bar.timestamp_unix_nanos)?;
+        if previous_second.is_some_and(|prev| prev >= second) {
+            return Err(ExternalStudyError::NonIncreasingTimestamp);
+        }
+        previous_second = Some(second);
+        let c = open_interest_value(bar.close)?;
+        let o = match bar.open {
+            Some(value) => open_interest_value(value)?,
+            None => previous_close.unwrap_or(c),
+        };
+        let raw_h = match bar.high {
+            Some(value) => open_interest_value(value)?,
+            None => c,
+        };
+        let raw_l = match bar.low {
+            Some(value) => open_interest_value(value)?,
+            None => c,
+        };
+        let h = o.max(c).max(raw_h);
+        let l = o.min(c).min(raw_l);
+        seconds.push(second);
+        times.push(time);
+        open.push(o);
+        high.push(h);
+        low.push(l);
+        close.push(c);
+        previous_close = Some(c);
+    }
+
+    let forming_wick = if let Some(&last_sec) = seconds.last()
+        && let (Some(last_high), Some(last_low)) = (high.last_mut(), low.last_mut())
+    {
+        if let Some((prev_sec, prev_high_bits, prev_low_bits)) = previous_forming_wick
+            && prev_sec == last_sec
+        {
+            *last_high = last_high.max(f64::from_bits(prev_high_bits));
+            *last_low = last_low.min(f64::from_bits(prev_low_bits));
+        }
+        Some((last_sec, last_high.to_bits(), last_low.to_bits()))
+    } else {
+        None
+    };
+
+    Ok(PreparedOhlcColumns {
+        seconds,
+        times,
+        open,
+        high,
+        low,
+        close,
+        forming_wick,
+    })
 }
 
 fn default_output_color(output_index: usize) -> String {
@@ -1359,5 +1745,208 @@ mod tests {
         assert!(!series.title_visible);
         assert!(!series.last_value_visible);
         assert!(!series.price_line_visible);
+    }
+
+    #[test]
+    fn open_interest_is_one_candlestick_pane_with_continuous_ohlc_wicks_and_legend() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        // Primary series covers t = 2..=4; OI includes t = 1 so open[2] inherits close[1] while
+        // leading t = 1 is trimmed to avoid prepending empty price whitespace.
+        chart
+            .set_series_data(
+                0,
+                &[2.0, 3.0, 4.0],
+                &[100.0, 101.0, 102.0],
+                &[103.0, 104.0, 105.0],
+                &[99.0, 100.0, 101.0],
+                &[101.0, 102.0, 103.0],
+            )
+            .unwrap();
+
+        let bars = [
+            OpenInterestBar {
+                timestamp_unix_nanos: 1_000_000_000,
+                open: None,
+                high: Some(10_200.0),
+                low: Some(9_800.0),
+                close: 10_000.0,
+            },
+            OpenInterestBar {
+                timestamp_unix_nanos: 2_000_000_000,
+                open: None,
+                high: Some(10_600.0),
+                low: Some(9_950.0),
+                close: 10_500.0,
+            },
+            OpenInterestBar {
+                timestamp_unix_nanos: 3_000_000_000,
+                open: None,
+                high: Some(10_550.0),
+                low: Some(10_100.0),
+                close: 10_200.0,
+            },
+            OpenInterestBar {
+                timestamp_unix_nanos: 4_000_000_000,
+                open: None,
+                high: Some(10_700.0),
+                low: Some(10_150.0),
+                close: 10_400.0,
+            },
+        ];
+
+        assert_eq!(chart.set_open_interest(11, 1, &bars), Ok(true));
+        let oi_id = chart
+            .open_interest_series(11)
+            .expect("open interest series");
+        let entry = chart.series_entry(oi_id).expect("series entry");
+        assert_eq!(entry.kind, SeriesKind::Candlestick);
+        assert_eq!(entry.price_format.kind, PriceFormatKind::Volume);
+        assert_eq!(entry.pane_index, 1);
+        assert_eq!(chart.panes.len(), 2);
+
+        // Leading t=1 was trimmed, yet t=2 inherited open=10_000.0 from t=1's close.
+        let points = chart.series_data(oi_id);
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0].time, 2);
+        assert_eq!(points[0].open, 10_000.0);
+        assert_eq!(points[0].high, 10_600.0);
+        assert_eq!(points[0].low, 9_950.0);
+        assert_eq!(points[0].close, 10_500.0);
+
+        // Refreshing the forming bar (t=4) preserves earlier intra-bar high/low wicks.
+        let mut refreshed = bars;
+        refreshed[3].high = Some(10_450.0);
+        refreshed[3].low = Some(10_350.0);
+        refreshed[3].close = 10_420.0;
+        assert_eq!(chart.set_open_interest(11, 2, &refreshed), Ok(true));
+        let last = chart.series_data(oi_id).pop().unwrap();
+        assert_eq!(last.open, 10_200.0);
+        assert_eq!(last.high, 10_700.0);
+        assert_eq!(last.low, 10_150.0);
+        assert_eq!(last.close, 10_420.0);
+
+        // Streaming update_open_interest expands the forming bar wick and opens new bars from prior close.
+        assert_eq!(
+            chart.update_open_interest(
+                11,
+                3,
+                OpenInterestBar {
+                    timestamp_unix_nanos: 4_000_000_000,
+                    open: None,
+                    high: Some(10_850.0),
+                    low: None,
+                    close: 10_600.0,
+                }
+            ),
+            Ok(true)
+        );
+        let last = chart.series_data(oi_id).pop().unwrap();
+        assert_eq!(last.high, 10_850.0);
+        assert_eq!(last.low, 10_150.0);
+        assert_eq!(last.close, 10_600.0);
+
+        assert_eq!(
+            chart.update_open_interest(
+                11,
+                4,
+                OpenInterestBar {
+                    timestamp_unix_nanos: 5_000_000_000,
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 10_300.0,
+                }
+            ),
+            Ok(true)
+        );
+        let newest = chart.series_data(oi_id).pop().unwrap();
+        assert_eq!(newest.open, 10_600.0);
+        assert_eq!(newest.close, 10_300.0);
+
+        // Financial legend exposes localized title + OHLC values tinted by candle direction.
+        let legend = chart.financial_legend(crate::FinancialLegendRequest {
+            logical_index: None,
+            primary_title: "BTC",
+            show_primary_ohlc: true,
+            primary_values_series: None,
+            leading_series: &[],
+            trailing_series: &[],
+        });
+        let row = legend
+            .iter()
+            .find(|row| row.identity == crate::FinancialLegendIdentity::ExternalStudy(11))
+            .expect("open interest legend row");
+        assert_eq!(
+            row.title,
+            crate::text::legend::OPEN_INTEREST.text(crate::ChartLanguage::English)
+        );
+        assert_eq!(row.tone, crate::FinancialLegendTone::Bearish);
+        assert_eq!(row.values.len(), 4);
+        assert!(row.values[0].text.starts_with("O "));
+        assert!(row.values[1].text.starts_with("H "));
+        assert!(row.values[2].text.starts_with("L "));
+        assert!(row.values[3].text.starts_with("C "));
+        let expected_down = chart.market_colors().down.to_css();
+        assert!(
+            row.values
+                .iter()
+                .all(|v| v.color.as_deref() == Some(expected_down.as_str()))
+        );
+
+        // Language switch re-titles the engine-owned Open Interest series automatically.
+        chart.set_language(crate::ChartLanguage::Japanese);
+        assert_eq!(
+            chart.series_entry(oi_id).unwrap().title,
+            crate::text::legend::OPEN_INTEREST.text(crate::ChartLanguage::Japanese)
+        );
+
+        // Stale generation, invalid values, and study-id hijacking are rejected cleanly.
+        assert_eq!(chart.set_open_interest(11, 4, &bars), Ok(false));
+        assert_eq!(
+            chart.update_open_interest(
+                11,
+                5,
+                OpenInterestBar {
+                    timestamp_unix_nanos: 3_000_000_000,
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: 10_000.0,
+                }
+            ),
+            Err(ExternalStudyError::NonIncreasingTimestamp)
+        );
+        assert_eq!(
+            chart.update_open_interest(
+                11,
+                5,
+                OpenInterestBar {
+                    timestamp_unix_nanos: 5_000_000_000,
+                    open: None,
+                    high: None,
+                    low: None,
+                    close: -5.0,
+                }
+            ),
+            Err(ExternalStudyError::InvalidValue)
+        );
+        assert_eq!(
+            chart.install_external_study_output(
+                11,
+                0,
+                descriptor("Hijack", ExternalStudyPaneTarget::Price),
+                9,
+                &[1_000_000_000],
+                &[Some(1.0)],
+            ),
+            Err(ExternalStudyError::InstallationRejected)
+        );
+
+        // Visibility and removal follow the external-study lifecycle and release the pane.
+        assert!(chart.set_external_study_visible(11, false));
+        assert_eq!(chart.series_visible(oi_id), Some(false));
+        assert!(chart.remove_external_studies(&[11]));
+        assert_eq!(chart.open_interest_series(11), None);
+        assert_eq!(chart.panes.len(), 1);
     }
 }

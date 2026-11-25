@@ -205,28 +205,54 @@ impl ChartEngine {
             let visible = self
                 .external_study_visible(output.study_id)
                 .unwrap_or(false);
+            let is_open_interest = self.is_open_interest_study(output.study_id);
+            let oi_snapshot = is_open_interest
+                .then(|| snapshot_for(&snapshots, first_output.series_id))
+                .flatten();
+            let tone = oi_snapshot.map_or(FinancialLegendTone::Neutral, snapshot_tone);
             let values = if visible {
-                group
-                    .iter()
-                    .filter(|(_, series)| series.visible)
-                    .filter_map(|(candidate, series)| {
-                        let value = snapshot_value(&snapshots, candidate.series_id)?;
-                        Some(FinancialLegendValue {
-                            text: candidate
-                                .legend_label
-                                .as_ref()
-                                .map_or(value.clone(), |label| format!("{label} {value}")),
-                            color: Some(series.line_color.clone().unwrap_or_else(|| {
-                                crate::frame::series_stroke_color(
-                                    series,
-                                    market,
-                                    self.surface_theme(),
-                                )
-                                .to_css()
-                            })),
+                if is_open_interest {
+                    if first_series.visible {
+                        oi_snapshot.map_or_else(Vec::new, |snapshot| {
+                            let color = match tone {
+                                FinancialLegendTone::Bullish => Some(market.up.to_css()),
+                                FinancialLegendTone::Bearish => Some(market.down.to_css()),
+                                FinancialLegendTone::Neutral => None,
+                            };
+                            ohlc_values(self.language, snapshot)
+                                .into_iter()
+                                .map(|mut value| {
+                                    value.color = color.clone();
+                                    value
+                                })
+                                .collect()
                         })
-                    })
-                    .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    group
+                        .iter()
+                        .filter(|(_, series)| series.visible)
+                        .filter_map(|(candidate, series)| {
+                            let value = snapshot_value(&snapshots, candidate.series_id)?;
+                            Some(FinancialLegendValue {
+                                text: candidate
+                                    .legend_label
+                                    .as_ref()
+                                    .map_or(value.clone(), |label| format!("{label} {value}")),
+                                color: Some(series.line_color.clone().unwrap_or_else(|| {
+                                    crate::frame::series_stroke_color(
+                                        series,
+                                        market,
+                                        self.surface_theme(),
+                                    )
+                                    .to_css()
+                                })),
+                            })
+                        })
+                        .collect()
+                }
             } else {
                 Vec::new()
             };
@@ -238,11 +264,15 @@ impl ChartEngine {
                     crate::text::legend::OPTIONS_VOLUME
                         .text(self.language)
                         .to_owned()
+                } else if is_open_interest {
+                    crate::text::legend::OPEN_INTEREST
+                        .text(self.language)
+                        .to_owned()
                 } else {
                     first_series.title.clone()
                 },
                 values,
-                tone: FinancialLegendTone::Neutral,
+                tone,
                 visible,
                 settings_available: group
                     .iter()

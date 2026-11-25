@@ -12,3 +12,4 @@ options_volume = 옵션 거래량
 calls = 콜
 puts = 풋
 delta = 델타
+open_interest = 미결제약정

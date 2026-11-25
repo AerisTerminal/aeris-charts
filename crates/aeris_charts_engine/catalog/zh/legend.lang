@@ -12,3 +12,4 @@ options_volume = 期权成交量
 calls = 看涨期权
 puts = 看跌期权
 delta = Delta
+open_interest = 持仓量

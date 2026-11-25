@@ -165,7 +165,7 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS,
+    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -3627,6 +3627,22 @@ impl ChartEngine {
                 {
                     state.legend_label = Some(phrase.text(language).to_string());
                 }
+            }
+        }
+        let mut oi_studies: Vec<u64> = self
+            .external_study_outputs
+            .iter()
+            .filter(|(_, state)| state.open_interest)
+            .map(|(&(study_id, _), _)| study_id)
+            .collect();
+        oi_studies.sort_unstable();
+        oi_studies.dedup();
+        for study_id in oi_studies {
+            if let Some(id) = self.open_interest_series(study_id)
+                && let Some(entry) = self.series_entry(id)
+                && entry.title == text::legend::OPEN_INTEREST.text(previous)
+            {
+                retitle.push((id, text::legend::OPEN_INTEREST.text(language).to_string()));
             }
         }
         for (id, title) in retitle {

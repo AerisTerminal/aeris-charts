@@ -2634,6 +2634,115 @@ impl AerisChart {
             .collect()
     }
 
+    /// Install or replace an engine-owned candlestick Open Interest study from per-bar OHLC
+    /// arrays (`times` are UTC seconds; NaN in `open`/`high`/`low` lets the engine derive
+    /// continuous candlestick opens and intra-bar bounds). Returns an empty string once applied
+    /// (or skipped as stale), else the rejection reason.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_open_interest(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        times: &[f64],
+        open: &[f64],
+        high: &[f64],
+        low: &[f64],
+        close: &[f64],
+    ) -> String {
+        if open.len() != times.len()
+            || high.len() != times.len()
+            || low.len() != times.len()
+            || close.len() != times.len()
+        {
+            return aeris_charts_engine::ExternalStudyError::LengthMismatch.to_string();
+        }
+        let mut bars = Vec::with_capacity(times.len());
+        for i in 0..times.len() {
+            let Some(timestamp_unix_nanos) = seconds_to_unix_nanos(times[i]) else {
+                return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                    .to_string();
+            };
+            bars.push(aeris_charts_engine::OpenInterestBar {
+                timestamp_unix_nanos,
+                open: (!open[i].is_nan()).then_some(open[i]),
+                high: (!high[i].is_nan()).then_some(high[i]),
+                low: (!low[i].is_nan()).then_some(low[i]),
+                close: close[i],
+            });
+        }
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_open_interest(u64::from(study_id), u64::from(generation), &bars)
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// Append or replace the newest candlestick Open Interest bar; same result contract as
+    /// `set_open_interest`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_open_interest(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        time: f64,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+    ) -> String {
+        let Some(timestamp_unix_nanos) = seconds_to_unix_nanos(time) else {
+            return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                .to_string();
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .update_open_interest(
+                u64::from(study_id),
+                u64::from(generation),
+                aeris_charts_engine::OpenInterestBar {
+                    timestamp_unix_nanos,
+                    open: (!open.is_nan()).then_some(open),
+                    high: (!high.is_nan()).then_some(high),
+                    low: (!low.is_nan()).then_some(low),
+                    close,
+                },
+            )
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// The candlestick series id of a live Open Interest study, or `None`.
+    pub fn open_interest_series(&self, study_id: u32) -> Option<u32> {
+        self.inner
+            .borrow()
+            .engine
+            .open_interest_series(u64::from(study_id))
+    }
+
+    pub fn open_interest_visible(&self, study_id: u32) -> bool {
+        self.inner
+            .borrow()
+            .engine
+            .external_study_visible(u64::from(study_id))
+            .unwrap_or(false)
+    }
+
+    pub fn set_open_interest_visible(&mut self, study_id: u32, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_external_study_visible(u64::from(study_id), visible)
+    }
+
+    /// Remove an Open Interest study and its pane; returns every removed series id.
+    pub fn remove_open_interest(&mut self, study_id: u32) -> Vec<u32> {
+        let mut inner = self.inner.borrow_mut();
+        let Some(id) = inner.engine.open_interest_series(u64::from(study_id)) else {
+            return Vec::new();
+        };
+        inner.remove_series_tracked(id)
+    }
+
     /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",
     /// "output_index"}`), or `null` for a plain/source series — platform chip chrome backing.
     pub fn series_indicator_info_json(&self, id: u32) -> String {

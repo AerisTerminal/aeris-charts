@@ -13,3 +13,4 @@ options_volume = Options Volume
 calls = Calls
 puts = Puts
 delta = Delta
+open_interest = Open Interest
