@@ -22,7 +22,7 @@ pub const MAX_DEPTH_HEATMAP_ROWS: usize = 4_096;
 pub const MAX_DEPTH_HEATMAPS: usize = 16;
 pub const MAX_DEPTH_EVENT_LAYERS: usize = 64;
 pub const MAX_DEPTH_PROFILES: usize = 16;
-pub const MAX_DEPTH_PROFILE_LEVELS_PER_SIDE: usize = 512;
+pub const MAX_DEPTH_PROFILE_LEVELS_PER_SIDE: usize = 1_024;
 pub const DEPTH_HEATMAP_CHUNK_COLUMNS: usize = 32;
 const DEPTH_REPLAY_CHECKPOINT_INTERVAL: usize = 1_024;
 const MAX_DEPTH_REPLAY_CHECKPOINTS: usize = 64;
@@ -167,6 +167,14 @@ impl Default for DepthEventLayerOptions {
             max_markers: 2_048,
         }
     }
+}
+
+/// One merged right-edge depth-profile row covering whole ticks `[first_tick, first_tick + ticks)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DepthProfileRow {
+    pub(crate) first_tick: i64,
+    pub(crate) bid: Option<f64>,
+    pub(crate) ask: Option<f64>,
 }
 
 /// Current-book bars anchored at a pane's right edge: one bar per price level, its length
@@ -1448,6 +1456,77 @@ impl DepthBook {
             .asks
             .first_key_value()
             .map(|(&tick, &level)| self.public_level(tick, level))
+    }
+
+    /// Reference touch price (best ask, falling back to best bid) without allocating a ladder.
+    pub(crate) fn reference_price(&self) -> Option<f64> {
+        let view = self.view();
+        view.asks
+            .first_key_value()
+            .or_else(|| view.bids.last_key_value())
+            .map(|(&tick, _)| tick as f64 * self.options.tick_size)
+    }
+
+    /// Merges resting levels into whole-tick buckets `[first_tick, first_tick + ticks_per_row)`
+    /// across the full book before capping each side to `max_rows_per_side` drawn rows from the
+    /// touch outward. Returned rows are ordered descending by price.
+    pub(crate) fn merged_profile_rows(
+        &self,
+        ticks_per_row: i64,
+        max_rows_per_side: usize,
+    ) -> Vec<DepthProfileRow> {
+        if ticks_per_row <= 0 || max_rows_per_side == 0 {
+            return Vec::new();
+        }
+        let view = self.view();
+        let mut ask_rows: Vec<(i64, f64)> = Vec::new();
+        for (&tick, level) in &view.asks {
+            let first_tick = tick.div_euclid(ticks_per_row) * ticks_per_row;
+            if let Some((bucket, total)) = ask_rows.last_mut()
+                && *bucket == first_tick
+            {
+                *total += level.size;
+            } else if ask_rows.len() < max_rows_per_side {
+                ask_rows.push((first_tick, level.size));
+            } else {
+                break;
+            }
+        }
+        let mut bid_rows: Vec<(i64, f64)> = Vec::new();
+        for (&tick, level) in view.bids.iter().rev() {
+            let first_tick = tick.div_euclid(ticks_per_row) * ticks_per_row;
+            if let Some((bucket, total)) = bid_rows.last_mut()
+                && *bucket == first_tick
+            {
+                *total += level.size;
+            } else if bid_rows.len() < max_rows_per_side {
+                bid_rows.push((first_tick, level.size));
+            } else {
+                break;
+            }
+        }
+        let mut rows = Vec::with_capacity(ask_rows.len() + bid_rows.len());
+        for (first_tick, size) in ask_rows.into_iter().rev() {
+            rows.push(DepthProfileRow {
+                first_tick,
+                bid: None,
+                ask: Some(size),
+            });
+        }
+        for (first_tick, size) in bid_rows {
+            if let Some(last) = rows.last_mut()
+                && last.first_tick == first_tick
+            {
+                last.bid = Some(size);
+            } else {
+                rows.push(DepthProfileRow {
+                    first_tick,
+                    bid: Some(size),
+                    ask: None,
+                });
+            }
+        }
+        rows
     }
 
     pub fn size_at_price(&self, side: DepthSide, price: f64) -> Option<f64> {
@@ -2984,5 +3063,182 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(texts, vec!["20", "30"]);
+    }
+
+    #[test]
+    fn depth_profile_merges_full_book_before_applying_levels_per_side() {
+        // Mirrors BTCUSDT.P ($0.10 tick, 1,000 raw levels/side spanning ±$100) on a normal
+        // $880 visible chart (58,280..59,160) with default levels_per_side = 200.
+        let mut chart = crate::ChartEngine::new(900.0, 580.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[58_850.0; 3],
+                &[59_160.0; 3],
+                &[58_280.0; 3],
+                &[58_850.0; 3],
+            )
+            .unwrap();
+        chart.time_scale.set_width(900.0);
+        chart.layout_panes(550.0);
+        chart.fit_content();
+        chart.set_visible_logical_range(-1.0, 3.0);
+        chart.autoscale_visible();
+
+        let stream = chart
+            .add_depth_stream(
+                "btc_agg",
+                DepthOptions {
+                    tick_size: 0.1,
+                    max_levels_per_side: 2_000,
+                    ..DepthOptions::default()
+                },
+            )
+            .unwrap();
+        let bids = (0..1_000)
+            .map(|i| level(58_849.9 - i as f64 * 0.1, 1.0, None))
+            .collect::<Vec<_>>();
+        let asks = (0..1_000)
+            .map(|i| level(58_850.0 + i as f64 * 0.1, 1.0, None))
+            .collect::<Vec<_>>();
+        chart
+            .set_depth_snapshot(
+                stream,
+                DepthSnapshot {
+                    timestamp_micros: 1_000_000,
+                    sequence: 1,
+                    bids,
+                    asks,
+                },
+            )
+            .unwrap();
+        chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    levels_per_side: 200,
+                    max_width: 120.0,
+                    bid_rgba: Some([0, 180, 220, 255]),
+                    ask_rgba: Some([220, 60, 80, 255]),
+                    opacity: 1.0,
+                    show_sizes: true,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
+
+        let mut direct = Vec::new();
+        chart.build_depth_profile_frame(0, 900, 1.0, 1.0, &mut direct);
+        let bid = aeris_charts_render::color::Color::rgba(0, 180, 220, 255).0;
+        let ask = aeris_charts_render::color::Color::rgba(220, 60, 80, 255).0;
+        let rects = profile_rects(&direct);
+        let bid_bars = rects.iter().filter(|&&(_, _, _, c)| c == bid).count();
+        let ask_bars = rects.iter().filter(|&&(_, _, _, c)| c == ask).count();
+        assert!(
+            bid_bars >= 4 && ask_bars >= 4,
+            "full ±$100 book should merge into >=4 rows per side instead of collapsing into 1-2 (got bid={bid_bars}, ask={ask_bars})"
+        );
+        let texts = direct
+            .iter()
+            .filter_map(|p| match p {
+                aeris_charts_render::draw_list::Prim::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .count();
+        assert!(
+            texts >= 8,
+            "legible merged rows should still print compact size labels (got {texts})"
+        );
+    }
+
+    #[test]
+    fn depth_profile_stays_detailed_when_zoomed_far_out() {
+        // Same ±$100 book viewed on a $2,500 zoomed-out chart: text-sized rows would crush the
+        // depth into <=2 blocks per side, so compact bars step in to keep the liquidity profile visible.
+        let mut chart = crate::ChartEngine::new(900.0, 580.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[58_850.0; 3],
+                &[60_100.0; 3],
+                &[57_600.0; 3],
+                &[58_850.0; 3],
+            )
+            .unwrap();
+        chart.time_scale.set_width(900.0);
+        chart.layout_panes(550.0);
+        chart.fit_content();
+        chart.set_visible_logical_range(-1.0, 3.0);
+        chart.autoscale_visible();
+
+        let stream = chart
+            .add_depth_stream(
+                "btc_zoomed_out",
+                DepthOptions {
+                    tick_size: 0.1,
+                    max_levels_per_side: 2_000,
+                    ..DepthOptions::default()
+                },
+            )
+            .unwrap();
+        let bids = (0..1_000)
+            .map(|i| level(58_849.9 - i as f64 * 0.1, 1.0, None))
+            .collect::<Vec<_>>();
+        let asks = (0..1_000)
+            .map(|i| level(58_850.0 + i as f64 * 0.1, 1.0, None))
+            .collect::<Vec<_>>();
+        chart
+            .set_depth_snapshot(
+                stream,
+                DepthSnapshot {
+                    timestamp_micros: 1_000_000,
+                    sequence: 1,
+                    bids,
+                    asks,
+                },
+            )
+            .unwrap();
+        chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    levels_per_side: 200,
+                    max_width: 120.0,
+                    bid_rgba: Some([0, 180, 220, 255]),
+                    ask_rgba: Some([220, 60, 80, 255]),
+                    opacity: 1.0,
+                    show_sizes: true,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
+
+        let mut direct = Vec::new();
+        chart.build_depth_profile_frame(0, 900, 1.0, 1.0, &mut direct);
+        let bid = aeris_charts_render::color::Color::rgba(0, 180, 220, 255).0;
+        let ask = aeris_charts_render::color::Color::rgba(220, 60, 80, 255).0;
+        let rects = profile_rects(&direct);
+        let bid_bars = rects.iter().filter(|&&(_, _, _, c)| c == bid).count();
+        let ask_bars = rects.iter().filter(|&&(_, _, _, c)| c == ask).count();
+        assert!(
+            bid_bars >= 4 && ask_bars >= 4,
+            "zoomed-out depth should step down to compact bars instead of 1-2 blocks (got bid={bid_bars}, ask={ask_bars})"
+        );
+    }
+
+    #[test]
+    fn depth_profile_accepts_up_to_1024_levels_per_side() {
+        let (mut chart, stream) = profile_chart();
+        chart
+            .add_depth_profile(
+                stream,
+                DepthProfileOptions {
+                    levels_per_side: 1_024,
+                    ..DepthProfileOptions::default()
+                },
+            )
+            .unwrap();
     }
 }

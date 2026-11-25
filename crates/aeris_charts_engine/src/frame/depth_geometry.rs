@@ -2,14 +2,23 @@ use super::*;
 
 /// A printed level size needs this many font sizes of row height.
 const PROFILE_TEXT_HEIGHT: f64 = 1.05;
+/// Dense depth rows shrink printed sizes down to this size (CSS px) before omitting text,
+/// matching footprint's minimum legible cell font.
+const PROFILE_MIN_FONT: f64 = 8.0;
 /// Gap (CSS px) between a printed level size and the pane's right edge.
 const PROFILE_TEXT_PAD: f64 = 3.0;
 /// Extra row height (CSS px) beyond the printed size, so a merged row keeps its gap.
 const PROFILE_ROW_PAD: f64 = 2.0;
+/// Minimum row height (CSS px) when drawing compact bars without printed sizes or when zoomed far
+/// out, matching footprint's `CELLS_MIN_ROW` so deep books stay informative across zooms.
+const PROFILE_COMPACT_MIN_ROW: f64 = 3.0;
+/// If text-sized bucketing collapses a populated side below this many rows while a compact step
+/// reveals more distinct rows, step down to compact bars so depth stays informative across zooms.
+const PROFILE_MIN_SIDE_ROWS_FOR_TEXT_LOD: usize = 4;
 
-/// Whole ticks per drawn row: one while a tick is tall enough to read, otherwise the smallest
-/// 1-2-5 multiple that makes a row `min_row` tall, so zoomed-out books stay legible and rows
-/// start on round prices.
+/// Whole ticks per drawn row: one while a tick is tall enough, otherwise the smallest round
+/// 1-2-(2.5)-5 multiple that makes a row `min_row` tall, so zoomed-out books stay legible and rows
+/// start on round prices without harsh 2.5x jumps.
 fn profile_ticks_per_row(tick_height: f64, min_row: f64) -> i64 {
     if !tick_height.is_finite() || tick_height <= 0.0 || tick_height >= min_row {
         return 1;
@@ -17,8 +26,22 @@ fn profile_ticks_per_row(tick_height: f64, min_row: f64) -> i64 {
     let needed = min_row / tick_height;
     let mut magnitude: i64 = 1;
     loop {
-        for step in [1, 2, 5] {
-            let ticks = step * magnitude;
+        let candidates = if magnitude >= 10 {
+            [
+                magnitude,
+                magnitude.saturating_mul(2),
+                (magnitude / 2).saturating_mul(5),
+                magnitude.saturating_mul(5),
+            ]
+        } else {
+            [
+                magnitude,
+                magnitude.saturating_mul(2),
+                magnitude.saturating_mul(5),
+                magnitude.saturating_mul(5),
+            ]
+        };
+        for ticks in candidates {
             if ticks as f64 >= needed {
                 return ticks;
             }
@@ -28,43 +51,6 @@ fn profile_ticks_per_row(tick_height: f64, min_row: f64) -> i64 {
             None => return magnitude,
         }
     }
-}
-
-/// One drawn row: whole ticks `[first_tick, first_tick + ticks)` and each side's summed size.
-#[derive(Clone, Copy)]
-struct ProfileRow {
-    first_tick: i64,
-    bid: Option<f64>,
-    ask: Option<f64>,
-}
-
-fn merged_profile_rows(
-    levels: &[crate::depth::DepthLadderRow],
-    tick_size: f64,
-    ticks: i64,
-) -> Vec<ProfileRow> {
-    let mut rows: Vec<ProfileRow> = Vec::with_capacity(levels.len());
-    let add = |total: Option<f64>, size: Option<f64>| match (total, size) {
-        (Some(total), Some(size)) => Some(total + size),
-        (total, size) => total.or(size),
-    };
-    // Ladder levels arrive best-first by descending price, so equal rows are adjacent.
-    for level in levels {
-        let tick = (level.price / tick_size).round() as i64;
-        let first_tick = tick.div_euclid(ticks) * ticks;
-        match rows.last_mut() {
-            Some(row) if row.first_tick == first_tick => {
-                row.bid = add(row.bid, level.bid_size);
-                row.ask = add(row.ask, level.ask_size);
-            }
-            _ => rows.push(ProfileRow {
-                first_tick,
-                bid: level.bid_size,
-                ask: level.ask_size,
-            }),
-        }
-    }
-    rows
 }
 
 fn profile_color(rgba: Option<[u8; 4]>, theme: Color, opacity: f32) -> Color {
@@ -398,19 +384,38 @@ impl ChartEngine {
         let scale = pane_scale(pane, PriceScaleTarget::Right);
         let font_size = self.options.get().layout.font_size;
         let options = profile.options;
-        let levels = book.ladder(options.levels_per_side, 0.0, None);
-        let Some(reference) = levels.first().map(|level| level.price) else {
+        let Some(reference) = book.reference_price() else {
             return;
         };
         let tick_size = book.options().tick_size;
         let tick_height = (scale.price_to_coordinate(reference + tick_size, 0.0)
             - scale.price_to_coordinate(reference, 0.0))
         .abs();
-        let ticks = profile_ticks_per_row(
-            tick_height,
-            font_size * PROFILE_TEXT_HEIGHT + PROFILE_ROW_PAD,
-        );
-        let rows = merged_profile_rows(&levels, tick_size, ticks);
+        let text_min_row = PROFILE_MIN_FONT.min(font_size) * PROFILE_TEXT_HEIGHT + PROFILE_ROW_PAD;
+        let min_row = if options.show_sizes {
+            text_min_row
+        } else {
+            PROFILE_COMPACT_MIN_ROW
+        };
+        let mut ticks = profile_ticks_per_row(tick_height, min_row);
+        let mut rows = book.merged_profile_rows(ticks, options.levels_per_side);
+        if options.show_sizes {
+            let bid_rows = rows.iter().filter(|row| row.bid.is_some()).count();
+            let ask_rows = rows.iter().filter(|row| row.ask.is_some()).count();
+            let sparse = (bid_rows > 0 && bid_rows < PROFILE_MIN_SIDE_ROWS_FOR_TEXT_LOD)
+                || (ask_rows > 0 && ask_rows < PROFILE_MIN_SIDE_ROWS_FOR_TEXT_LOD);
+            if sparse {
+                let compact_ticks = profile_ticks_per_row(tick_height, PROFILE_COMPACT_MIN_ROW);
+                if compact_ticks < ticks {
+                    let compact_rows =
+                        book.merged_profile_rows(compact_ticks, options.levels_per_side);
+                    if compact_rows.len() > rows.len() {
+                        ticks = compact_ticks;
+                        rows = compact_rows;
+                    }
+                }
+            }
+        }
         let largest = rows
             .iter()
             .flat_map(|row| [row.bid, row.ask])
@@ -507,7 +512,8 @@ impl ChartEngine {
         }
         let layout = &self.options.get().layout;
         let (book_bid, book_ask, text_color) = self.order_book_colors();
-        let text_size = layout.font_size * vpr;
+        let max_text_px = layout.font_size * vpr;
+        let min_text_px = PROFILE_MIN_FONT.min(layout.font_size) * vpr;
         let text_pad = (PROFILE_TEXT_PAD * hpr).round();
         for id in self.depth_profile_ids(pane_index) {
             let profile = &self.depth_profiles[&id];
@@ -520,13 +526,14 @@ impl ChartEngine {
                     color: if bar.ask { ask } else { bid },
                 });
                 let (top, height) = (f64::from(bar.rect.y), f64::from(bar.rect.h));
-                if options.show_sizes && height >= text_size * PROFILE_TEXT_HEIGHT {
+                let fit_text_px = (height / PROFILE_TEXT_HEIGHT).min(max_text_px);
+                if options.show_sizes && fit_text_px >= min_text_px {
                     output.push(Prim::Text {
                         x: (f64::from(pane_w_px) - text_pad) as f32,
                         y: (top + height / 2.0) as f32,
                         text: super::footprint_geometry::compact_volume(bar.size),
                         color: text_color,
-                        size: text_size as f32,
+                        size: fit_text_px as f32,
                         family: layout.font_family.clone(),
                         align: TextAlign::Right,
                         weight: 400,
