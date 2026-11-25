@@ -14,3 +14,7 @@ calls = Calls
 puts = Puts
 delta = Delta
 open_interest = Interés abierto
+liquidations = Liquidaciones
+longs = Largos
+shorts = Cortos
+net = Neto

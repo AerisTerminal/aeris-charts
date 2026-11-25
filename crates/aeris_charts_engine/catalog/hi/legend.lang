@@ -14,3 +14,7 @@ calls = कॉल
 puts = पुट
 delta = डेल्टा
 open_interest = ओपन इंटरेस्ट
+liquidations = लिक्विडेशन
+longs = लॉन्ग
+shorts = शॉर्ट
+net = नेट

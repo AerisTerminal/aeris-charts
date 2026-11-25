@@ -2295,6 +2295,18 @@ scale as volume, exposes localized OHLC (candles/bars) or close (line/area) lege
 settings enabled, and owns visibility, chrome, language re-titling, and pane cleanup through the
 external-study paths. Generic output pushes cannot take over an open-interest study id, and open
 interest cannot take over a generic or options-volume study's id.
+Liquidations is likewise an engine-owned study on the same transaction (`set_liquidations`,
+`set_liquidations_with_options`, `set_liquidation_options`, `update_liquidations`,
+`liquidation_series`, `liquidation_options`). The host supplies bar-aligned `LiquidationBar`
+samples (`long_volume`, `short_volume`) and `LiquidationOptions` (`LiquidationStyle`: `Split` by
+default with short liquidations rising above zero and long liquidations falling below zero,
+`Stacked` rising upward from zero, or `Net` delta around zero, plus optional long/short colors);
+the engine trims samples outside the loaded primary price range, re-encodes and restyles series
+in place without losing bar history or pane layout, formats the right scale as volume, exposes
+localized positive Short/Long (or signed Net) legend values with settings enabled, and owns
+visibility, chrome, language re-titling, and pane cleanup through the external-study paths.
+Generic output pushes cannot take over a liquidations study id, and liquidations cannot take over
+another specialized or generic study's id.
 Order-flow presentation is likewise installed and removed as one engine transaction. The engine
 owns the shared trade-stream graph, footprint/CVD/delta series and panes, candle-to-footprint
 cutover, retained indicator chrome, an optional big-trades indicator on the primary series, and

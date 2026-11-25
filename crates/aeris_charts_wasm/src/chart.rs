@@ -2788,6 +2788,143 @@ impl AerisChart {
         )
     }
 
+    /// Install or replace an engine-owned Liquidations study from per-bar long/short volumes
+    /// (`times` are UTC seconds). Returns an empty string once applied (or skipped as stale),
+    /// else the rejection reason.
+    pub fn set_liquidations(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        times: &[f64],
+        longs: &[f64],
+        shorts: &[f64],
+    ) -> String {
+        if longs.len() != times.len() || shorts.len() != times.len() {
+            return aeris_charts_engine::ExternalStudyError::LengthMismatch.to_string();
+        }
+        let mut bars = Vec::with_capacity(times.len());
+        for i in 0..times.len() {
+            let Some(timestamp_unix_nanos) = seconds_to_unix_nanos(times[i]) else {
+                return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                    .to_string();
+            };
+            bars.push(aeris_charts_engine::LiquidationBar {
+                timestamp_unix_nanos,
+                long_volume: longs[i],
+                short_volume: shorts[i],
+            });
+        }
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_liquidations(u64::from(study_id), u64::from(generation), &bars)
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// Append or replace the newest Liquidations bar; same result contract as `set_liquidations`.
+    pub fn update_liquidations(
+        &mut self,
+        study_id: u32,
+        generation: u32,
+        time: f64,
+        long_volume: f64,
+        short_volume: f64,
+    ) -> String {
+        let Some(timestamp_unix_nanos) = seconds_to_unix_nanos(time) else {
+            return aeris_charts_engine::ExternalStudyError::UnsupportedTimestampPrecision
+                .to_string();
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .update_liquidations(
+                u64::from(study_id),
+                u64::from(generation),
+                aeris_charts_engine::LiquidationBar {
+                    timestamp_unix_nanos,
+                    long_volume,
+                    short_volume,
+                },
+            )
+            .map_or_else(|error| error.to_string(), |_| String::new())
+    }
+
+    /// The primary and secondary series ids of a live Liquidations study.
+    pub fn liquidation_series(&self, study_id: u32) -> Vec<u32> {
+        self.inner
+            .borrow()
+            .engine
+            .liquidation_series(u64::from(study_id))
+            .map_or_else(Vec::new, Vec::from)
+    }
+
+    pub fn liquidations_visible(&self, study_id: u32) -> bool {
+        self.inner
+            .borrow()
+            .engine
+            .external_study_visible(u64::from(study_id))
+            .unwrap_or(false)
+    }
+
+    pub fn set_liquidations_visible(&mut self, study_id: u32, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_external_study_visible(u64::from(study_id), visible)
+    }
+
+    /// Remove a Liquidations study and its pane; returns every removed series id.
+    pub fn remove_liquidations(&mut self, study_id: u32) -> Vec<u32> {
+        let mut inner = self.inner.borrow_mut();
+        let Some(series) = inner.engine.liquidation_series(u64::from(study_id)) else {
+            return Vec::new();
+        };
+        let mut removed = Vec::new();
+        for id in series {
+            removed.extend(inner.remove_series_tracked(id));
+        }
+        removed
+    }
+
+    /// Reconfigure a Liquidations study's rendering style (`0 = split`, `1 = stacked`, `2 = net`)
+    /// and optional CSS colors (empty string follows theme defaults).
+    pub fn set_liquidation_options(
+        &mut self,
+        study_id: u32,
+        style: u32,
+        long_color: &str,
+        short_color: &str,
+    ) -> bool {
+        let style = match style {
+            0 => aeris_charts_engine::LiquidationStyle::Split,
+            1 => aeris_charts_engine::LiquidationStyle::Stacked,
+            2 => aeris_charts_engine::LiquidationStyle::Net,
+            _ => return false,
+        };
+        let parse_opt = |value: &str| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                aeris_charts_render::color::Color::parse_css(trimmed)
+                    .map(Some)
+                    .ok_or(())
+            }
+        };
+        let (Ok(long_color), Ok(short_color)) = (parse_opt(long_color), parse_opt(short_color))
+        else {
+            return false;
+        };
+        self.inner.borrow_mut().engine.set_liquidation_options(
+            u64::from(study_id),
+            aeris_charts_engine::LiquidationOptions {
+                style,
+                long_color,
+                short_color,
+            },
+        )
+    }
+
     /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",
     /// "output_index"}`), or `null` for a plain/source series — platform chip chrome backing.
     pub fn series_indicator_info_json(&self, id: u32) -> String {

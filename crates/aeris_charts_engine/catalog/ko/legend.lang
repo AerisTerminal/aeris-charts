@@ -13,3 +13,7 @@ calls = 콜
 puts = 풋
 delta = 델타
 open_interest = 미결제약정
+liquidations = 청산
+longs = 롱
+shorts = 숏
+net = 순청산

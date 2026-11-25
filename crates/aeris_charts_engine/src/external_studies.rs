@@ -27,6 +27,47 @@ const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
 ];
 const OPTIONS_VOLUME_PRECISION: u32 = 1;
 const OPEN_INTEREST_PRECISION: u32 = 1;
+const LIQUIDATION_PRECISION: u32 = 1;
+const LIQUIDATION_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
+    (crate::text::legend::SHORTS, MarketTone::Up),
+    (crate::text::legend::LONGS, MarketTone::Down),
+];
+
+/// One bar-aligned liquidation volume sample supplied to [`ChartEngine::set_liquidations`] or
+/// [`ChartEngine::update_liquidations`].
+///
+/// Both `long_volume` (liquidated long positions) and `short_volume` (liquidated short positions)
+/// must be finite and non-negative. Zero leaves that side empty on the bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidationBar {
+    pub timestamp_unix_nanos: i64,
+    pub long_volume: f64,
+    pub short_volume: f64,
+}
+
+/// How an engine-owned Liquidations study renders its sub-pane histogram series.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LiquidationStyle {
+    /// Short liquidations rise above zero (forced buys, bullish hue) and long liquidations fall
+    /// below zero (forced sells, bearish hue).
+    #[default]
+    Split,
+    /// Long and short liquidations stack upward from zero so total bar height equals combined
+    /// liquidations while keeping both sides visually distinct.
+    Stacked,
+    /// Single net liquidation delta column (`short - long`) colored by sign around zero.
+    Net,
+}
+
+/// Presentation options of an engine-owned Liquidations study. Unset colors follow the active
+/// chart theme: bullish/up for short liquidations (forced buys) and bearish/down for long
+/// liquidations (forced sells).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LiquidationOptions {
+    pub style: LiquidationStyle,
+    pub long_color: Option<Color>,
+    pub short_color: Option<Color>,
+}
 
 /// One bar-aligned Open Interest sample supplied to [`ChartEngine::set_open_interest`] or
 /// [`ChartEngine::update_open_interest`].
@@ -192,6 +233,8 @@ pub(crate) struct ExternalStudyOutputState {
     pub(crate) options_volume: bool,
     pub(crate) open_interest: bool,
     open_interest_options: OpenInterestOptions,
+    pub(crate) liquidations: bool,
+    liquidation_options: LiquidationOptions,
     /// `(bar_second, high_bits, low_bits)` of the newest forming open-interest bar so repeated
     /// snapshots and live updates preserve intra-bar extremes.
     forming_wick: Option<(i64, u64, u64)>,
@@ -257,7 +300,10 @@ impl ChartEngine {
         timestamps_unix_nanos: &[i64],
         values: &[Option<f64>],
     ) -> Result<bool, ExternalStudyError> {
-        if self.is_options_volume_study(study_id) || self.is_open_interest_study(study_id) {
+        if self.is_options_volume_study(study_id)
+            || self.is_open_interest_study(study_id)
+            || self.is_liquidation_study(study_id)
+        {
             return Err(ExternalStudyError::InstallationRejected);
         }
         self.install_output(
@@ -330,6 +376,8 @@ impl ChartEngine {
                 options_volume,
                 open_interest: false,
                 open_interest_options: OpenInterestOptions::default(),
+                liquidations: false,
+                liquidation_options: LiquidationOptions::default(),
                 forming_wick: None,
             },
         );
@@ -622,6 +670,8 @@ impl ChartEngine {
                 options_volume: false,
                 open_interest: true,
                 open_interest_options: options,
+                liquidations: false,
+                liquidation_options: LiquidationOptions::default(),
                 forming_wick: next_forming_wick,
             },
         );
@@ -758,6 +808,431 @@ impl ChartEngine {
         self.external_study_outputs
             .iter()
             .any(|(&(candidate, _), state)| candidate == study_id && state.open_interest)
+    }
+
+    /// Install or replace the Liquidations study `study_id` from host-supplied bar-aligned
+    /// long and short liquidation volumes, keeping its current [`LiquidationOptions`] (or
+    /// defaulting to [`LiquidationStyle::Split`] when newly created).
+    pub fn set_liquidations(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bars: &[LiquidationBar],
+    ) -> Result<bool, ExternalStudyError> {
+        let options = self.liquidation_options(study_id).unwrap_or_default();
+        self.set_liquidations_with_options(study_id, generation, bars, options)
+    }
+
+    /// Install or replace the Liquidations study `study_id` with explicit presentation `options`
+    /// (`Split`, `Stacked`, or `Net` plus optional long/short colors). Both `long_volume` and
+    /// `short_volume` must be finite and non-negative. The engine trims bars outside the loaded
+    /// primary price series, formats the right axis as volume in one dedicated pane, and exposes
+    /// localized legend values with settings enabled.
+    ///
+    /// Returns `Ok(false)` for a stale `generation`; a rejected push changes nothing.
+    pub fn set_liquidations_with_options(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bars: &[LiquidationBar],
+        options: LiquidationOptions,
+    ) -> Result<bool, ExternalStudyError> {
+        let existing = self.liquidation_series(study_id);
+        if existing.is_none()
+            && self.external_study_visible(study_id).is_some()
+            && !self.is_liquidation_study(study_id)
+        {
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        if self
+            .external_study_outputs
+            .get(&(study_id, 0))
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        let mut prepared = prepare_liquidation_columns(bars, options.style)?;
+        if let Some((primary_times, _)) = self.data.series_data(0)
+            && let (Some(&first_primary), Some(&last_primary)) =
+                (primary_times.first(), primary_times.last())
+        {
+            let mut start = 0usize;
+            let mut end = prepared.seconds.len();
+            let candidate_start = prepared.seconds.partition_point(|&sec| sec < first_primary);
+            if candidate_start < end {
+                start = candidate_start;
+            }
+            let candidate_end = prepared.seconds.partition_point(|&sec| sec <= last_primary);
+            if candidate_end > start {
+                end = candidate_end;
+            }
+            if start > 0 || end < prepared.seconds.len() {
+                prepared.times = prepared.times[start..end].to_vec();
+                prepared.primary = prepared.primary[start..end].to_vec();
+                prepared.secondary = prepared.secondary[start..end].to_vec();
+            }
+        }
+        let primary_cols = PreparedColumns {
+            times: prepared.times.clone(),
+            scalar: prepared.primary,
+        };
+        let secondary_cols = PreparedColumns {
+            times: prepared.times,
+            scalar: prepared.secondary,
+        };
+        let language = self.language;
+        let (series_ids, output_visibles, study_visible) = if let Some(series_ids) = existing {
+            set_series_data(self, series_ids[0], &primary_cols)?;
+            set_series_data(self, series_ids[1], &secondary_cols)?;
+            let out0 = self
+                .external_study_outputs
+                .get(&(study_id, 0))
+                .map(|state| (state.output_visible, state.study_visible))
+                .unwrap_or((true, true));
+            let out1 = self
+                .external_study_outputs
+                .get(&(study_id, 1))
+                .map(|state| state.output_visible)
+                .unwrap_or(true);
+            (series_ids, [out0.0, out1], out0.1)
+        } else {
+            if self.external_study_outputs.len() + LIQUIDATION_OUTPUTS.len()
+                > MAX_EXTERNAL_STUDY_OUTPUTS
+            {
+                return Err(ExternalStudyError::CapacityExceeded);
+            }
+            let study_visible = self.external_study_visible(study_id).unwrap_or(true);
+            let s0 = self.install_new_liquidation_series(
+                study_id,
+                LIQUIDATION_OUTPUTS[0].0.text(language),
+                &primary_cols,
+            )?;
+            let s1 = match self.install_new_liquidation_series(
+                study_id,
+                LIQUIDATION_OUTPUTS[1].0.text(language),
+                &secondary_cols,
+            ) {
+                Ok(id) => id,
+                Err(error) => {
+                    let _ = self.remove_series(s0);
+                    self.external_study_panes.remove(&(study_id, 0));
+                    return Err(error);
+                }
+            };
+            ([s0, s1], [true, true], study_visible)
+        };
+        for (index, (id, (phrase, _))) in
+            series_ids.into_iter().zip(LIQUIDATION_OUTPUTS).enumerate()
+        {
+            let label = phrase.text(language).to_owned();
+            if let Some(series) = self.series_entry_mut(id) {
+                series.title = label.clone();
+            }
+            self.external_study_outputs.insert(
+                (study_id, index),
+                ExternalStudyOutputState {
+                    series_id: id,
+                    generation,
+                    settings_available: true,
+                    legend_label: Some(label),
+                    input_requirements: ExternalStudyInputRequirements::NONE,
+                    output_visible: output_visibles[index],
+                    study_visible,
+                    momentum_histogram: false,
+                    options_volume: false,
+                    open_interest: false,
+                    open_interest_options: OpenInterestOptions::default(),
+                    liquidations: true,
+                    liquidation_options: options,
+                    forming_wick: None,
+                },
+            );
+        }
+        self.apply_liquidation_presentation(series_ids, options, study_visible, output_visibles);
+        Ok(true)
+    }
+
+    /// Reconfigure an existing Liquidations study's style (`Split`, `Stacked`, `Net`) and colors
+    /// in place, preserving its pane and bar history.
+    pub fn set_liquidation_options(&mut self, study_id: u64, options: LiquidationOptions) -> bool {
+        let Some(series_ids) = self.liquidation_series(study_id) else {
+            return false;
+        };
+        let Some(previous) = self.liquidation_options(study_id) else {
+            return false;
+        };
+        if previous == options {
+            return false;
+        }
+        if previous.style != options.style {
+            let merged = merge_liquidation_series(
+                &self.series_data(series_ids[0]),
+                &self.series_data(series_ids[1]),
+                previous.style,
+                options.style,
+            );
+            let primary_cols = PreparedColumns {
+                times: merged.times.clone(),
+                scalar: merged.primary,
+            };
+            let secondary_cols = PreparedColumns {
+                times: merged.times,
+                scalar: merged.secondary,
+            };
+            if set_series_data(self, series_ids[0], &primary_cols).is_err()
+                || set_series_data(self, series_ids[1], &secondary_cols).is_err()
+            {
+                return false;
+            }
+        }
+        let mut study_visible = true;
+        let mut output_visibles = [true, true];
+        for (index, slot) in output_visibles.iter_mut().enumerate() {
+            if let Some(state) = self.external_study_outputs.get_mut(&(study_id, index)) {
+                state.liquidation_options = options;
+                if index == 0 {
+                    study_visible = state.study_visible;
+                }
+                *slot = state.output_visible;
+            }
+        }
+        self.apply_liquidation_presentation(series_ids, options, study_visible, output_visibles);
+        true
+    }
+
+    /// Current presentation options of a live Liquidations study.
+    #[must_use]
+    pub fn liquidation_options(&self, study_id: u64) -> Option<LiquidationOptions> {
+        self.external_study_outputs
+            .get(&(study_id, 0))
+            .filter(|state| state.liquidations && self.series_entry(state.series_id).is_some())
+            .map(|state| state.liquidation_options)
+    }
+
+    /// Append or replace the newest bar of a Liquidations study, the streaming counterpart of
+    /// [`Self::set_liquidations`]. The bar must not be older than the study's newest bar.
+    pub fn update_liquidations(
+        &mut self,
+        study_id: u64,
+        generation: u64,
+        bar: LiquidationBar,
+    ) -> Result<bool, ExternalStudyError> {
+        let series_ids = self
+            .liquidation_series(study_id)
+            .ok_or(ExternalStudyError::InstallationRejected)?;
+        if self
+            .external_study_outputs
+            .get(&(study_id, 0))
+            .is_some_and(|state| state.generation >= generation)
+        {
+            return Ok(false);
+        }
+        let (second, time) = validate_open_interest_timestamp(bar.timestamp_unix_nanos)?;
+        let long_volume = open_interest_value(bar.long_volume)?;
+        let short_volume = open_interest_value(bar.short_volume)?;
+        let newest = series_ids
+            .into_iter()
+            .filter_map(|id| {
+                self.data
+                    .series_data(id)
+                    .and_then(|(times, _)| times.last().copied())
+            })
+            .max();
+        if newest.is_some_and(|newest| newest > second) {
+            return Err(ExternalStudyError::NonIncreasingTimestamp);
+        }
+        let options = self.liquidation_options(study_id).unwrap_or_default();
+        let (primary, secondary) =
+            encode_liquidation_pair(options.style, short_volume, long_volume);
+        for (id, value) in series_ids.into_iter().zip([primary, secondary]) {
+            if !self.update_series_bar(id, time, [value; 4]) {
+                return Err(ExternalStudyError::InstallationRejected);
+            }
+        }
+        for output_index in 0..LIQUIDATION_OUTPUTS.len() {
+            if let Some(state) = self
+                .external_study_outputs
+                .get_mut(&(study_id, output_index))
+            {
+                state.generation = generation;
+            }
+        }
+        Ok(true)
+    }
+
+    /// The primary and secondary histogram series ids of a live Liquidations study.
+    #[must_use]
+    pub fn liquidation_series(&self, study_id: u64) -> Option<[SeriesId; 2]> {
+        let series = |output_index| {
+            self.external_study_outputs
+                .get(&(study_id, output_index))
+                .filter(|state| state.liquidations)
+                .map(|state| state.series_id)
+                .filter(|&id| self.series_entry(id).is_some())
+        };
+        Some([series(0)?, series(1)?])
+    }
+
+    pub(crate) fn is_liquidation_study(&self, study_id: u64) -> bool {
+        self.external_study_outputs
+            .iter()
+            .any(|(&(candidate, _), state)| candidate == study_id && state.liquidations)
+    }
+
+    /// Decode `(short_volume, long_volume)` for a live Liquidations study at `logical_index`
+    /// (or at its newest non-whitespace bar when `logical_index` is `None`).
+    pub(crate) fn liquidation_bar_values_at(
+        &self,
+        study_id: u64,
+        logical_index: Option<i64>,
+    ) -> Option<(f64, f64)> {
+        let [s0, s1] = self.liquidation_series(study_id)?;
+        let options = self.liquidation_options(study_id)?;
+        let p0 = self.data.plot(s0);
+        let p1 = self.data.plot(s1);
+        let target_index = match logical_index {
+            Some(index) => index,
+            None => {
+                let i0 = p0
+                    .last_non_whitespace_row(aeris_charts_core::TimePointIndex::MAX)
+                    .and_then(|row| p0.index_at(row));
+                let i1 = p1
+                    .last_non_whitespace_row(aeris_charts_core::TimePointIndex::MAX)
+                    .and_then(|row| p1.index_at(row));
+                match (i0, i1) {
+                    (Some(a), Some(b)) => a.max(b),
+                    (Some(a), None) => a,
+                    (None, Some(b)) => b,
+                    (None, None) => return None,
+                }
+            }
+        };
+        let r0 = p0
+            .search(
+                target_index,
+                aeris_charts_core::model::plot_list::MismatchDirection::None,
+            )
+            .filter(|&row| !p0.is_whitespace_row(row));
+        let r1 = p1
+            .search(
+                target_index,
+                aeris_charts_core::model::plot_list::MismatchDirection::None,
+            )
+            .filter(|&row| !p1.is_whitespace_row(row));
+        if r0.is_none() && r1.is_none() {
+            return None;
+        }
+        let v0 = r0.map_or(f64::NAN, |row| {
+            p0.value_at(
+                row,
+                aeris_charts_core::model::plot_list::PlotValueIndex::Close,
+            )
+        });
+        let v1 = r1.map_or(f64::NAN, |row| {
+            p1.value_at(
+                row,
+                aeris_charts_core::model::plot_list::PlotValueIndex::Close,
+            )
+        });
+        Some(decode_liquidation_pair(options.style, v0, v1))
+    }
+
+    fn apply_liquidation_presentation(
+        &mut self,
+        series_ids: [SeriesId; 2],
+        options: LiquidationOptions,
+        study_visible: bool,
+        output_visibles: [bool; 2],
+    ) {
+        if let Some(entry) = self.series_entry_mut(series_ids[0]) {
+            match options.style {
+                LiquidationStyle::Split | LiquidationStyle::Stacked => {
+                    entry.delta_histogram = false;
+                    entry.market_tone = Some(MarketTone::Up);
+                    entry.line_color = options.short_color.map(|color| color.to_css());
+                    entry.up_color = None;
+                    entry.down_color = None;
+                }
+                LiquidationStyle::Net => {
+                    entry.delta_histogram = true;
+                    entry.market_tone = None;
+                    entry.line_color = None;
+                    entry.up_color = options.short_color.map(|color| color.to_css());
+                    entry.down_color = options.long_color.map(|color| color.to_css());
+                }
+            }
+        }
+        if let Some(entry) = self.series_entry_mut(series_ids[1]) {
+            entry.delta_histogram = false;
+            entry.market_tone = Some(MarketTone::Down);
+            entry.line_color = options.long_color.map(|color| color.to_css());
+            entry.up_color = None;
+            entry.down_color = None;
+        }
+        self.set_series_visible(series_ids[0], study_visible && output_visibles[0]);
+        self.set_series_visible(
+            series_ids[1],
+            options.style != LiquidationStyle::Net && study_visible && output_visibles[1],
+        );
+        self.invalidate_frame_series(series_ids[0]);
+        self.invalidate_frame_series(series_ids[1]);
+    }
+
+    fn install_new_liquidation_series(
+        &mut self,
+        study_id: u64,
+        title: &str,
+        columns: &PreparedColumns,
+    ) -> Result<SeriesId, ExternalStudyError> {
+        let chrome = self.indicator_chrome;
+        let series_id = self.add_series(SeriesKind::Histogram);
+        if let Err(error) = set_series_data(self, series_id, columns) {
+            let _ = self.remove_series(series_id);
+            return Err(error);
+        }
+        if let Some(series) = self.series_entry_mut(series_id) {
+            series.title = title.to_owned();
+            series.title_visible = chrome.name_labels_visible;
+            series.last_value_visible = chrome.value_labels_visible;
+            series.price_line_visible = chrome.price_lines_visible;
+            series.price_format.kind = PriceFormatKind::Volume;
+            series.price_format.precision = LIQUIDATION_PRECISION;
+            series.price_format.formatter = None;
+        }
+        let pane_key = (study_id, 0);
+        let mut created_pane = None;
+        let pane_index = if let Some(index) = self
+            .external_study_panes
+            .get(&pane_key)
+            .and_then(|pane_id| self.pane_index_for_id(*pane_id))
+        {
+            index
+        } else {
+            self.external_study_panes.remove(&pane_key);
+            let Some(index) = self.add_pane(false) else {
+                let _ = self.remove_series(series_id);
+                return Err(ExternalStudyError::InstallationRejected);
+            };
+            self.panes[index].stretch_factor = self.separate_pane_stretch();
+            let Some(pane_id) = self.pane_stable_id(index) else {
+                let _ = self.remove_series(series_id);
+                let _ = self.remove_pane(index);
+                return Err(ExternalStudyError::InstallationRejected);
+            };
+            created_pane = Some((pane_key, pane_id, index));
+            index
+        };
+        if !self.try_set_series_pane_and_scale(series_id, pane_index, None, "right") {
+            let _ = self.remove_series(series_id);
+            if let Some((_, _, index)) = created_pane {
+                let _ = self.remove_pane(index);
+            }
+            return Err(ExternalStudyError::InstallationRejected);
+        }
+        if let Some((key, pane_id, _)) = created_pane {
+            self.external_study_panes.insert(key, pane_id);
+        }
+        Ok(series_id)
     }
 
     fn install_new_open_interest_series(
@@ -987,11 +1462,17 @@ impl ChartEngine {
     pub fn set_external_study_visible(&mut self, study_id: u64, visible: bool) -> bool {
         let mut changed = false;
         let mut painted = Vec::new();
-        for (&(candidate, _), state) in &mut self.external_study_outputs {
+        for (&(candidate, output_index), state) in &mut self.external_study_outputs {
             if candidate == study_id {
                 changed |= state.study_visible != visible;
                 state.study_visible = visible;
-                painted.push((state.series_id, visible && state.output_visible));
+                let net_hidden_secondary = state.liquidations
+                    && output_index == 1
+                    && state.liquidation_options.style == LiquidationStyle::Net;
+                painted.push((
+                    state.series_id,
+                    !net_hidden_secondary && visible && state.output_visible,
+                ));
             }
         }
         for (id, visible) in painted {
@@ -1061,11 +1542,17 @@ impl ChartEngine {
         let outputs = self
             .external_study_outputs
             .iter()
-            .map(|(&(_, output_index), state)| (output_index, state.series_id, state.open_interest))
+            .map(|(&(_, output_index), state)| {
+                (
+                    output_index,
+                    state.series_id,
+                    state.open_interest || state.liquidations,
+                )
+            })
             .collect::<Vec<_>>();
-        for (output_index, series_id, is_open_interest) in outputs {
+        for (output_index, series_id, is_specialized) in outputs {
             if let Some(series) = self.series_entry_mut(series_id) {
-                series.line_color = (!is_open_interest && series.market_tone.is_none())
+                series.line_color = (!is_specialized && series.market_tone.is_none())
                     .then(|| default_output_color(output_index));
                 series.line_width = Some(DEFAULT_EXTERNAL_STUDY_LINE_WIDTH);
             }
@@ -1264,6 +1751,141 @@ fn validate_open_interest_timestamp(
         return Err(ExternalStudyError::UnsupportedTimestampPrecision);
     }
     Ok((second, time))
+}
+
+struct PreparedLiquidationColumns {
+    seconds: Vec<i64>,
+    times: Vec<f64>,
+    primary: Vec<f64>,
+    secondary: Vec<f64>,
+}
+
+fn encode_liquidation_pair(style: LiquidationStyle, short: f64, long: f64) -> (f64, f64) {
+    match style {
+        LiquidationStyle::Split => (
+            if short > 0.0 { short } else { f64::NAN },
+            if long > 0.0 { -long } else { f64::NAN },
+        ),
+        LiquidationStyle::Stacked => (
+            if short > 0.0 { short + long } else { f64::NAN },
+            if long > 0.0 { long } else { f64::NAN },
+        ),
+        LiquidationStyle::Net => (
+            if short > 0.0 || long > 0.0 {
+                short - long
+            } else {
+                f64::NAN
+            },
+            if long > 0.0 { long } else { f64::NAN },
+        ),
+    }
+}
+
+fn decode_liquidation_pair(style: LiquidationStyle, s0: f64, s1: f64) -> (f64, f64) {
+    match style {
+        LiquidationStyle::Split => (
+            if s0.is_finite() { s0.max(0.0) } else { 0.0 },
+            if s1.is_finite() { (-s1).max(0.0) } else { 0.0 },
+        ),
+        LiquidationStyle::Stacked => {
+            let long = if s1.is_finite() { s1.max(0.0) } else { 0.0 };
+            let short = if s0.is_finite() {
+                (s0 - long).max(0.0)
+            } else {
+                0.0
+            };
+            (short, long)
+        }
+        LiquidationStyle::Net => {
+            let long = if s1.is_finite() { s1.max(0.0) } else { 0.0 };
+            let short = if s0.is_finite() {
+                (s0 + long).max(0.0)
+            } else {
+                0.0
+            };
+            (short, long)
+        }
+    }
+}
+
+fn prepare_liquidation_columns(
+    bars: &[LiquidationBar],
+    style: LiquidationStyle,
+) -> Result<PreparedLiquidationColumns, ExternalStudyError> {
+    let mut seconds = Vec::with_capacity(bars.len());
+    let mut times = Vec::with_capacity(bars.len());
+    let mut primary = Vec::with_capacity(bars.len());
+    let mut secondary = Vec::with_capacity(bars.len());
+    let mut previous_second: Option<i64> = None;
+
+    for bar in bars {
+        let (second, time) = validate_open_interest_timestamp(bar.timestamp_unix_nanos)?;
+        if previous_second.is_some_and(|prev| prev >= second) {
+            return Err(ExternalStudyError::NonIncreasingTimestamp);
+        }
+        previous_second = Some(second);
+        let long = open_interest_value(bar.long_volume)?;
+        let short = open_interest_value(bar.short_volume)?;
+        let (p, s) = encode_liquidation_pair(style, short, long);
+        seconds.push(second);
+        times.push(time);
+        primary.push(p);
+        secondary.push(s);
+    }
+
+    Ok(PreparedLiquidationColumns {
+        seconds,
+        times,
+        primary,
+        secondary,
+    })
+}
+
+fn merge_liquidation_series(
+    primary_points: &[crate::SeriesDataPoint],
+    secondary_points: &[crate::SeriesDataPoint],
+    from_style: LiquidationStyle,
+    to_style: LiquidationStyle,
+) -> PreparedLiquidationColumns {
+    let mut seconds = Vec::with_capacity(primary_points.len().max(secondary_points.len()));
+    let mut times = Vec::with_capacity(seconds.capacity());
+    let mut primary = Vec::with_capacity(seconds.capacity());
+    let mut secondary = Vec::with_capacity(seconds.capacity());
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < primary_points.len() || j < secondary_points.len() {
+        let (time, v0, v1) = match (primary_points.get(i), secondary_points.get(j)) {
+            (Some(a), Some(b)) if a.time == b.time => {
+                i += 1;
+                j += 1;
+                (a.time, a.close, b.close)
+            }
+            (Some(a), Some(b)) if a.time < b.time => {
+                i += 1;
+                (a.time, a.close, f64::NAN)
+            }
+            (Some(a), None) => {
+                i += 1;
+                (a.time, a.close, f64::NAN)
+            }
+            (_, Some(b)) => {
+                j += 1;
+                (b.time, f64::NAN, b.close)
+            }
+            (None, None) => break,
+        };
+        let (short, long) = decode_liquidation_pair(from_style, v0, v1);
+        let (p, s) = encode_liquidation_pair(to_style, short, long);
+        seconds.push(time);
+        times.push(time as f64);
+        primary.push(p);
+        secondary.push(s);
+    }
+    PreparedLiquidationColumns {
+        seconds,
+        times,
+        primary,
+        secondary,
+    }
 }
 
 fn prepare_open_interest_columns(
@@ -2107,6 +2729,203 @@ mod tests {
         assert_eq!(chart.series_visible(oi_id), Some(false));
         assert!(chart.remove_external_studies(&[11]));
         assert_eq!(chart.open_interest_series(11), None);
+        assert_eq!(chart.panes.len(), 1);
+    }
+
+    #[test]
+    fn liquidations_study_supports_styles_colors_updates_legend_and_lifecycle() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .set_series_data(
+                0,
+                &[2.0, 3.0, 4.0],
+                &[100.0, 101.0, 102.0],
+                &[102.0, 103.0, 104.0],
+                &[99.0, 100.0, 101.0],
+                &[101.0, 102.0, 103.0],
+            )
+            .unwrap();
+
+        let bars = [
+            // Older than the primary series: trimmed automatically.
+            LiquidationBar {
+                timestamp_unix_nanos: 1_000_000_000,
+                long_volume: 50_000.0,
+                short_volume: 10_000.0,
+            },
+            LiquidationBar {
+                timestamp_unix_nanos: 2_000_000_000,
+                long_volume: 250_000.0,
+                short_volume: 0.0,
+            },
+            LiquidationBar {
+                timestamp_unix_nanos: 3_000_000_000,
+                long_volume: 100_000.0,
+                short_volume: 400_000.0,
+            },
+            LiquidationBar {
+                timestamp_unix_nanos: 4_000_000_000,
+                long_volume: 600_000.0,
+                short_volume: 150_000.0,
+            },
+        ];
+
+        assert_eq!(chart.set_liquidations(12, 1, &bars), Ok(true));
+        let [s0, s1] = chart.liquidation_series(12).expect("liquidation series");
+        assert_eq!(chart.panes.len(), 2);
+        assert_eq!(chart.series_entry(s0).unwrap().kind, SeriesKind::Histogram);
+        assert_eq!(chart.series_entry(s1).unwrap().kind, SeriesKind::Histogram);
+        assert_eq!(
+            chart.series_entry(s0).unwrap().pane_index,
+            chart.series_entry(s1).unwrap().pane_index
+        );
+        assert_eq!(
+            chart.series_entry(s0).unwrap().price_format.kind,
+            PriceFormatKind::Volume
+        );
+        // Leading bar older than primary series was trimmed.
+        assert_eq!(chart.series_data(s1).first().unwrap().time, 2);
+        assert_eq!(chart.series_data(s1).first().unwrap().close, -250_000.0);
+
+        // Live streaming bar update on newest timestamp.
+        assert_eq!(
+            chart.update_liquidations(
+                12,
+                2,
+                LiquidationBar {
+                    timestamp_unix_nanos: 4_000_000_000,
+                    long_volume: 750_000.0,
+                    short_volume: 200_000.0,
+                }
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            chart.liquidation_bar_values_at(12, None),
+            Some((200_000.0, 750_000.0))
+        );
+
+        // Legend reports localized positive Short & Long values with settings enabled.
+        let legend = chart.financial_legend(crate::FinancialLegendRequest {
+            logical_index: None,
+            primary_title: "BTC",
+            show_primary_ohlc: true,
+            primary_values_series: None,
+            leading_series: &[],
+            trailing_series: &[],
+        });
+        let row = legend
+            .iter()
+            .find(|r| r.identity == crate::FinancialLegendIdentity::ExternalStudy(12))
+            .expect("liquidations legend row");
+        assert_eq!(
+            row.title,
+            crate::text::legend::LIQUIDATIONS.text(crate::ChartLanguage::English)
+        );
+        assert!(row.settings_available);
+        assert_eq!(row.values.len(), 2);
+        assert!(row.values[0].text.starts_with("Short "));
+        assert!(row.values[1].text.starts_with("Long "));
+        assert!(!row.values[1].text.contains('-'));
+
+        // Language switch re-titles the study outputs.
+        chart.set_language(crate::ChartLanguage::German);
+        assert_eq!(
+            chart.series_entry(s0).unwrap().title,
+            crate::text::legend::SHORTS.text(crate::ChartLanguage::German)
+        );
+        chart.set_language(crate::ChartLanguage::English);
+
+        // Switching across Split, Stacked, and Net preserves exact decoded volumes in place.
+        let custom_long = Color::rgb(0xFF, 0x33, 0x44);
+        let custom_short = Color::rgb(0x00, 0xCC, 0x66);
+        for style in [
+            LiquidationStyle::Stacked,
+            LiquidationStyle::Net,
+            LiquidationStyle::Split,
+        ] {
+            let options = LiquidationOptions {
+                style,
+                long_color: Some(custom_long),
+                short_color: Some(custom_short),
+            };
+            assert!(chart.set_liquidation_options(12, options));
+            assert_eq!(chart.liquidation_options(12), Some(options));
+            assert_eq!(
+                chart.liquidation_bar_values_at(12, None),
+                Some((200_000.0, 750_000.0))
+            );
+            assert_eq!(
+                chart.series_visible(s1),
+                Some(style != LiquidationStyle::Net)
+            );
+            let mode_legend = chart.financial_legend(crate::FinancialLegendRequest {
+                logical_index: None,
+                primary_title: "BTC",
+                show_primary_ohlc: true,
+                primary_values_series: None,
+                leading_series: &[],
+                trailing_series: &[],
+            });
+            let mode_row = mode_legend
+                .iter()
+                .find(|r| r.identity == crate::FinancialLegendIdentity::ExternalStudy(12))
+                .expect("liquidations legend row");
+            if style == LiquidationStyle::Net {
+                assert_eq!(mode_row.values.len(), 1);
+                assert!(mode_row.values[0].text.starts_with("Net "));
+                assert_eq!(mode_row.values[0].color, Some(custom_long.to_css()));
+            } else {
+                assert_eq!(mode_row.values.len(), 2);
+                assert_eq!(mode_row.values[0].color, Some(custom_short.to_css()));
+                assert_eq!(mode_row.values[1].color, Some(custom_long.to_css()));
+            }
+        }
+
+        // Visibility toggle in Net mode keeps the hidden helper series hidden.
+        assert!(chart.set_liquidation_options(
+            12,
+            LiquidationOptions {
+                style: LiquidationStyle::Net,
+                long_color: None,
+                short_color: None,
+            }
+        ));
+        assert!(chart.set_external_study_visible(12, false));
+        assert_eq!(chart.series_visible(s0), Some(false));
+        assert_eq!(chart.series_visible(s1), Some(false));
+        assert!(chart.set_external_study_visible(12, true));
+        assert_eq!(chart.series_visible(s0), Some(true));
+        assert_eq!(chart.series_visible(s1), Some(false));
+
+        // Stale generation, negative volumes, and hijacking are rejected.
+        assert_eq!(chart.set_liquidations(12, 2, &bars), Ok(false));
+        assert_eq!(
+            chart.update_liquidations(
+                12,
+                3,
+                LiquidationBar {
+                    timestamp_unix_nanos: 4_000_000_000,
+                    long_volume: -1.0,
+                    short_volume: 0.0,
+                }
+            ),
+            Err(ExternalStudyError::InvalidValue)
+        );
+        assert_eq!(
+            chart.install_external_study_output(
+                12,
+                0,
+                descriptor("Hijack", ExternalStudyPaneTarget::Price),
+                9,
+                &[2_000_000_000],
+                &[Some(1.0)],
+            ),
+            Err(ExternalStudyError::InstallationRejected)
+        );
+
+        assert!(chart.remove_external_studies(&[12]));
+        assert_eq!(chart.liquidation_series(12), None);
         assert_eq!(chart.panes.len(), 1);
     }
 }

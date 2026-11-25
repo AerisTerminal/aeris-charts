@@ -165,8 +165,8 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudyThresholdRegion, MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar, OpenInterestOptions,
-    OpenInterestStyle,
+    ExternalStudyThresholdRegion, LiquidationBar, LiquidationOptions, LiquidationStyle,
+    MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar, OpenInterestOptions, OpenInterestStyle,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -3644,6 +3644,32 @@ impl ChartEngine {
                 && entry.title == text::legend::OPEN_INTEREST.text(previous)
             {
                 retitle.push((id, text::legend::OPEN_INTEREST.text(language).to_string()));
+            }
+        }
+        let mut liq_studies: Vec<u64> = self
+            .external_study_outputs
+            .iter()
+            .filter(|(_, state)| state.liquidations)
+            .map(|(&(study_id, _), _)| study_id)
+            .collect();
+        liq_studies.sort_unstable();
+        liq_studies.dedup();
+        for study_id in liq_studies {
+            let Some(series) = self.liquidation_series(study_id) else {
+                continue;
+            };
+            for (index, id) in series.into_iter().enumerate() {
+                let phrase = [text::legend::SHORTS, text::legend::LONGS][index];
+                if let Some(entry) = self.series_entry(id)
+                    && entry.title == phrase.text(previous)
+                {
+                    retitle.push((id, phrase.text(language).to_string()));
+                }
+                if let Some(state) = self.external_study_outputs.get_mut(&(study_id, index))
+                    && state.legend_label.as_deref() == Some(phrase.text(previous))
+                {
+                    state.legend_label = Some(phrase.text(language).to_string());
+                }
             }
         }
         for (id, title) in retitle {

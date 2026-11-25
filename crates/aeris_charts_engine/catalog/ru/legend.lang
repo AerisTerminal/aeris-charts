@@ -15,3 +15,7 @@ calls = Коллы
 puts = Путы
 delta = Дельта
 open_interest = Открытый интерес
+liquidations = Ликвидации
+longs = Лонг
+shorts = Шорт
+net = Нетто

@@ -13,3 +13,7 @@ calls = 看涨期权
 puts = 看跌期权
 delta = Delta
 open_interest = 持仓量
+liquidations = 爆仓
+longs = 多头
+shorts = 空头
+net = 净额

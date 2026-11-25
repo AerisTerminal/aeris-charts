@@ -206,6 +206,7 @@ impl ChartEngine {
                 .external_study_visible(output.study_id)
                 .unwrap_or(false);
             let is_open_interest = self.is_open_interest_study(output.study_id);
+            let is_liquidations = self.is_liquidation_study(output.study_id);
             let oi_snapshot = is_open_interest
                 .then(|| snapshot_for(&snapshots, first_output.series_id))
                 .flatten();
@@ -264,6 +265,43 @@ impl ChartEngine {
                     } else {
                         Vec::new()
                     }
+                } else if is_liquidations {
+                    if let (Some(options), Some((short, long))) = (
+                        self.liquidation_options(output.study_id),
+                        self.liquidation_bar_values_at(output.study_id, request.logical_index),
+                    ) {
+                        let short_color = options.short_color.unwrap_or(market.up).to_css();
+                        let long_color = options.long_color.unwrap_or(market.down).to_css();
+                        match options.style {
+                            crate::LiquidationStyle::Net => {
+                                let net = short - long;
+                                let formatted = self.format_series_resolved(first_series, net);
+                                let label = crate::text::legend::NET.text(self.language);
+                                vec![FinancialLegendValue {
+                                    text: format!("{label} {formatted}"),
+                                    color: Some(if net >= 0.0 { short_color } else { long_color }),
+                                }]
+                            }
+                            crate::LiquidationStyle::Split | crate::LiquidationStyle::Stacked => {
+                                let short_label = crate::text::legend::SHORTS.text(self.language);
+                                let long_label = crate::text::legend::LONGS.text(self.language);
+                                let short_text = self.format_series_resolved(first_series, short);
+                                let long_text = self.format_series_resolved(first_series, long);
+                                vec![
+                                    FinancialLegendValue {
+                                        text: format!("{short_label} {short_text}"),
+                                        color: Some(short_color),
+                                    },
+                                    FinancialLegendValue {
+                                        text: format!("{long_label} {long_text}"),
+                                        color: Some(long_color),
+                                    },
+                                ]
+                            }
+                        }
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     group
                         .iter()
@@ -300,6 +338,10 @@ impl ChartEngine {
                         .to_owned()
                 } else if is_open_interest {
                     crate::text::legend::OPEN_INTEREST
+                        .text(self.language)
+                        .to_owned()
+                } else if is_liquidations {
+                    crate::text::legend::LIQUIDATIONS
                         .text(self.language)
                         .to_owned()
                 } else {
