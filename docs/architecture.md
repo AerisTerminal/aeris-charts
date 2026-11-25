@@ -2287,8 +2287,8 @@ take over an options-volume study id, and options volume cannot take over a gene
 Open interest is likewise an engine-owned study on the same transaction (`set_open_interest`,
 `set_open_interest_with_options`, `set_open_interest_options`, `update_open_interest`,
 `open_interest_series`). The host supplies bar-aligned `OpenInterestBar` samples and
-`OpenInterestOptions` (`OpenInterestStyle`: `Candles`, `Bars`, `Line`, or `Area` plus optional
-line/up/down colors); the engine derives continuous OHLC candles (inheriting each bar's open from
+`OpenInterestOptions` (`OpenInterestStyle`: `Line` by default, or `Candles`, `Bars`, `Area`, plus
+optional line/up/down colors); the engine derives continuous OHLC candles (inheriting each bar's
 the prior close when omitted and retaining live intra-bar high/low wicks on the forming bar),
 switches series kinds and colors in place without losing history or pane layout, formats the right
 scale as volume, exposes localized OHLC (candles/bars) or close (line/area) legend values with

@@ -47,9 +47,9 @@ pub struct OpenInterestBar {
 /// How an engine-owned Open Interest study renders its sub-pane series.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OpenInterestStyle {
-    #[default]
     Candles,
     Bars,
+    #[default]
     Line,
     Area,
 }
@@ -1908,10 +1908,23 @@ mod tests {
             .open_interest_series(11)
             .expect("open interest series");
         let entry = chart.series_entry(oi_id).expect("series entry");
-        assert_eq!(entry.kind, SeriesKind::Candlestick);
+        assert_eq!(entry.kind, SeriesKind::Line);
         assert_eq!(entry.price_format.kind, PriceFormatKind::Volume);
         assert_eq!(entry.pane_index, 1);
         assert_eq!(chart.panes.len(), 2);
+
+        // Switch to Candles to verify OHLC derivation and candlestick legend readout.
+        assert!(chart.set_open_interest_options(
+            11,
+            OpenInterestOptions {
+                style: OpenInterestStyle::Candles,
+                ..OpenInterestOptions::default()
+            },
+        ));
+        assert_eq!(
+            chart.series_entry(oi_id).unwrap().kind,
+            SeriesKind::Candlestick
+        );
 
         // Leading t=1 was trimmed, yet t=2 inherited open=10_000.0 from t=1's close.
         let points = chart.series_data(oi_id);
