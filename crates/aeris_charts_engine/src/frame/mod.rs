@@ -47,6 +47,7 @@ pub(crate) mod conflation;
 mod crosshair;
 mod depth_geometry;
 mod drawings;
+mod external_study_scene;
 mod feature_geometry;
 mod footprint_geometry;
 mod general_series_geometry;
@@ -2841,6 +2842,20 @@ impl ChartEngine {
                 out.scissor = [pane_x, pane_y, pane_right - pane_x, pane_h];
             }
             // In-pane legends follow the plot range and paint outside its plot clip.
+            let study_scene_start = out.main.len();
+            self.emit_external_study_scenes(pi, hpr, vpr, &mut out.main, &mut out.points);
+            if out.main.len() != study_scene_start {
+                retained.series_segments[pi].push(FrameSeriesSegment {
+                    series_id: None,
+                    start: study_scene_start,
+                    end: out.main.len(),
+                    revision: self
+                        .frame_invalidation
+                        .scene
+                        .max(self.frame_invalidation.coordinate),
+                    coordinate_revision: self.frame_invalidation.coordinate,
+                });
+            }
             let legend_start = out.main.len();
             self.build_general_legend_frame(pi, hpr, vpr, &mut out.main);
             if out.main.len() != legend_start {

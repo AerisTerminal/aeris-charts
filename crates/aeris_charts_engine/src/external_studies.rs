@@ -3250,7 +3250,60 @@ mod tests {
         );
         assert_eq!(chart.external_study_scene_objects(42).len(), 1);
 
+        let table = ExternalStudySceneObject::Table(ExternalStudySceneTable {
+            position: ExternalStudyTablePosition::BottomRight,
+            rows: 1,
+            cols: 2,
+            border_color_rgba: Some(0x3341_55FF),
+            background_color_rgba: Some(0x0F17_2AE0),
+            cells: vec![
+                ExternalStudySceneTableCell {
+                    row: 0,
+                    col: 0,
+                    text: "HTF".to_string(),
+                    text_color_rgba: Some(0xE2E8_F0FF),
+                    background_color_rgba: None,
+                },
+                ExternalStudySceneTableCell {
+                    row: 0,
+                    col: 1,
+                    text: "BULL".to_string(),
+                    text_color_rgba: Some(0x22C5_5EFF),
+                    background_color_rgba: None,
+                },
+            ],
+        });
+        assert_eq!(
+            chart.apply_external_study_scene_deltas(
+                42,
+                &[ExternalStudySceneDelta::Create {
+                    object_id: 3,
+                    object: table,
+                }]
+            ),
+            Ok(true)
+        );
+        let frame_with_scene = chart.build_frame();
+        let has_table_text = frame_with_scene.panes[0].main.iter().any(|prim| {
+            matches!(
+                prim,
+                aeris_charts_render::draw_list::Prim::Text { text, .. } if text == "BULL"
+            )
+        });
+        assert!(has_table_text, "study scene table must emit Text prims");
+
         assert!(chart.remove_external_studies(&[42]));
         assert!(chart.external_study_scene_objects(42).is_empty());
+        let frame_after_remove = chart.build_frame();
+        let still_has_table_text = frame_after_remove.panes[0].main.iter().any(|prim| {
+            matches!(
+                prim,
+                aeris_charts_render::draw_list::Prim::Text { text, .. } if text == "BULL"
+            )
+        });
+        assert!(
+            !still_has_table_text,
+            "removing study must clear emitted scene prims"
+        );
     }
 }
