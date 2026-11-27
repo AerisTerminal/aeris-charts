@@ -165,8 +165,13 @@ pub use external_studies::{
     ExternalStudyError, ExternalStudyInputRequirements, ExternalStudyInputStream,
     ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
     ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
+    ExternalStudySceneBox, ExternalStudySceneDelta, ExternalStudySceneLabel,
+    ExternalStudySceneLine, ExternalStudySceneObject, ExternalStudyScenePolyline,
+    ExternalStudySceneTable, ExternalStudySceneTableCell, ExternalStudyTablePosition,
     ExternalStudyThresholdRegion, LiquidationBar, LiquidationOptions, LiquidationStyle,
-    MAX_EXTERNAL_STUDY_OUTPUTS, OpenInterestBar, OpenInterestOptions, OpenInterestStyle,
+    MAX_EXTERNAL_STUDY_OUTPUTS, MAX_EXTERNAL_STUDY_POLYLINE_POINTS,
+    MAX_EXTERNAL_STUDY_SCENE_OBJECTS, MAX_EXTERNAL_STUDY_TABLE_CELLS, OpenInterestBar,
+    OpenInterestOptions, OpenInterestStyle,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
@@ -2220,6 +2225,7 @@ pub struct ChartEngine {
     indicator_chrome: IndicatorChromeOptions,
     external_study_outputs: BTreeMap<(u64, usize), external_studies::ExternalStudyOutputState>,
     external_study_panes: BTreeMap<(u64, u8), PaneId>,
+    external_study_scenes: BTreeMap<u64, BTreeMap<u64, external_studies::ExternalStudySceneObject>>,
     /// During study-state restore, persisted oscillator panes are empty until their studies are
     /// recreated. The cursor lets the normal placement path reuse those panes without changing
     /// interactive study creation semantics.
@@ -2516,6 +2522,7 @@ impl ChartEngine {
             indicator_chrome: IndicatorChromeOptions::default(),
             external_study_outputs: BTreeMap::new(),
             external_study_panes: BTreeMap::new(),
+            external_study_scenes: BTreeMap::new(),
             study_restore_pane_cursor: None,
             indicator_changes: Vec::new(),
             trade_streams: HashMap::new(),

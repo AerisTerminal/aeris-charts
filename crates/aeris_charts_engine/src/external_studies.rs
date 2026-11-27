@@ -20,6 +20,12 @@ const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
 
 /// Hard chart-local bound for host-computed scalar outputs.
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
+/// Hard chart-local bound for study-owned scene objects per study instance.
+pub const MAX_EXTERNAL_STUDY_SCENE_OBJECTS: usize = 512;
+/// Hard chart-local bound for polyline vertices on one study scene object.
+pub const MAX_EXTERNAL_STUDY_POLYLINE_POINTS: usize = 256;
+/// Hard chart-local bound for cells in one study-owned viewport table.
+pub const MAX_EXTERNAL_STUDY_TABLE_CELLS: usize = 256;
 
 const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
     (crate::text::legend::CALLS, MarketTone::Up),
@@ -163,8 +169,115 @@ pub enum ExternalStudyInputStream {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExternalStudyPlotKind {
     Line,
+    StepLine,
     Histogram,
     Area,
+}
+
+/// Viewport corner anchor for a study-owned dashboard table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalStudyTablePosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+/// Study-owned line segment between two `(timestamp_unix_nanos, price)` anchors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExternalStudySceneLine {
+    pub x1_unix_nanos: i64,
+    pub y1: f64,
+    pub x2_unix_nanos: i64,
+    pub y2: f64,
+    pub color_rgba: u32,
+    pub width: u8,
+    pub extend_left: bool,
+    pub extend_right: bool,
+}
+
+/// Study-owned shaded rectangle between two `(timestamp_unix_nanos, price)` corners.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExternalStudySceneBox {
+    pub left_unix_nanos: i64,
+    pub top: f64,
+    pub right_unix_nanos: i64,
+    pub bottom: f64,
+    pub border_color_rgba: Option<u32>,
+    pub fill_color_rgba: Option<u32>,
+    pub border_width: u8,
+}
+
+/// Study-owned polyline connecting `(timestamp_unix_nanos, price)` vertices.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalStudyScenePolyline {
+    pub points: Vec<(i64, f64)>,
+    pub closed: bool,
+    pub line_color_rgba: u32,
+    pub fill_color_rgba: Option<u32>,
+    pub width: u8,
+}
+
+/// Study-owned text annotation anchored at `(timestamp_unix_nanos, price)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalStudySceneLabel {
+    pub x_unix_nanos: i64,
+    pub y: f64,
+    pub text: String,
+    pub text_color_rgba: u32,
+    pub background_color_rgba: Option<u32>,
+}
+
+/// One cell inside an [`ExternalStudySceneTable`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalStudySceneTableCell {
+    pub row: u16,
+    pub col: u16,
+    pub text: String,
+    pub text_color_rgba: Option<u32>,
+    pub background_color_rgba: Option<u32>,
+}
+
+/// Study-owned viewport-anchored grid table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalStudySceneTable {
+    pub position: ExternalStudyTablePosition,
+    pub rows: u16,
+    pub cols: u16,
+    pub border_color_rgba: Option<u32>,
+    pub background_color_rgba: Option<u32>,
+    pub cells: Vec<ExternalStudySceneTableCell>,
+}
+
+/// One study-owned visual scene object kept strictly separate from user drawings.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExternalStudySceneObject {
+    Line(ExternalStudySceneLine),
+    Box(ExternalStudySceneBox),
+    Polyline(ExternalStudyScenePolyline),
+    Label(ExternalStudySceneLabel),
+    Table(ExternalStudySceneTable),
+}
+
+/// Compact incremental scene delta applied to one study's owned scene layer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExternalStudySceneDelta {
+    Create {
+        object_id: u64,
+        object: ExternalStudySceneObject,
+    },
+    Update {
+        object_id: u64,
+        object: ExternalStudySceneObject,
+    },
+    Delete {
+        object_id: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1569,8 +1682,14 @@ impl ChartEngine {
             .copied()
             .filter(|(study_id, _)| study_ids.contains(study_id))
             .collect::<Vec<_>>();
+        let removed_scenes = study_ids.iter().fold(false, |acc, id| {
+            acc | self.external_study_scenes.remove(id).is_some()
+        });
         if keys.is_empty() {
-            return false;
+            if removed_scenes {
+                self.invalidate_frame_all();
+            }
+            return removed_scenes;
         }
         for key in keys {
             if let Some(state) = self.external_study_outputs.remove(&key) {
@@ -1582,7 +1701,88 @@ impl ChartEngine {
         }
         self.external_study_panes
             .retain(|(study_id, _), _| !study_ids.contains(study_id));
+        if removed_scenes {
+            self.invalidate_frame_all();
+        }
         true
+    }
+
+    /// Applies one transactional batch of compact scene deltas for `study_id`.
+    ///
+    /// Study-owned scene objects are bounded at [`MAX_EXTERNAL_STUDY_SCENE_OBJECTS`] per study
+    /// and never interact with user drawing undo/redo/clear operations.
+    pub fn apply_external_study_scene_deltas(
+        &mut self,
+        study_id: u64,
+        deltas: &[ExternalStudySceneDelta],
+    ) -> Result<bool, ExternalStudyError> {
+        if deltas.is_empty() {
+            return Ok(false);
+        }
+        for delta in deltas {
+            match delta {
+                ExternalStudySceneDelta::Create { object, .. }
+                | ExternalStudySceneDelta::Update { object, .. } => {
+                    validate_scene_object(object)?;
+                }
+                ExternalStudySceneDelta::Delete { .. } => {}
+            }
+        }
+        let mut next = self
+            .external_study_scenes
+            .get(&study_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut changed = false;
+        for delta in deltas {
+            match delta {
+                ExternalStudySceneDelta::Create { object_id, object }
+                | ExternalStudySceneDelta::Update { object_id, object } => {
+                    if !next.contains_key(object_id)
+                        && next.len() >= MAX_EXTERNAL_STUDY_SCENE_OBJECTS
+                    {
+                        return Err(ExternalStudyError::CapacityExceeded);
+                    }
+                    if next.get(object_id) != Some(object) {
+                        next.insert(*object_id, object.clone());
+                        changed = true;
+                    }
+                }
+                ExternalStudySceneDelta::Delete { object_id } => {
+                    changed |= next.remove(object_id).is_some();
+                }
+            }
+        }
+        if changed {
+            if next.is_empty() {
+                self.external_study_scenes.remove(&study_id);
+            } else {
+                self.external_study_scenes.insert(study_id, next);
+            }
+            self.invalidate_frame_all();
+        }
+        Ok(changed)
+    }
+
+    /// Returns all currently committed study-owned scene objects for `study_id`.
+    #[must_use]
+    pub fn external_study_scene_objects(
+        &self,
+        study_id: u64,
+    ) -> Vec<(u64, &ExternalStudySceneObject)> {
+        self.external_study_scenes
+            .get(&study_id)
+            .map(|scene| scene.iter().map(|(&id, obj)| (id, obj)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Clears all study-owned scene objects for `study_id`.
+    pub fn clear_external_study_scene(&mut self, study_id: u64) -> bool {
+        let removed = self.external_study_scenes.remove(&study_id).is_some();
+        if removed {
+            self.invalidate_frame_all();
+        }
+        removed
     }
 
     pub(crate) fn apply_indicator_chrome_to_external_studies(
@@ -1641,7 +1841,9 @@ fn validate_descriptor(
             || region.lower >= region.upper
             || !matches!(
                 descriptor.plot,
-                ExternalStudyPlotKind::Line | ExternalStudyPlotKind::Area
+                ExternalStudyPlotKind::Line
+                    | ExternalStudyPlotKind::StepLine
+                    | ExternalStudyPlotKind::Area
             )
     }) || (descriptor.point_style == ExternalStudyPointStyle::MomentumHistogram
         && descriptor.plot != ExternalStudyPlotKind::Histogram)
@@ -1969,6 +2171,11 @@ fn apply_presentation(
 ) {
     if let Some(series) = engine.series_entry_mut(series_id) {
         series.title = descriptor.title.to_owned();
+        series.line_type = if descriptor.plot == ExternalStudyPlotKind::StepLine {
+            aeris_charts_render::draw_list::LineType::WithSteps
+        } else {
+            aeris_charts_render::draw_list::LineType::Simple
+        };
     }
     let threshold = descriptor
         .threshold_region
@@ -1982,9 +2189,54 @@ fn apply_presentation(
     }
 }
 
+fn validate_scene_object(object: &ExternalStudySceneObject) -> Result<(), ExternalStudyError> {
+    let finite_price = |value: f64| value.is_finite() && value.abs() <= MAX_SAFE_VALUE;
+    match object {
+        ExternalStudySceneObject::Line(line) => {
+            if !finite_price(line.y1) || !finite_price(line.y2) {
+                return Err(ExternalStudyError::InvalidValue);
+            }
+        }
+        ExternalStudySceneObject::Box(rect) => {
+            if !finite_price(rect.top) || !finite_price(rect.bottom) {
+                return Err(ExternalStudyError::InvalidValue);
+            }
+        }
+        ExternalStudySceneObject::Polyline(poly) => {
+            if poly.points.len() > MAX_EXTERNAL_STUDY_POLYLINE_POINTS {
+                return Err(ExternalStudyError::CapacityExceeded);
+            }
+            if poly.points.iter().any(|&(_, y)| !finite_price(y)) {
+                return Err(ExternalStudyError::InvalidValue);
+            }
+        }
+        ExternalStudySceneObject::Label(label) => {
+            if !finite_price(label.y) {
+                return Err(ExternalStudyError::InvalidValue);
+            }
+            if label.text.len() > MAX_EXTERNAL_STUDY_TITLE_BYTES {
+                return Err(ExternalStudyError::MetadataTooLong);
+            }
+        }
+        ExternalStudySceneObject::Table(table) => {
+            if table.cells.len() > MAX_EXTERNAL_STUDY_TABLE_CELLS {
+                return Err(ExternalStudyError::CapacityExceeded);
+            }
+            if table
+                .cells
+                .iter()
+                .any(|cell| cell.text.len() > MAX_EXTERNAL_STUDY_LEGEND_LABEL_BYTES)
+            {
+                return Err(ExternalStudyError::MetadataTooLong);
+            }
+        }
+    }
+    Ok(())
+}
+
 const fn series_kind(plot: ExternalStudyPlotKind) -> SeriesKind {
     match plot {
-        ExternalStudyPlotKind::Line => SeriesKind::Line,
+        ExternalStudyPlotKind::Line | ExternalStudyPlotKind::StepLine => SeriesKind::Line,
         ExternalStudyPlotKind::Histogram => SeriesKind::Histogram,
         ExternalStudyPlotKind::Area => SeriesKind::Area,
     }
@@ -2927,5 +3179,78 @@ mod tests {
         assert!(chart.remove_external_studies(&[12]));
         assert_eq!(chart.liquidation_series(12), None);
         assert_eq!(chart.panes.len(), 1);
+    }
+
+    #[test]
+    fn step_line_and_study_owned_scene_deltas_enforce_bounds_and_cleanup() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let bars = [1.0, 2.0, 3.0];
+        chart
+            .set_series_data(0, &bars, &bars, &bars, &bars, &bars)
+            .unwrap();
+
+        let mut step_desc = descriptor("HTF Step", ExternalStudyPaneTarget::Price);
+        step_desc.plot = ExternalStudyPlotKind::StepLine;
+        assert_eq!(
+            chart.install_external_study_output(
+                42,
+                0,
+                step_desc,
+                1,
+                &[1_000_000_000, 2_000_000_000, 3_000_000_000],
+                &[Some(1.0), Some(1.0), Some(2.0)],
+            ),
+            Ok(true)
+        );
+        let info = chart.external_study_output_info(42, 0).expect("installed");
+        assert_eq!(
+            chart.series_entry(info.series_id).map(|s| s.line_type),
+            Some(aeris_charts_render::draw_list::LineType::WithSteps)
+        );
+
+        let line = ExternalStudySceneObject::Line(ExternalStudySceneLine {
+            x1_unix_nanos: 1_000_000_000,
+            y1: 1.0,
+            x2_unix_nanos: 3_000_000_000,
+            y2: 2.0,
+            color_rgba: 0x335C_FFFF,
+            width: 2,
+            extend_left: false,
+            extend_right: true,
+        });
+        assert_eq!(
+            chart.apply_external_study_scene_deltas(
+                42,
+                &[ExternalStudySceneDelta::Create {
+                    object_id: 1,
+                    object: line.clone(),
+                }]
+            ),
+            Ok(true)
+        );
+        assert_eq!(chart.external_study_scene_objects(42), vec![(1, &line)]);
+        assert!(chart.drawings().is_empty());
+
+        let invalid = ExternalStudySceneObject::Label(ExternalStudySceneLabel {
+            x_unix_nanos: 2_000_000_000,
+            y: f64::NAN,
+            text: "bad".to_string(),
+            text_color_rgba: 0xFFFF_FFFF,
+            background_color_rgba: None,
+        });
+        assert_eq!(
+            chart.apply_external_study_scene_deltas(
+                42,
+                &[ExternalStudySceneDelta::Create {
+                    object_id: 2,
+                    object: invalid,
+                }]
+            ),
+            Err(ExternalStudyError::InvalidValue)
+        );
+        assert_eq!(chart.external_study_scene_objects(42).len(), 1);
+
+        assert!(chart.remove_external_studies(&[42]));
+        assert!(chart.external_study_scene_objects(42).is_empty());
     }
 }
