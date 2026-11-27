@@ -77,7 +77,7 @@ impl ChartEngine {
                         self.emit_study_scene_line(line, pane_width, hpr, vpr, prims, points);
                     }
                     ExternalStudySceneObject::Box(rect) => {
-                        self.emit_study_scene_box(rect, hpr, vpr, prims);
+                        self.emit_study_scene_box(rect, pane_width, hpr, vpr, prims);
                     }
                     ExternalStudySceneObject::Polyline(poly) => {
                         self.emit_study_scene_polyline(poly, hpr, vpr, prims, points);
@@ -123,6 +123,85 @@ impl ChartEngine {
         Some(scale.price_to_coordinate(price, 0.0))
     }
 
+    fn study_time_to_x(&self, unix_nanos: i64) -> Option<f64> {
+        let time_sec = (unix_nanos as f64) / (NANOS_PER_SECOND as f64);
+        if !time_sec.is_finite() {
+            return None;
+        }
+        // Exact integer-second fast path for historical bar anchors.
+        if unix_nanos.rem_euclid(NANOS_PER_SECOND) == 0
+            && let Some(x) = self.time_to_coordinate(time_sec)
+            && x.is_finite()
+        {
+            return Some(x);
+        }
+        let times = self.data.merged_times();
+        if times.is_empty() {
+            return None;
+        }
+        let first_time = times[0] as f64;
+        let last_idx = times.len() - 1;
+        let last_time = times[last_idx] as f64;
+        let spacing = self.time_scale.bar_spacing();
+        if !spacing.is_finite() || spacing <= 0.0 {
+            return None;
+        }
+
+        // Compute robust bar step (median of up to last 9 positive intervals) for out-of-range projection.
+        let mut step_sec = 60.0_f64;
+        if times.len() >= 2 {
+            let mut deltas = [0.0_f64; 9];
+            let mut count = 0usize;
+            let start = times.len().saturating_sub(10);
+            for i in (start + 1)..times.len() {
+                let d = (times[i] - times[i - 1]) as f64;
+                if d > 0.0 && d.is_finite() {
+                    deltas[count] = d;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                let slice = &mut deltas[..count];
+                slice.sort_by(f64::total_cmp);
+                step_sec = slice[count / 2].max(1.0);
+            }
+        }
+
+        if time_sec >= last_time {
+            let last_x = self.time_scale.index_to_coordinate(last_idx as i64);
+            let offset_bars = (time_sec - last_time) / step_sec;
+            let x = last_x + offset_bars * spacing;
+            return x.is_finite().then_some(x);
+        }
+        if time_sec <= first_time {
+            let first_x = self.time_scale.index_to_coordinate(0);
+            let offset_bars = (first_time - time_sec) / step_sec;
+            let x = first_x - offset_bars * spacing;
+            return x.is_finite().then_some(x);
+        }
+
+        // Between two existing bars: linearly interpolate between neighboring bar coordinates.
+        let target_floor = time_sec.floor() as i64;
+        let pos = times.partition_point(|&t| t < target_floor);
+        if pos == 0 {
+            let x = self.time_scale.index_to_coordinate(0);
+            return x.is_finite().then_some(x);
+        }
+        let right_idx = pos.min(last_idx);
+        let left_idx = right_idx.saturating_sub(1);
+        let t0 = times[left_idx] as f64;
+        let t1 = times[right_idx] as f64;
+        let x0 = self.time_scale.index_to_coordinate(left_idx as i64);
+        let x1 = self.time_scale.index_to_coordinate(right_idx as i64);
+        let frac = if t1 > t0 {
+            ((time_sec - t0) / (t1 - t0)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let x = x0 + (x1 - x0) * frac;
+        x.is_finite().then_some(x)
+    }
+
     fn study_anchor_to_px(
         &self,
         unix_nanos: i64,
@@ -130,8 +209,7 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
     ) -> Option<[f32; 2]> {
-        let time_sec = (unix_nanos.div_euclid(NANOS_PER_SECOND)) as f64;
-        let x = self.time_to_coordinate(time_sec)?;
+        let x = self.study_time_to_x(unix_nanos)?;
         let y = self.study_price_to_y(price)?;
         if !x.is_finite() || !y.is_finite() {
             return None;
@@ -366,6 +444,13 @@ impl ChartEngine {
         let dx = p2[0] - p1[0];
         let dy = p2[1] - p1[1];
         let max_x = (pane_width * hpr) as f32;
+        if !line.extend_left && !line.extend_right {
+            let min_lx = p1[0].min(p2[0]);
+            let max_lx = p1[0].max(p2[0]);
+            if max_lx < -4.0 || min_lx > max_x + 4.0 {
+                return;
+            }
+        }
         if dx.abs() > 1e-4 {
             let slope = dy / dx;
             if line.extend_left {
@@ -403,6 +488,7 @@ impl ChartEngine {
     fn emit_study_scene_box(
         &self,
         rect: &ExternalStudySceneBox,
+        pane_width: f64,
         hpr: f64,
         vpr: f64,
         prims: &mut Vec<Prim>,
@@ -413,9 +499,15 @@ impl ChartEngine {
         ) else {
             return;
         };
-        let x0 = p1[0].min(p2[0]).round() as i32;
+        let min_x = p1[0].min(p2[0]);
+        let max_x = p1[0].max(p2[0]);
+        let pane_max_x = (pane_width * hpr) as f32;
+        if max_x < -4.0 || min_x > pane_max_x + 4.0 {
+            return;
+        }
+        let x0 = min_x.round() as i32;
         let y0 = p1[1].min(p2[1]).round() as i32;
-        let x1 = p1[0].max(p2[0]).round() as i32;
+        let x1 = max_x.round() as i32;
         let y1 = p1[1].max(p2[1]).round() as i32;
         let irect = IRect {
             x: x0,
@@ -423,16 +515,21 @@ impl ChartEngine {
             w: (x1 - x0).max(1),
             h: (y1 - y0).max(1),
         };
-        if let Some(fill) = rect.fill_color_rgba {
+        if let Some(fill) = rect.fill_color_rgba
+            && (fill & 0xFF) != 0
+        {
             prims.push(Prim::Rect {
                 rect: irect,
                 color: unpack_rgba(fill),
             });
         }
-        if let Some(border) = rect.border_color_rgba {
+        if let Some(border) = rect.border_color_rgba
+            && (border & 0xFF) != 0
+            && rect.border_width > 0
+        {
             prims.push(Prim::RectFrame {
                 rect: irect,
-                border: (f64::from(rect.border_width.max(1)) * hpr).round().max(1.0) as i32,
+                border: (f64::from(rect.border_width) * hpr).round().max(1.0) as i32,
                 color: unpack_rgba(border),
             });
         }
@@ -543,12 +640,27 @@ fn emit_study_scene_table(
     if rows == 0 || cols == 0 || table.cells.is_empty() {
         return;
     }
-    let text_size = ((font_size * 0.92).max(10.0) * vpr) as f32;
-    let cell_w = (88.0 * hpr) as f32;
-    let cell_h = (22.0 * vpr) as f32;
+    let text_size = ((font_size * 0.88).max(9.5) * vpr) as f32;
+    let pad_x = (8.0 * hpr) as f32;
+    let min_col_w = (58.0 * hpr) as f32;
+    let max_col_w = (190.0 * hpr) as f32;
+    let mut col_widths = vec![min_col_w; cols];
+    for cell in &table.cells {
+        let c = usize::from(cell.col);
+        if c < cols {
+            let est = (cell.text.chars().count() as f32) * text_size * 0.58 + pad_x * 2.0;
+            col_widths[c] = col_widths[c].max(est.clamp(min_col_w, max_col_w));
+        }
+    }
+    let mut col_offsets = Vec::with_capacity(cols);
+    let mut total_w = 0.0_f32;
+    for &w in &col_widths {
+        col_offsets.push(total_w);
+        total_w += w;
+    }
+    let cell_h = (20.0 * vpr) as f32;
     let margin_x = (12.0 * hpr) as f32;
     let margin_y = (12.0 * vpr) as f32;
-    let total_w = cell_w * cols as f32;
     let total_h = cell_h * rows as f32;
     let pw = (pane_width * hpr) as f32;
     let ph = (pane_height * vpr) as f32;
@@ -589,24 +701,31 @@ fn emit_study_scene_table(
     }
 
     for cell in &table.cells {
-        if usize::from(cell.row) >= rows || usize::from(cell.col) >= cols {
+        let r = usize::from(cell.row);
+        let c = usize::from(cell.col);
+        if r >= rows || c >= cols {
             continue;
         }
-        let cx = origin_x + f32::from(cell.col) * cell_w;
-        let cy = origin_y + f32::from(cell.row) * cell_h;
+        let cw = col_widths[c];
+        let cx = origin_x + col_offsets[c];
+        let cy = origin_y + (r as f32) * cell_h;
         let cell_rect = IRect {
             x: cx.round() as i32,
             y: cy.round() as i32,
-            w: cell_w.round().max(1.0) as i32,
+            w: cw.round().max(1.0) as i32,
             h: cell_h.round().max(1.0) as i32,
         };
-        if let Some(bg) = cell.background_color_rgba {
+        if let Some(bg) = cell.background_color_rgba
+            && (bg & 0xFF) != 0
+        {
             prims.push(Prim::Rect {
                 rect: cell_rect,
                 color: unpack_rgba(bg),
             });
         }
-        if let Some(border) = table.border_color_rgba {
+        if let Some(border) = table.border_color_rgba
+            && (border & 0xFF) != 0
+        {
             prims.push(Prim::RectFrame {
                 rect: cell_rect,
                 border: (1.0 * hpr).round().max(1.0) as i32,
@@ -614,14 +733,21 @@ fn emit_study_scene_table(
             });
         }
         if !cell.text.is_empty() {
+            let (tx, align) = if cols == 2 && c == 0 {
+                (cx + pad_x, TextAlign::Left)
+            } else if cols == 2 && c == 1 {
+                (cx + cw - pad_x, TextAlign::Right)
+            } else {
+                (cx + cw * 0.5, TextAlign::Center)
+            };
             prims.push(Prim::Text {
-                x: cx + cell_w * 0.5,
+                x: tx,
                 y: cy + cell_h * 0.5,
                 text: cell.text.clone(),
                 color: unpack_rgba(cell.text_color_rgba.unwrap_or(0xE2E8_F0FF)),
                 size: text_size,
                 family: font_family.to_owned(),
-                align: TextAlign::Center,
+                align,
                 weight: 500,
                 italic: false,
             });

@@ -21,9 +21,9 @@ const DEFAULT_EXTERNAL_STUDY_COLORS: [&str; 5] =
 /// Hard chart-local bound for host-computed scalar outputs.
 pub const MAX_EXTERNAL_STUDY_OUTPUTS: usize = 256;
 /// Hard chart-local bound for study-owned scene objects per study instance.
-pub const MAX_EXTERNAL_STUDY_SCENE_OBJECTS: usize = 512;
+pub const MAX_EXTERNAL_STUDY_SCENE_OBJECTS: usize = 1_200;
 /// Hard chart-local bound for polyline vertices on one study scene object.
-pub const MAX_EXTERNAL_STUDY_POLYLINE_POINTS: usize = 256;
+pub const MAX_EXTERNAL_STUDY_POLYLINE_POINTS: usize = 512;
 /// Hard chart-local bound for cells in one study-owned viewport table.
 pub const MAX_EXTERNAL_STUDY_TABLE_CELLS: usize = 256;
 /// Hard chart-local bound for horizontal levels per study.
