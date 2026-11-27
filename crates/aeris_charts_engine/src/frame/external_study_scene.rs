@@ -472,6 +472,39 @@ impl ChartEngine {
                 }
             }
         }
+        let color = unpack_rgba(line.color_rgba);
+        // Use pixel-aligned crisp quads for vertical/horizontal lines (wicks, volume bars,
+        // VAH/VAL/POC levels) so 1px strokes never blur across subpixels like antialiased polylines.
+        if (p2[0] - p1[0]).abs() < 0.5 {
+            let y0 = p1[1].min(p2[1]).round() as i32;
+            let y1 = p1[1].max(p2[1]).round() as i32;
+            if y1 > y0 {
+                prims.push(Prim::VLine {
+                    x: p1[0].round() as i32,
+                    y0,
+                    y1,
+                    width: (f64::from(line.width.max(1)) * hpr).round().max(1.0) as i32,
+                    style: LineStyle::Solid,
+                    color,
+                });
+            }
+            return;
+        }
+        if (p2[1] - p1[1]).abs() < 0.5 {
+            let x0 = p1[0].min(p2[0]).round() as i32;
+            let x1 = p1[0].max(p2[0]).round() as i32;
+            if x1 > x0 {
+                prims.push(Prim::HLine {
+                    y: p1[1].round() as i32,
+                    x0,
+                    x1,
+                    width: (f64::from(line.width.max(1)) * vpr).round().max(1.0) as i32,
+                    style: LineStyle::Solid,
+                    color,
+                });
+            }
+            return;
+        }
         let first_point = points.len() as u32;
         points.push(p1);
         points.push(p2);
@@ -481,7 +514,7 @@ impl ChartEngine {
             width: (f64::from(line.width.max(1)) * hpr) as f32,
             style: LineStyle::Solid,
             line_type: LineType::Simple,
-            color: unpack_rgba(line.color_rgba),
+            color,
         });
     }
 
@@ -529,7 +562,9 @@ impl ChartEngine {
         {
             prims.push(Prim::RectFrame {
                 rect: irect,
-                border: (f64::from(rect.border_width) * hpr).round().max(1.0) as i32,
+                border: (f64::from(rect.border_width) * hpr.min(vpr))
+                    .round()
+                    .max(1.0) as i32,
                 color: unpack_rgba(border),
             });
         }
@@ -590,16 +625,21 @@ impl ChartEngine {
         let Some(anchor) = self.study_anchor_to_px(label.x_unix_nanos, label.y, hpr, vpr) else {
             return;
         };
+        let ax = anchor[0].round();
+        let ay = anchor[1].round();
         let text_size = (font_size * vpr) as f32;
         let pad_x = (6.0 * hpr) as f32;
         let pad_y = (3.0 * vpr) as f32;
-        let est_w = (label.text.chars().count().max(1) as f32) * text_size * 0.6 + pad_x * 2.0;
-        let est_h = text_size + pad_y * 2.0;
-        if let Some(bg) = label.background_color_rgba {
+        let est_w =
+            ((label.text.chars().count().max(1) as f32) * text_size * 0.6 + pad_x * 2.0).round();
+        let est_h = (text_size + pad_y * 2.0).round();
+        if let Some(bg) = label.background_color_rgba
+            && (bg & 0xFF) != 0
+        {
             let radius = (4.0 * hpr) as f32;
             prims.push(Prim::RoundRect {
-                x: anchor[0] - est_w * 0.5,
-                y: anchor[1] - est_h * 0.5,
+                x: (ax - est_w * 0.5).round(),
+                y: (ay - est_h * 0.5).round(),
                 w: est_w,
                 h: est_h,
                 radii: [radius; 4],
@@ -610,8 +650,8 @@ impl ChartEngine {
         }
         if !label.text.is_empty() {
             prims.push(Prim::Text {
-                x: anchor[0],
-                y: anchor[1],
+                x: ax,
+                y: ay,
                 text: label.text.clone(),
                 color: unpack_rgba(label.text_color_rgba),
                 size: text_size,
@@ -741,8 +781,8 @@ fn emit_study_scene_table(
                 (cx + cw * 0.5, TextAlign::Center)
             };
             prims.push(Prim::Text {
-                x: tx,
-                y: cy + cell_h * 0.5,
+                x: tx.round(),
+                y: (cy + cell_h * 0.5).round(),
                 text: cell.text.clone(),
                 color: unpack_rgba(cell.text_color_rgba.unwrap_or(0xE2E8_F0FF)),
                 size: text_size,
