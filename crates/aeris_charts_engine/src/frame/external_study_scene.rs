@@ -53,13 +53,14 @@ impl ChartEngine {
             }
             self.emit_study_background_colors(
                 &overlay.background_colors,
+                pane_width,
                 pane_height,
                 hpr,
                 vpr,
                 prims,
             );
             for fill in &overlay.fills {
-                self.emit_study_fill(study_id, *fill, hpr, vpr, prims, points);
+                self.emit_study_fill(study_id, *fill, pane_width, hpr, vpr, prims, points);
             }
             for level in &overlay.levels {
                 self.emit_study_level(level, pane_width, &font_family, font_size, hpr, vpr, prims);
@@ -141,12 +142,15 @@ impl ChartEngine {
     fn emit_study_background_colors(
         &self,
         background_colors: &[(i64, u32)],
+        pane_width: f64,
         pane_height: f64,
         hpr: f64,
         vpr: f64,
         prims: &mut Vec<Prim>,
     ) {
         let half_bar = (self.time_scale.bar_spacing() * 0.5 * hpr).max(1.0);
+        let max_x = pane_width * hpr + half_bar * 2.0;
+        let min_x = -half_bar * 2.0;
         let h = (pane_height * vpr).round().max(1.0) as i32;
         for &(ts_ns, color_rgba) in background_colors {
             if color_rgba == 0 {
@@ -160,6 +164,9 @@ impl ChartEngine {
                 continue;
             }
             let cx = x * hpr;
+            if cx < min_x || cx > max_x {
+                continue;
+            }
             prims.push(Prim::Rect {
                 rect: IRect {
                     x: (cx - half_bar).round() as i32,
@@ -222,10 +229,12 @@ impl ChartEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_study_fill(
         &self,
         study_id: u64,
         fill: ExternalStudyFill,
+        pane_width: f64,
         hpr: f64,
         vpr: f64,
         prims: &mut Vec<Prim>,
@@ -239,43 +248,104 @@ impl ChartEngine {
         };
         let d1 = self.series_data(first.series_id);
         let d2 = self.series_data(second.series_id);
-        let len = d1.len().min(d2.len());
-        if len < 2 {
+        if d1.len() < 2 || d2.len() < 2 {
             return;
         }
-        let mut upper_pts = Vec::with_capacity(len);
-        let mut lower_pts = Vec::with_capacity(len);
-        for (p1, p2) in d1.iter().zip(d2.iter()) {
-            if !p1.close.is_finite() || !p2.close.is_finite() {
-                continue;
+
+        let margin_px = (self.time_scale.bar_spacing() * 3.0 * hpr).max(32.0);
+        let min_x_px = (-margin_px) as f32;
+        let max_x_px = (pane_width * hpr + margin_px) as f32;
+        let fill_color = unpack_rgba(fill.color_rgba);
+
+        let flush_segment = |upper_pts: &mut Vec<[f32; 2]>,
+                             lower_pts: &mut Vec<[f32; 2]>,
+                             prims: &mut Vec<Prim>,
+                             points: &mut Vec<[f32; 2]>| {
+            if upper_pts.len() >= 2 {
+                let upper_first = points.len() as u32;
+                points.extend_from_slice(upper_pts);
+                let lower_first = points.len() as u32;
+                points.extend_from_slice(lower_pts);
+                prims.push(Prim::BandFill {
+                    upper_first,
+                    lower_first,
+                    point_count: upper_pts.len() as u32,
+                    line_type: LineType::Simple,
+                    fill: fill_color,
+                });
             }
-            let (Some(x), Some(y1), Some(y2)) = (
-                self.time_to_coordinate(p1.time as f64),
-                self.series_price_to_coordinate(first.series_id, p1.close),
-                self.series_price_to_coordinate(second.series_id, p2.close),
-            ) else {
-                continue;
-            };
-            if x.is_finite() && y1.is_finite() && y2.is_finite() {
-                let x_px = (x * hpr) as f32;
-                upper_pts.push([x_px, (y1 * vpr) as f32]);
-                lower_pts.push([x_px, (y2 * vpr) as f32]);
+            upper_pts.clear();
+            lower_pts.clear();
+        };
+
+        let mut upper_pts: Vec<[f32; 2]> = Vec::new();
+        let mut lower_pts: Vec<[f32; 2]> = Vec::new();
+        let mut i1 = 0usize;
+        let mut i2 = 0usize;
+
+        // Strict timestamp merge: any missing timestamp or non-finite value on either side
+        // splits into separate contiguous BandFill polygons so fills never bridge across gaps.
+        while i1 < d1.len() && i2 < d2.len() {
+            let p1 = &d1[i1];
+            let p2 = &d2[i2];
+            match p1.time.cmp(&p2.time) {
+                std::cmp::Ordering::Less => {
+                    flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                    i1 += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                    i2 += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    i1 += 1;
+                    i2 += 1;
+                    if !p1.close.is_finite() || !p2.close.is_finite() {
+                        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                        continue;
+                    }
+                    let Some(x) = self.time_to_coordinate(p1.time as f64) else {
+                        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                        continue;
+                    };
+                    if !x.is_finite() {
+                        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                        continue;
+                    }
+                    let x_px = (x * hpr) as f32;
+                    if x_px < min_x_px {
+                        continue;
+                    }
+                    if x_px > max_x_px {
+                        if let (Some(y1), Some(y2)) = (
+                            self.series_price_to_coordinate(first.series_id, p1.close),
+                            self.series_price_to_coordinate(second.series_id, p2.close),
+                        ) && y1.is_finite()
+                            && y2.is_finite()
+                            && !upper_pts.is_empty()
+                        {
+                            upper_pts.push([x_px, (y1 * vpr) as f32]);
+                            lower_pts.push([x_px, (y2 * vpr) as f32]);
+                        }
+                        break;
+                    }
+                    let (Some(y1), Some(y2)) = (
+                        self.series_price_to_coordinate(first.series_id, p1.close),
+                        self.series_price_to_coordinate(second.series_id, p2.close),
+                    ) else {
+                        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                        continue;
+                    };
+                    if y1.is_finite() && y2.is_finite() {
+                        upper_pts.push([x_px, (y1 * vpr) as f32]);
+                        lower_pts.push([x_px, (y2 * vpr) as f32]);
+                    } else {
+                        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
+                    }
+                }
             }
         }
-        if upper_pts.len() < 2 {
-            return;
-        }
-        let upper_first = points.len() as u32;
-        points.extend_from_slice(&upper_pts);
-        let lower_first = points.len() as u32;
-        points.extend_from_slice(&lower_pts);
-        prims.push(Prim::BandFill {
-            upper_first,
-            lower_first,
-            point_count: upper_pts.len() as u32,
-            line_type: LineType::Simple,
-            fill: unpack_rgba(fill.color_rgba),
-        });
+        flush_segment(&mut upper_pts, &mut lower_pts, prims, points);
     }
 
     fn emit_study_scene_line(
