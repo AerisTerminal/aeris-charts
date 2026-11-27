@@ -7,9 +7,9 @@
 
 use crate::ChartEngine;
 use crate::external_studies::{
-    ExternalStudySceneBox, ExternalStudySceneLabel, ExternalStudySceneLine,
-    ExternalStudySceneObject, ExternalStudyScenePolyline, ExternalStudySceneTable,
-    ExternalStudyTablePosition,
+    ExternalStudyFill, ExternalStudyLevel, ExternalStudyLineStyle, ExternalStudySceneBox,
+    ExternalStudySceneLabel, ExternalStudySceneLine, ExternalStudySceneObject,
+    ExternalStudyScenePolyline, ExternalStudySceneTable, ExternalStudyTablePosition,
 };
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
@@ -34,7 +34,9 @@ impl ChartEngine {
         prims: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        if pane_index != 0 || self.external_study_scenes.is_empty() {
+        if pane_index != 0
+            || (self.external_study_scenes.is_empty() && self.external_study_overlays.is_empty())
+        {
             return;
         }
         let Some(pane) = self.panes.get(pane_index) else {
@@ -44,6 +46,25 @@ impl ChartEngine {
         let pane_height = pane.height.max(1.0);
         let font_family = self.options.get().layout.font_family.clone();
         let font_size = self.options.get().layout.font_size.max(10.0);
+
+        for (&study_id, overlay) in &self.external_study_overlays {
+            if self.external_study_visible(study_id) == Some(false) {
+                continue;
+            }
+            self.emit_study_background_colors(
+                &overlay.background_colors,
+                pane_height,
+                hpr,
+                vpr,
+                prims,
+            );
+            for fill in &overlay.fills {
+                self.emit_study_fill(study_id, *fill, hpr, vpr, prims, points);
+            }
+            for level in &overlay.levels {
+                self.emit_study_level(level, pane_width, &font_family, font_size, hpr, vpr, prims);
+            }
+        }
 
         for (&study_id, scene) in &self.external_study_scenes {
             if self.external_study_visible(study_id) == Some(false) {
@@ -87,6 +108,20 @@ impl ChartEngine {
         }
     }
 
+    fn study_price_to_y(&self, price: f64) -> Option<f64> {
+        if !price.is_finite() {
+            return None;
+        }
+        if let Some(y) = self.series_price_to_coordinate(0, price) {
+            return Some(y);
+        }
+        let scale = self.price_scale_for(0, crate::PriceScaleTarget::Right)?;
+        if scale.is_empty() {
+            return None;
+        }
+        Some(scale.price_to_coordinate(price, 0.0))
+    }
+
     fn study_anchor_to_px(
         &self,
         unix_nanos: i64,
@@ -96,11 +131,151 @@ impl ChartEngine {
     ) -> Option<[f32; 2]> {
         let time_sec = (unix_nanos.div_euclid(NANOS_PER_SECOND)) as f64;
         let x = self.time_to_coordinate(time_sec)?;
-        let y = self.series_price_to_coordinate(0, price)?;
+        let y = self.study_price_to_y(price)?;
         if !x.is_finite() || !y.is_finite() {
             return None;
         }
         Some([(x * hpr) as f32, (y * vpr) as f32])
+    }
+
+    fn emit_study_background_colors(
+        &self,
+        background_colors: &[(i64, u32)],
+        pane_height: f64,
+        hpr: f64,
+        vpr: f64,
+        prims: &mut Vec<Prim>,
+    ) {
+        let half_bar = (self.time_scale.bar_spacing() * 0.5 * hpr).max(1.0);
+        let h = (pane_height * vpr).round().max(1.0) as i32;
+        for &(ts_ns, color_rgba) in background_colors {
+            if color_rgba == 0 {
+                continue;
+            }
+            let time_sec = (ts_ns.div_euclid(NANOS_PER_SECOND)) as f64;
+            let Some(x) = self.time_to_coordinate(time_sec) else {
+                continue;
+            };
+            if !x.is_finite() {
+                continue;
+            }
+            let cx = x * hpr;
+            prims.push(Prim::Rect {
+                rect: IRect {
+                    x: (cx - half_bar).round() as i32,
+                    y: 0,
+                    w: (half_bar * 2.0).round().max(1.0) as i32,
+                    h,
+                },
+                color: unpack_rgba(color_rgba),
+            });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_study_level(
+        &self,
+        level: &ExternalStudyLevel,
+        pane_width: f64,
+        font_family: &str,
+        font_size: f64,
+        hpr: f64,
+        vpr: f64,
+        prims: &mut Vec<Prim>,
+    ) {
+        let Some(y) = self.study_price_to_y(level.value) else {
+            return;
+        };
+        if !y.is_finite() {
+            return;
+        }
+        let y_px = (y * vpr).round() as i32;
+        let x1 = (pane_width * hpr).round().max(1.0) as i32;
+        let style = match level.style {
+            ExternalStudyLineStyle::Solid => LineStyle::Solid,
+            ExternalStudyLineStyle::Dashed => LineStyle::Dashed,
+            ExternalStudyLineStyle::Dotted => LineStyle::Dotted,
+        };
+        let color = unpack_rgba(level.color_rgba);
+        prims.push(Prim::HLine {
+            y: y_px,
+            x0: 0,
+            x1,
+            width: (1.0 * vpr).round().max(1.0) as i32,
+            style,
+            color,
+        });
+        if let Some(title) = level.title.as_deref()
+            && !title.is_empty()
+        {
+            prims.push(Prim::Text {
+                x: (x1 as f32 - (8.0 * hpr) as f32).max(0.0),
+                y: y_px as f32 - (8.0 * vpr) as f32,
+                text: title.to_owned(),
+                color,
+                size: ((font_size * 0.88).max(9.0) * vpr) as f32,
+                family: font_family.to_owned(),
+                align: TextAlign::Right,
+                weight: 500,
+                italic: false,
+            });
+        }
+    }
+
+    fn emit_study_fill(
+        &self,
+        study_id: u64,
+        fill: ExternalStudyFill,
+        hpr: f64,
+        vpr: f64,
+        prims: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let (Some(first), Some(second)) = (
+            self.external_study_output_info(study_id, fill.first_output_index),
+            self.external_study_output_info(study_id, fill.second_output_index),
+        ) else {
+            return;
+        };
+        let d1 = self.series_data(first.series_id);
+        let d2 = self.series_data(second.series_id);
+        let len = d1.len().min(d2.len());
+        if len < 2 {
+            return;
+        }
+        let mut upper_pts = Vec::with_capacity(len);
+        let mut lower_pts = Vec::with_capacity(len);
+        for (p1, p2) in d1.iter().zip(d2.iter()) {
+            if !p1.close.is_finite() || !p2.close.is_finite() {
+                continue;
+            }
+            let (Some(x), Some(y1), Some(y2)) = (
+                self.time_to_coordinate(p1.time as f64),
+                self.series_price_to_coordinate(first.series_id, p1.close),
+                self.series_price_to_coordinate(second.series_id, p2.close),
+            ) else {
+                continue;
+            };
+            if x.is_finite() && y1.is_finite() && y2.is_finite() {
+                let x_px = (x * hpr) as f32;
+                upper_pts.push([x_px, (y1 * vpr) as f32]);
+                lower_pts.push([x_px, (y2 * vpr) as f32]);
+            }
+        }
+        if upper_pts.len() < 2 {
+            return;
+        }
+        let upper_first = points.len() as u32;
+        points.extend_from_slice(&upper_pts);
+        let lower_first = points.len() as u32;
+        points.extend_from_slice(&lower_pts);
+        prims.push(Prim::BandFill {
+            upper_first,
+            lower_first,
+            point_count: upper_pts.len() as u32,
+            line_type: LineType::Simple,
+            fill: unpack_rgba(fill.color_rgba),
+        });
     }
 
     fn emit_study_scene_line(

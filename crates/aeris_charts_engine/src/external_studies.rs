@@ -26,6 +26,10 @@ pub const MAX_EXTERNAL_STUDY_SCENE_OBJECTS: usize = 512;
 pub const MAX_EXTERNAL_STUDY_POLYLINE_POINTS: usize = 256;
 /// Hard chart-local bound for cells in one study-owned viewport table.
 pub const MAX_EXTERNAL_STUDY_TABLE_CELLS: usize = 256;
+/// Hard chart-local bound for horizontal levels per study.
+pub const MAX_EXTERNAL_STUDY_LEVELS: usize = 64;
+/// Hard chart-local bound for fill-between-series regions per study.
+pub const MAX_EXTERNAL_STUDY_FILLS: usize = 32;
 
 const OPTIONS_VOLUME_OUTPUTS: [(crate::text::Phrase, MarketTone); 2] = [
     (crate::text::legend::CALLS, MarketTone::Up),
@@ -262,6 +266,39 @@ pub enum ExternalStudySceneObject {
     Polyline(ExternalStudyScenePolyline),
     Label(ExternalStudySceneLabel),
     Table(ExternalStudySceneTable),
+}
+
+/// Line stroke pattern for study-owned horizontal levels.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExternalStudyLineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// Study-owned horizontal reference level (`hline`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalStudyLevel {
+    pub value: f64,
+    pub color_rgba: u32,
+    pub style: ExternalStudyLineStyle,
+    pub title: Option<String>,
+}
+
+/// Study-owned shaded band between two scalar outputs of the same study.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExternalStudyFill {
+    pub first_output_index: usize,
+    pub second_output_index: usize,
+    pub color_rgba: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ExternalStudyOverlayState {
+    pub(crate) background_colors: Vec<(i64, u32)>,
+    pub(crate) levels: Vec<ExternalStudyLevel>,
+    pub(crate) fills: Vec<ExternalStudyFill>,
 }
 
 /// Compact incremental scene delta applied to one study's owned scene layer.
@@ -1684,6 +1721,7 @@ impl ChartEngine {
             .collect::<Vec<_>>();
         let removed_scenes = study_ids.iter().fold(false, |acc, id| {
             acc | self.external_study_scenes.remove(id).is_some()
+                | self.external_study_overlays.remove(id).is_some()
         });
         if keys.is_empty() {
             if removed_scenes {
@@ -1783,6 +1821,50 @@ impl ChartEngine {
             self.invalidate_frame_all();
         }
         removed
+    }
+
+    /// Sets or clears study-owned background tints, horizontal levels, and fill-between-series
+    /// bands for `study_id`.
+    pub fn set_external_study_overlay(
+        &mut self,
+        study_id: u64,
+        background_colors: Vec<(i64, u32)>,
+        levels: Vec<ExternalStudyLevel>,
+        fills: Vec<ExternalStudyFill>,
+    ) -> Result<bool, ExternalStudyError> {
+        if levels.len() > MAX_EXTERNAL_STUDY_LEVELS || fills.len() > MAX_EXTERNAL_STUDY_FILLS {
+            return Err(ExternalStudyError::CapacityExceeded);
+        }
+        for level in &levels {
+            if !level.value.is_finite() || level.value.abs() > MAX_SAFE_VALUE {
+                return Err(ExternalStudyError::InvalidValue);
+            }
+            if level
+                .title
+                .as_ref()
+                .is_some_and(|title| title.len() > MAX_EXTERNAL_STUDY_LEGEND_LABEL_BYTES)
+            {
+                return Err(ExternalStudyError::MetadataTooLong);
+            }
+        }
+        if background_colors.is_empty() && levels.is_empty() && fills.is_empty() {
+            let removed = self.external_study_overlays.remove(&study_id).is_some();
+            if removed {
+                self.invalidate_frame_all();
+            }
+            return Ok(removed);
+        }
+        let next = ExternalStudyOverlayState {
+            background_colors,
+            levels,
+            fills,
+        };
+        if self.external_study_overlays.get(&study_id) == Some(&next) {
+            return Ok(false);
+        }
+        self.external_study_overlays.insert(study_id, next);
+        self.invalidate_frame_all();
+        Ok(true)
     }
 
     pub(crate) fn apply_indicator_chrome_to_external_studies(
@@ -2280,6 +2362,7 @@ mod tests {
         chart
             .set_series_data(0, &bars, &bars, &bars, &bars, &bars)
             .unwrap();
+        chart.fit_content();
         let times = [1_000_000_000, 2_000_000_000, 3_000_000_000];
         assert_eq!(
             chart.set_options_volume(
@@ -3188,6 +3271,7 @@ mod tests {
         chart
             .set_series_data(0, &bars, &bars, &bars, &bars, &bars)
             .unwrap();
+        chart.fit_content();
 
         let mut step_desc = descriptor("HTF Step", ExternalStudyPaneTarget::Price);
         step_desc.plot = ExternalStudyPlotKind::StepLine;
@@ -3291,6 +3375,36 @@ mod tests {
             )
         });
         assert!(has_table_text, "study scene table must emit Text prims");
+
+        assert_eq!(
+            chart.set_external_study_overlay(
+                42,
+                vec![(2_000_000_000, 0x22C5_5E30)],
+                vec![ExternalStudyLevel {
+                    value: 1.5,
+                    color_rgba: 0xF59E_0BFF,
+                    style: ExternalStudyLineStyle::Dashed,
+                    title: Some("Mid".to_string()),
+                }],
+                Vec::new(),
+            ),
+            Ok(true)
+        );
+        chart.set_price_scale_visible_range_for(0, crate::PriceScaleTarget::Right, 0.5, 3.5);
+        let frame_with_overlay = chart.build_frame();
+        assert!(
+            frame_with_overlay.panes[0]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, aeris_charts_render::draw_list::Prim::HLine { .. })),
+            "study level must emit HLine prim"
+        );
+        assert!(frame_with_overlay.panes[0].main.iter().any(|prim| {
+            matches!(
+                prim,
+                aeris_charts_render::draw_list::Prim::Text { text, .. } if text == "Mid"
+            )
+        }));
 
         assert!(chart.remove_external_studies(&[42]));
         assert!(chart.external_study_scene_objects(42).is_empty());
