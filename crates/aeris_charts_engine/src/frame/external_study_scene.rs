@@ -7,9 +7,10 @@
 
 use crate::ChartEngine;
 use crate::external_studies::{
-    ExternalStudyFill, ExternalStudyLevel, ExternalStudyLineStyle, ExternalStudySceneBox,
-    ExternalStudySceneLabel, ExternalStudySceneLine, ExternalStudySceneObject,
-    ExternalStudyScenePolyline, ExternalStudySceneTable, ExternalStudyTablePosition,
+    ExternalStudyFill, ExternalStudyLabelPlacement, ExternalStudyLevel, ExternalStudyLineStyle,
+    ExternalStudySceneBox, ExternalStudySceneLabel, ExternalStudySceneLine,
+    ExternalStudySceneObject, ExternalStudyScenePolyline, ExternalStudySceneTable,
+    ExternalStudyTablePosition,
 };
 use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
@@ -473,6 +474,11 @@ impl ChartEngine {
             }
         }
         let color = unpack_rgba(line.color_rgba);
+        let style = match line.style {
+            ExternalStudyLineStyle::Solid => LineStyle::Solid,
+            ExternalStudyLineStyle::Dashed => LineStyle::Dashed,
+            ExternalStudyLineStyle::Dotted => LineStyle::Dotted,
+        };
         // Use pixel-aligned crisp quads for vertical/horizontal lines (wicks, volume bars,
         // VAH/VAL/POC levels) so 1px strokes never blur across subpixels like antialiased polylines.
         if (p2[0] - p1[0]).abs() < 0.5 {
@@ -484,7 +490,7 @@ impl ChartEngine {
                     y0,
                     y1,
                     width: (f64::from(line.width.max(1)) * hpr).round().max(1.0) as i32,
-                    style: LineStyle::Solid,
+                    style,
                     color,
                 });
             }
@@ -499,7 +505,7 @@ impl ChartEngine {
                     x0,
                     x1,
                     width: (f64::from(line.width.max(1)) * vpr).round().max(1.0) as i32,
-                    style: LineStyle::Solid,
+                    style,
                     color,
                 });
             }
@@ -512,7 +518,7 @@ impl ChartEngine {
             first_point,
             point_count: 2,
             width: (f64::from(line.width.max(1)) * hpr) as f32,
-            style: LineStyle::Solid,
+            style,
             line_type: LineType::Simple,
             color,
         });
@@ -630,16 +636,71 @@ impl ChartEngine {
         let text_size = (font_size * vpr) as f32;
         let pad_x = (6.0 * hpr) as f32;
         let pad_y = (3.0 * vpr) as f32;
+        let gap_x = (4.0 * hpr) as f32;
+        let gap_y = (3.0 * vpr) as f32;
         let est_w =
             ((label.text.chars().count().max(1) as f32) * text_size * 0.6 + pad_x * 2.0).round();
         let est_h = (text_size + pad_y * 2.0).round();
-        if let Some(bg) = label.background_color_rgba
-            && (bg & 0xFF) != 0
-        {
+        let bg_color = label.background_color_rgba.filter(|&bg| (bg & 0xFF) != 0);
+        let half_h = if bg_color.is_some() {
+            est_h * 0.5
+        } else {
+            text_size * 0.5
+        };
+
+        let (text_x, text_y, align, rect_x, rect_y) = match label.placement {
+            ExternalStudyLabelPlacement::Above => {
+                let cy = (ay - gap_y - half_h).round();
+                (
+                    ax,
+                    cy,
+                    TextAlign::Center,
+                    (ax - est_w * 0.5).round(),
+                    (cy - est_h * 0.5).round(),
+                )
+            }
+            ExternalStudyLabelPlacement::Below => {
+                let cy = (ay + gap_y + half_h).round();
+                (
+                    ax,
+                    cy,
+                    TextAlign::Center,
+                    (ax - est_w * 0.5).round(),
+                    (cy - est_h * 0.5).round(),
+                )
+            }
+            ExternalStudyLabelPlacement::Right => {
+                let rx = (ax + gap_x).round();
+                let (tx, al) = if bg_color.is_some() {
+                    ((rx + est_w * 0.5).round(), TextAlign::Center)
+                } else {
+                    (rx, TextAlign::Left)
+                };
+                (tx, ay, al, rx, (ay - est_h * 0.5).round())
+            }
+            ExternalStudyLabelPlacement::Left => {
+                let rx = (ax - gap_x - est_w).round();
+                let (tx, al) = if bg_color.is_some() {
+                    ((rx + est_w * 0.5).round(), TextAlign::Center)
+                } else {
+                    ((ax - gap_x).round(), TextAlign::Right)
+                };
+                (tx, ay, al, rx, (ay - est_h * 0.5).round())
+            }
+            ExternalStudyLabelPlacement::Center => (
+                ax,
+                ay,
+                TextAlign::Center,
+                (ax - est_w * 0.5).round(),
+                (ay - est_h * 0.5).round(),
+            ),
+        };
+
+        if let Some(bg) = bg_color {
             let radius = (4.0 * hpr) as f32;
             prims.push(Prim::RoundRect {
-                x: (ax - est_w * 0.5).round(),
-                y: (ay - est_h * 0.5).round(),
+                x: rect_x,
+                y: rect_y,
                 w: est_w,
                 h: est_h,
                 radii: [radius; 4],
@@ -650,13 +711,13 @@ impl ChartEngine {
         }
         if !label.text.is_empty() {
             prims.push(Prim::Text {
-                x: ax,
-                y: ay,
+                x: text_x,
+                y: text_y,
                 text: label.text.clone(),
                 color: unpack_rgba(label.text_color_rgba),
                 size: text_size,
                 family: font_family.to_owned(),
-                align: TextAlign::Center,
+                align,
                 weight: 500,
                 italic: false,
             });

@@ -201,6 +201,7 @@ pub struct ExternalStudySceneLine {
     pub y2: f64,
     pub color_rgba: u32,
     pub width: u8,
+    pub style: ExternalStudyLineStyle,
     pub extend_left: bool,
     pub extend_right: bool,
 }
@@ -227,6 +228,17 @@ pub struct ExternalStudyScenePolyline {
     pub width: u8,
 }
 
+/// Label anchor placement relative to `(x_unix_nanos, y)`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExternalStudyLabelPlacement {
+    #[default]
+    Center,
+    Above,
+    Below,
+    Right,
+    Left,
+}
+
 /// Study-owned text annotation anchored at `(timestamp_unix_nanos, price)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExternalStudySceneLabel {
@@ -235,6 +247,7 @@ pub struct ExternalStudySceneLabel {
     pub text: String,
     pub text_color_rgba: u32,
     pub background_color_rgba: Option<u32>,
+    pub placement: ExternalStudyLabelPlacement,
 }
 
 /// One cell inside an [`ExternalStudySceneTable`].
@@ -3299,6 +3312,7 @@ mod tests {
             y2: 2.0,
             color_rgba: 0x335C_FFFF,
             width: 2,
+            style: ExternalStudyLineStyle::Solid,
             extend_left: false,
             extend_right: true,
         });
@@ -3321,6 +3335,7 @@ mod tests {
             text: "bad".to_string(),
             text_color_rgba: 0xFFFF_FFFF,
             background_color_rgba: None,
+            placement: ExternalStudyLabelPlacement::Above,
         });
         assert_eq!(
             chart.apply_external_study_scene_deltas(

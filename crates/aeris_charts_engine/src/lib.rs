@@ -163,16 +163,17 @@ pub(crate) use drawings::{
 };
 pub use external_studies::{
     ExternalStudyError, ExternalStudyFill, ExternalStudyInputRequirements,
-    ExternalStudyInputStream, ExternalStudyLevel, ExternalStudyLineStyle,
-    ExternalStudyOutputDescriptor, ExternalStudyOutputInfo, ExternalStudyPaneTarget,
-    ExternalStudyPlotKind, ExternalStudyPointStyle, ExternalStudyScaleTarget,
-    ExternalStudySceneBox, ExternalStudySceneDelta, ExternalStudySceneLabel,
-    ExternalStudySceneLine, ExternalStudySceneObject, ExternalStudyScenePolyline,
-    ExternalStudySceneTable, ExternalStudySceneTableCell, ExternalStudyTablePosition,
-    ExternalStudyThresholdRegion, LiquidationBar, LiquidationOptions, LiquidationStyle,
-    MAX_EXTERNAL_STUDY_FILLS, MAX_EXTERNAL_STUDY_LEVELS, MAX_EXTERNAL_STUDY_OUTPUTS,
-    MAX_EXTERNAL_STUDY_POLYLINE_POINTS, MAX_EXTERNAL_STUDY_SCENE_OBJECTS,
-    MAX_EXTERNAL_STUDY_TABLE_CELLS, OpenInterestBar, OpenInterestOptions, OpenInterestStyle,
+    ExternalStudyInputStream, ExternalStudyLabelPlacement, ExternalStudyLevel,
+    ExternalStudyLineStyle, ExternalStudyOutputDescriptor, ExternalStudyOutputInfo,
+    ExternalStudyPaneTarget, ExternalStudyPlotKind, ExternalStudyPointStyle,
+    ExternalStudyScaleTarget, ExternalStudySceneBox, ExternalStudySceneDelta,
+    ExternalStudySceneLabel, ExternalStudySceneLine, ExternalStudySceneObject,
+    ExternalStudyScenePolyline, ExternalStudySceneTable, ExternalStudySceneTableCell,
+    ExternalStudyTablePosition, ExternalStudyThresholdRegion, LiquidationBar, LiquidationOptions,
+    LiquidationStyle, MAX_EXTERNAL_STUDY_FILLS, MAX_EXTERNAL_STUDY_LEVELS,
+    MAX_EXTERNAL_STUDY_OUTPUTS, MAX_EXTERNAL_STUDY_POLYLINE_POINTS,
+    MAX_EXTERNAL_STUDY_SCENE_OBJECTS, MAX_EXTERNAL_STUDY_TABLE_CELLS, OpenInterestBar,
+    OpenInterestOptions, OpenInterestStyle,
 };
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
